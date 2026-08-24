@@ -285,6 +285,16 @@ mod tests {
     }
 
     #[test]
+    fn declared_environment_inherits_label_key_behavior() {
+        let model = declared_model(
+            "\\begin{mylisting}[label=custom:list]\nbody\n\\end{mylisting}\n",
+            r#"{"environments": {"mylisting": {"like": "lstlisting"}}}"#,
+        );
+        assert_eq!(model.labels().len(), 1);
+        assert_eq!(model.labels()[0].name, "custom:list");
+    }
+
+    #[test]
     fn declared_citation_and_nocite_aliases_are_collected() {
         let model = declared_model(
             "\\sources{one,two}\\everything{*}\n",

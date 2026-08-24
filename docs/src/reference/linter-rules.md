@@ -88,7 +88,7 @@ linkcolor=blue}
 
 ## `duplicate-label`
 
-Flag a `\label{key}` defined more than once in the same label namespace -- within one file, or across files that share a document when a project view is available. LaTeX itself only warns and silently keeps the last definition. Definitions in mutually exclusive branches of a TeX conditional (`\iftrue...\else...\fi`, `\newif`-defined conditionals included) are not duplicates and are not flagged. No autofix: resolving a collision (rename vs delete) is the author's call.
+Flag a label key defined more than once in the same label namespace -- within one file, or across files that share a document when a project view is available. LaTeX itself only warns and silently keeps the last definition. Definitions in mutually exclusive branches of a TeX conditional (`\iftrue...\else...\fi`, `\newif`-defined conditionals included) are not duplicates and are not flagged. No autofix: resolving a collision (rename vs delete) is the author's call.
 
 The same key defined twice in one file:
 
@@ -644,7 +644,7 @@ warning: undefined-citation
 
 ## `unreferenced-label`
 
-Flag a `\label` that no `\ref`-family command targets anywhere in the document. The mirror of `undefined-ref`, and sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. Report-only: removing the dead label or adding a reference are both valid, so there is no autofix.
+Flag a label definition that no `\ref`-family command targets anywhere in the document. The mirror of `undefined-ref`, and sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. Report-only: removing the dead label or adding a reference are both valid, so there is no autofix.
 
 A label that no `\ref`-family command ever targets:
 

@@ -197,7 +197,7 @@
     "verse": { "block": true },
     "abstract": { "block": true },
     "titlepage": { "block": true },
-    "frame": { "block": true },
+    "frame": { "block": true, "labelKey": true },
 
     "tikzpicture": { "args": [{ "kind": "opt", "content": "keyval" }], "block": true, "statementBody": true },
     "pgfpicture": { "block": true, "statementBody": true },
@@ -232,7 +232,7 @@
     "Verbatim": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
     "Verbatim*": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
     "alltt": { "verbatimBody": true, "block": true },
-    "lstlisting": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
+    "lstlisting": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true, "labelKey": true },
     "minted": { "args": [{ "kind": "opt", "content": "keyval" }, "req"], "verbatimBody": true, "block": true },
     "codeexample": { "args": [{ "kind": "opt", "content": "keyval" }], "verbatimBody": true, "block": true },
     "oldcomments": { "verbatimBody": true, "block": true },

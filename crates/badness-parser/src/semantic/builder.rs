@@ -1,23 +1,26 @@
 //! Build the per-file label/reference model from the CST.
 //!
 //! A single whole-tree walk (mirror of `project::collect_include_edges`)
-//! collects `\label{…}` definitions and the reference-command family, then a
-//! flat `resolve` pass matches refs to defs by name. Labels live in one
-//! document-global namespace, so there is no scope walk — resolution is a flat
-//! name match, not a scope-chain resolution.
+//! collects `\label{…}` definitions, literal `label` options from curated
+//! environments, and the reference-command family, then a flat `resolve` pass
+//! matches refs to defs by name. Labels live in one document-global namespace,
+//! so there is no scope walk—resolution is a flat name match, not a scope-chain
+//! resolution.
 
 use smol_str::SmolStr;
 
-use rowan::{TextRange, TextSize};
+use rowan::{NodeOrToken, TextRange, TextSize};
 
-use crate::ast::{command_name, first_group_range, nth_group_inner};
+use crate::ast::{
+    AstNode, Group, Optional, child, command_name, first_group_range, nth_group_inner,
+};
 use crate::declarations::ResolvedDeclarations;
-use crate::semantic::SemanticModel;
 use crate::semantic::label::{
     CitationRef, ColorDef, ColorDefKind, GlossaryDef, GlossaryDefKind, LabelDef, LabelRef,
     RefCommand,
 };
 use crate::semantic::pkgmeta;
+use crate::semantic::{SemanticModel, Signatures};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 pub fn build(root: &SyntaxNode) -> SemanticModel {
@@ -30,11 +33,23 @@ pub fn build_with_declarations(
     declared: &ResolvedDeclarations,
 ) -> SemanticModel {
     let mut model = SemanticModel::default();
+    let signatures = Signatures::new(declared.as_db());
 
-    for command in root
-        .descendants()
-        .filter(|node| node.kind() == SyntaxKind::COMMAND)
-    {
+    for node in root.descendants() {
+        if node.kind() == SyntaxKind::BEGIN {
+            if let Some(sig) = signatures.environment_at(&node)
+                && sig.label_key
+                && let Some(optional) = child::<Optional>(&node)
+                && let Some(label) = option_label(&optional)
+            {
+                model.labels.push(label);
+            }
+            continue;
+        }
+        if node.kind() != SyntaxKind::COMMAND {
+            continue;
+        }
+        let command = node;
         let Some(name) = command_name(&command) else {
             continue;
         };
@@ -147,6 +162,175 @@ pub fn build_with_declarations(
 
     resolve(&mut model);
     model
+}
+
+/// The final top-level `label` entry in an environment options bracket, when its
+/// value is a flat literal. Key-value processors apply repeated keys in order, so
+/// a later dynamic or empty `label` must also clear an earlier literal rather than
+/// leave a definition the source no longer proves.
+fn option_label(optional: &Optional) -> Option<LabelDef> {
+    let syntax = optional.syntax();
+    let base = usize::from(syntax.text_range().start());
+    let source = syntax.text().to_string();
+    let mut entry_start = base;
+    let mut close = None;
+    let mut boundaries = Vec::new();
+
+    for element in syntax.children_with_tokens() {
+        match element {
+            NodeOrToken::Token(token) if token.kind() == SyntaxKind::L_BRACKET => {
+                entry_start = usize::from(token.text_range().end());
+            }
+            NodeOrToken::Token(token) if token.kind() == SyntaxKind::R_BRACKET => {
+                close = Some(usize::from(token.text_range().start()));
+                break;
+            }
+            // Nested groups are child nodes, so commas in their text never reach
+            // this direct-token stream. A control sequence is a child node too.
+            NodeOrToken::Token(token) if token.kind() == SyntaxKind::WORD => {
+                let token_start = usize::from(token.text_range().start());
+                boundaries.extend(
+                    token
+                        .text()
+                        .match_indices(',')
+                        .map(|(i, _)| token_start + i),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let close = close?;
+    let mut label = None;
+    for entry_end in boundaries.into_iter().chain(std::iter::once(close)) {
+        match option_label_entry(syntax, &source, base, entry_start, entry_end) {
+            LabelEntry::Other => {}
+            LabelEntry::Unknown => label = None,
+            LabelEntry::Literal(found) => label = Some(found),
+        }
+        entry_start = entry_end + 1;
+    }
+    label
+}
+
+enum LabelEntry {
+    Other,
+    /// A `label` key whose value is empty, malformed, or not statically literal.
+    Unknown,
+    Literal(LabelDef),
+}
+
+/// Classify one top-level comma-delimited option entry. The source slices are
+/// exact because every boundary comes from the `OPTIONAL` node's own direct token
+/// stream; nested brace groups remain whole child nodes.
+fn option_label_entry(
+    optional: &SyntaxNode,
+    source: &str,
+    base: usize,
+    start: usize,
+    end: usize,
+) -> LabelEntry {
+    let Some((entry, entry_start, entry_end)) = trimmed_source(source, base, start, end) else {
+        return LabelEntry::Other;
+    };
+    let equals = optional
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .filter(|token| token.kind() == SyntaxKind::WORD)
+        .find_map(|token| {
+            let token_start = usize::from(token.text_range().start());
+            token
+                .text()
+                .match_indices('=')
+                .map(|(i, _)| token_start + i)
+                .find(|offset| entry_start <= *offset && *offset < entry_end)
+        });
+    let Some(equals) = equals else {
+        return if entry.trim() == "label" {
+            LabelEntry::Unknown
+        } else {
+            LabelEntry::Other
+        };
+    };
+    if source_slice(source, base, entry_start, equals).trim() != "label" {
+        return LabelEntry::Other;
+    }
+    let Some((_, value_start, value_end)) = trimmed_source(source, base, equals + 1, entry_end)
+    else {
+        return LabelEntry::Unknown;
+    };
+    let value_range = TextRange::new(
+        TextSize::from(value_start as u32),
+        TextSize::from(value_end as u32),
+    );
+
+    let mut nodes = optional
+        .children()
+        .filter(|node| ranges_overlap(node.text_range(), value_range));
+    let first_node = nodes.next();
+    if nodes.next().is_some() {
+        return LabelEntry::Unknown;
+    }
+    let (name, key_range) = match first_node {
+        Some(node) if node.text_range() == value_range => {
+            let Some(group) = Group::cast(node) else {
+                return LabelEntry::Unknown;
+            };
+            let Some((inner_range, inner)) = group.inner() else {
+                return LabelEntry::Unknown;
+            };
+            let Some((key, key_range)) = key_spans(&inner, inner_range, false).into_iter().next()
+            else {
+                return LabelEntry::Unknown;
+            };
+            (SmolStr::from(key), key_range)
+        }
+        Some(_) => return LabelEntry::Unknown,
+        None => {
+            let dynamic = optional
+                .children_with_tokens()
+                .filter_map(NodeOrToken::into_token)
+                .filter(|token| ranges_overlap(token.text_range(), value_range))
+                .any(|token| matches!(token.kind(), SyntaxKind::COMMENT | SyntaxKind::HASH));
+            if dynamic {
+                return LabelEntry::Unknown;
+            }
+            (
+                SmolStr::from(source_slice(source, base, value_start, value_end)),
+                value_range,
+            )
+        }
+    };
+
+    LabelEntry::Literal(LabelDef {
+        name,
+        range: TextRange::new(
+            TextSize::from(entry_start as u32),
+            TextSize::from(entry_end as u32),
+        ),
+        key_range,
+        referenced: false,
+    })
+}
+
+fn source_slice(source: &str, base: usize, start: usize, end: usize) -> &str {
+    &source[start - base..end - base]
+}
+
+/// Trim a source subrange and return its text plus absolute byte bounds.
+fn trimmed_source(
+    source: &str,
+    base: usize,
+    start: usize,
+    end: usize,
+) -> Option<(&str, usize, usize)> {
+    let segment = source_slice(source, base, start, end);
+    let (trimmed, lo, hi) = trimmed_span(segment)?;
+    Some((trimmed, start + lo, start + hi))
+}
+
+fn ranges_overlap(left: TextRange, right: TextRange) -> bool {
+    left.start() < right.end() && right.start() < left.end()
 }
 
 /// Whether `name` is a citation command (`\cite` and the natbib/biblatex family,
@@ -384,6 +568,64 @@ mod tests {
         assert_eq!(def.name, "sec:intro");
         // The key range covers only the trimmed key, not the braces or padding.
         assert_eq!(&src[def.key_range], "sec:intro");
+    }
+
+    #[test]
+    fn curated_environment_options_create_labels() {
+        let src = "\\begin{lstlisting}[caption={A, B}, label = { lst:one }]\n\
+                   x\n\
+                   \\end{lstlisting}\n\
+                   \\begin{frame}[fragile,label=frame:one]\n\
+                   x\n\
+                   \\end{frame}\n\
+                   \\ref{lst:one}\\ref{frame:one}\n";
+        let model = model(src);
+        let labels: Vec<_> = model
+            .labels()
+            .iter()
+            .map(|label| label.name.as_str())
+            .collect();
+        assert_eq!(labels, vec!["lst:one", "frame:one"]);
+        assert!(model.labels().iter().all(|label| label.referenced));
+        assert_eq!(&src[model.labels()[0].range], "label = { lst:one }");
+        assert_eq!(&src[model.labels()[0].key_range], "lst:one");
+        assert_eq!(&src[model.labels()[1].range], "label=frame:one");
+        assert_eq!(&src[model.labels()[1].key_range], "frame:one");
+    }
+
+    #[test]
+    fn only_top_level_literal_label_values_are_collected() {
+        let model = model(
+            "\\begin{tikzpicture}[label={not:a:latex:label}]\\end{tikzpicture}\n\
+             \\begin{lstlisting}[other={label={nested}},label=\\dynamic]\n\
+             x\n\
+             \\end{lstlisting}\n\
+             \\begin{lstlisting}[label={#1}]\n\
+             x\n\
+             \\end{lstlisting}\n",
+        );
+        assert!(model.labels().is_empty());
+    }
+
+    #[test]
+    fn final_valid_label_entry_wins() {
+        let src = "\\begin{lstlisting}[label=first,label={second}]\n\
+                   x\n\
+                   \\end{lstlisting}\n";
+        let model = model(src);
+        assert_eq!(model.labels().len(), 1);
+        assert_eq!(model.labels()[0].name, "second");
+        assert_eq!(&src[model.labels()[0].range], "label={second}");
+    }
+
+    #[test]
+    fn later_dynamic_label_clears_an_earlier_literal() {
+        let model = model(
+            "\\begin{lstlisting}[label=first,label=\\dynamic]\n\
+             x\n\
+             \\end{lstlisting}\n",
+        );
+        assert!(model.labels().is_empty());
     }
 
     #[test]

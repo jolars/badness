@@ -146,12 +146,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   coordinate arithmetic) and `data/signatures.json`'s `statementBody` now curate
   the same family twice — and the flag now has *three* readers (formatter
   routing, the parser's statement mode, and the linter's duplicate set), which
-  strengthens the case for the fold. Merging them needs a `SignatureDb` on
-  `RuleContext`, which carries none today — the same plumbing the user-declared
-  ref/cite families entry below wants. Until then the two carry cross-references
-  and must be edited in step. Note the sets are not quite identical by design:
-  the flag also names `scope` and `pgfonlayer`, which the linter reaches through
-  the enclosing `tikzpicture` on its ancestor walk.
+  strengthens the case for the fold. Merging them needs the effective signature
+  scope on `RuleContext`; its lazy `user_definitions` database contains only
+  file-local scans, not built-ins, project declarations, or loaded-package
+  signatures. Until then the two carry cross-references and must be edited in
+  step. Note the sets are not quite identical by design: the flag also names
+  `scope` and `pgfonlayer`, which the linter reaches through the enclosing
+  `tikzpicture` on its ancestor walk.
 
 ## Linter
 
@@ -282,8 +283,8 @@ regex-driven extension code, and its formatting and linting shell out
 smarts. Coexistence is the deliberate story (docs `guide/editor-setup.md`):
 LaTeX Workshop keeps build, PDF preview, and SyncTeX. The features it has that
 badness lacks and wants are filed in the sections below, tagged *(LW)*: command
-argument placeholders, keyval `label={…}` scanning, graphics hover preview, a
-texmf bib fallback, and surround/promote-demote code actions.
+argument placeholders, graphics hover preview, a texmf bib fallback, and
+surround/promote-demote code actions.
 Math-preview-on-hover is the one big item needing a design decision (see
 `### Hover` and Open decisions). Not adopted: `@a`-style abbreviation snippets
 and two-letter environment snippets (editor-snippet territory), graphics
@@ -317,13 +318,6 @@ sources below are missing.
   (`\frac{$1}{$2}`). Gate on the client's snippet capability and an editor
   setting—LaTeX Workshop's equivalent (`intellisense.argumentHint.enabled`) is
   off by default, since placeholder churn annoys as many users as it helps.
-
-- [ ] **Labels from keyval options *(LW)*.** LaTeX Workshop scans `label={…}`
-  inside environment option blocks (`lstlisting`, beamer frames) and
-  configurable custom label commands (`\linelabel`). The label scanner
-  (`semantic/label.rs`) does not catch the keyval form today; it is a bounded
-  static pattern for the semantic layer, feeding completion, navigation, and the
-  `undefined-ref`/`unreferenced-label`/`duplicate-label` rules alike.
 
 ### Hover
 

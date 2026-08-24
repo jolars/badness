@@ -506,8 +506,10 @@ pub(crate) fn in_rule_span_argument(tok: &crate::syntax::SyntaxToken) -> bool {
 /// layout in the formatter. The two sets are near-identical (that one also names
 /// `scope` and `pgfonlayer`, which need no entry here because the ancestor walk
 /// reaches the enclosing `tikzpicture` anyway) and should be kept in step —
-/// merging them waits on a signature DB in [`RuleContext`], which has none today
-/// (TODO.md, *Linter*).
+/// merging them requires the effective signature scope in [`RuleContext`]. Its
+/// lazy `user_definitions` database contains only file-local scanned definitions,
+/// not built-ins, project declarations, or loaded-package signatures (TODO.md,
+/// *Linter*).
 fn is_pgf_picture_environment(name: &str) -> bool {
     matches!(
         name,

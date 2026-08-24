@@ -3276,6 +3276,45 @@ fn lsp_prepare_rename_anchors_to_key_token() {
 }
 
 #[test]
+fn lsp_environment_option_label_supports_definition_and_rename() {
+    let (client, server_thread) = start_server(None);
+    let abs = std::path::absolute("option-label.tex").expect("absolute path");
+    let uri = path_to_file_uri(&abs);
+    let doc = "\\begin{lstlisting}[label={lst:intro}]\n\
+               code\n\
+               \\end{lstlisting}\n\
+               \\ref{lst:intro}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    let locs = definition(&client, 2, &uri, Position::new(3, 6));
+    assert_eq!(locs.len(), 1, "one option definition, got {locs:?}");
+    assert_eq!(locs[0].uri, uri);
+    assert_eq!(locs[0].range.start, Position::new(0, 19));
+    assert_eq!(locs[0].range.end, Position::new(0, 36));
+
+    let prepared = prepare_rename(&client, 3, &uri, Position::new(0, 28));
+    let response: PrepareRenameResponse = serde_json::from_value(prepared).unwrap();
+    match response {
+        PrepareRenameResponse::RangeWithPlaceholder { range, placeholder } => {
+            assert_eq!(
+                range,
+                Range::new(Position::new(0, 26), Position::new(0, 35))
+            );
+            assert_eq!(placeholder, "lst:intro");
+        }
+        other => panic!("expected RangeWithPlaceholder, got {other:?}"),
+    }
+
+    let changes = rename(&client, 4, &uri, Position::new(0, 28), "lst:overview");
+    let rewritten = apply_edits(doc, &changes[&uri]);
+    assert!(rewritten.contains("label={lst:overview}"), "{rewritten}");
+    assert!(rewritten.contains("\\ref{lst:overview}"), "{rewritten}");
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_rename_label_rewrites_def_and_uses_cross_file() {
     // A real on-disk project: the root `\input`s a chapter that defines the label,
     // and references it from both files (one via a `\cref` list alongside a sibling

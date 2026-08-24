@@ -24,23 +24,25 @@ impl RefId {
     }
 }
 
-/// A `\label{key}` definition site.
+/// A label definition site: either `\label{key}` or a curated environment's
+/// `label=key` option.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelDef {
     pub name: SmolStr,
-    /// Range of the `\label{key}` command — the control word through its key
-    /// group — for diagnostics / go-to-def. Excludes any *second* group the
-    /// greedy parser may have over-attached (`\label`'s arity is unknown at parse
-    /// time; see `builder::label_range`).
+    /// Range of the definition for diagnostics and go-to-definition. For
+    /// `\label`, this spans the control word through its key group and excludes
+    /// any *second* group the greedy parser may have over-attached (`\label`'s
+    /// arity is unknown at parse time; see `builder::label_range`). For an
+    /// environment option, it spans the complete `label=value` entry.
     pub range: TextRange,
-    /// Range of just the key text inside the braces (`sec:intro` in
-    /// `\label{sec:intro}`), trimmed of surrounding whitespace. The precise span a
-    /// rename rewrites — narrower than [`range`](Self::range), which spans the whole
-    /// command.
+    /// Range of just the trimmed key text (`sec:intro` in either
+    /// `\label{sec:intro}` or `label={sec:intro}`). This is the precise span a
+    /// rename rewrites—narrower than [`range`](Self::range), which spans the
+    /// whole definition.
     pub key_range: TextRange,
     /// Set by the resolve pass when any reference in this file uses `name`.
-    /// Per-file only — a label referenced solely from an `\input`-ed file looks
-    /// unreferenced here until the (deferred) cross-file resolver lands.
+    /// This field is per-file only; project consumers consult the cross-file
+    /// resolver for namespace-wide references.
     pub referenced: bool,
 }
 

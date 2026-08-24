@@ -1,5 +1,5 @@
-//! `duplicate-label`: a `\label{key}` defined more than once in the same label
-//! namespace — within one file, or across files that share a document (the
+//! `duplicate-label`: a label key defined more than once in the same label
+//! namespace—within one file, or across files that share a document (the
 //! cross-file branch, when a [`ResolvedLabels`] is available).
 //!
 //! LaTeX itself only *warns* on multiply-defined labels (and silently uses the
@@ -47,7 +47,7 @@ impl Rule for DuplicateLabel {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a `\\label{key}` defined more than once in the same label \
+        "Flag a label key defined more than once in the same label \
          namespace -- within one file, or across files that share a document \
          when a project view is available. LaTeX itself only warns and silently \
          keeps the last definition. Definitions in mutually exclusive branches \

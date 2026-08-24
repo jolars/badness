@@ -584,6 +584,35 @@ fn well_formed_project_has_no_cross_file_findings() {
 }
 
 #[test]
+fn environment_option_label_participates_in_label_lints() {
+    let clean = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\
+         \\begin{lstlisting}[label={lst:used}]\ncode\n\\end{lstlisting}\n\
+         \\ref{lst:used}\n",
+    )]);
+    assert!(
+        clean.is_empty(),
+        "the option label resolves its reference: {clean:?}"
+    );
+
+    let unreferenced = lint_project(&[(
+        "main.tex",
+        "\\documentclass{beamer}\n\
+         \\begin{frame}[label=frame:unused]\ntext\n\\end{frame}\n",
+    )]);
+    assert_eq!(rules_only(&unreferenced), vec!["unreferenced-label"]);
+
+    let duplicate = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\
+         \\begin{lstlisting}[label=lst:dup]\ncode\n\\end{lstlisting}\n\
+         \\label{lst:dup}\\ref{lst:dup}\n",
+    )]);
+    assert_eq!(rules_only(&duplicate), vec!["duplicate-label"]);
+}
+
+#[test]
 fn cross_file_duplicate_label_is_reported_in_both_files() {
     // The same key defined in two files of one document is a cross-file dupe;
     // each file's definition is flagged, naming the other.

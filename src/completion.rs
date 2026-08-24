@@ -708,6 +708,16 @@ mod tests {
     }
 
     #[test]
+    fn environment_option_label_is_completed() {
+        let src = "\\begin{lstlisting}[label={lst:example}]\n\
+                   x\n\
+                   \\end{lstlisting}\n\
+                   \\ref{lst:e}";
+        let got = labels(src, at(src, "\\ref{lst:e"));
+        assert!(got.contains(&"lst:example".to_string()), "{got:?}");
+    }
+
+    #[test]
     fn declared_command_is_completed_and_classifies_its_key_argument() {
         let declarations = declared("[commands.eqrefs]\nlike = 'cref'\n");
 

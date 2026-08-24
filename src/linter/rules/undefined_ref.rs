@@ -1,4 +1,4 @@
-//! `undefined-ref`: a `\ref`-family key that matches no `\label` anywhere in its
+//! `undefined-ref`: a `\ref`-family key that matches no label definition in its
 //! document's label namespace.
 //!
 //! This is the one cross-file rule that needs a soundness gate. Flagging "defined

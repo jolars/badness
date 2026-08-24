@@ -317,6 +317,16 @@ layer.
 typeset output. It is curated and validated conservatively, since it licenses
 splits at glued commas in key-value contexts.
 
+Environment signatures separately use the curated `labelKey` flag when a
+top-level `label` entry in the first optional argument defines a LaTeX label.
+The semantic model accepts only flat literal bare or braced values, applies
+repeated entries in order, and treats a later dynamic value as unknown rather
+than retaining an earlier literal. The initial built-ins are `frame` and
+`lstlisting`; declarations may inherit the fact through `like`, while CWL and
+source-scanned signatures cannot grant it. This is not inferred from
+`ContentKind::Keyval`, because many key-value processors give `label` unrelated
+meanings.
+
 ## The parser
 
 The parser is hand-written recursive descent over a flat token stream. It treats
@@ -1286,8 +1296,10 @@ hand a future `.dtx` consumer a `tikzpicture`. And it is read from the
 
 The same picture family is curated a second time in the linter
 (`linter::rules::is_pgf_picture_environment`), which keeps `dash-length` off
-coordinate arithmetic. Merging the two waits on a signature DB reaching
-`RuleContext`.
+coordinate arithmetic. Merging the two requires the effective signature scope to
+reach `RuleContext`; its current lazy `user_definitions` database contains only
+definitions scanned from the file, not built-ins, project declarations, or
+loaded-package signatures.
 
 ### Reflow is safe by construction
 

@@ -289,6 +289,13 @@ pub struct EnvironmentSig {
     /// layout for the whole body *and* asserts the whitespace claim above, so
     /// hold it to the standard of the `math` routing flag.
     pub statement_body: bool,
+    /// `true` when a top-level `label` entry in the environment's first optional
+    /// argument creates a LaTeX label definition. This is narrower than
+    /// [`ContentKind::Keyval`]: many key-value processors have a `label` key whose
+    /// meaning is unrelated to `\label`, so only curated package facts may set it.
+    /// Project declarations inherit the fact through `like`; the CWL and scanned
+    /// tiers never grant it.
+    pub label_key: bool,
     /// `true` for alignment environments whose `&` columns the formatter lays out
     /// into a grid (`align`, `pmatrix`, …). Independent of `math`: every flagged
     /// environment here is also math, but the formatter consults this flag, not
@@ -410,6 +417,9 @@ pub(crate) const fn environment(
         // Curated-only facet, like the verbatim-argument one: a statement body is
         // package grammar the mechanical tier cannot see.
         statement_body: false,
+        // A key named `label` is not enough to prove `\label` semantics, so the
+        // mechanical CWL tier can never grant this fact.
+        label_key: false,
         align,
         reflow: derive_reflow(verbatim_body, math, code, false),
         no_indent,
@@ -1199,6 +1209,8 @@ struct RawEnvironment {
     code: bool,
     #[serde(default, rename = "statementBody")]
     statement_body: bool,
+    #[serde(default, rename = "labelKey")]
+    label_key: bool,
     #[serde(default)]
     align: bool,
     #[serde(default, rename = "noIndent")]
@@ -1222,6 +1234,7 @@ impl From<RawEnvironment> for EnvironmentSig {
             math: raw.math,
             code: raw.code,
             statement_body: raw.statement_body,
+            label_key: raw.label_key,
             align: raw.align,
             reflow: derive_reflow(raw.verbatim_body, raw.math, raw.code, raw.statement_body),
             no_indent: raw.no_indent,
@@ -1760,6 +1773,25 @@ mod tests {
         assert!(!stmt.reflow);
         assert!(!stmt.code);
         assert!(!stmt.verbatim_body);
+    }
+
+    #[test]
+    fn label_key_flag_is_curated_and_defaults_false() {
+        let db = parse(
+            r#"{
+              "environments": {
+                "plain": {},
+                "labels": { "labelKey": true }
+              }
+            }"#,
+        )
+        .expect("valid labelKey schema");
+        assert!(!db.environment("plain").unwrap().label_key);
+        assert!(db.environment("labels").unwrap().label_key);
+
+        assert!(builtin().environment("frame").unwrap().label_key);
+        assert!(builtin().environment("lstlisting").unwrap().label_key);
+        assert!(!builtin().environment("tikzpicture").unwrap().label_key);
     }
 
     /// The curated TikZ/pgf picture family: bodies of `;`-terminated path

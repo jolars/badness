@@ -1,6 +1,6 @@
-//! Cross-file label resolution: union the per-file `\label` sets across the
-//! inclusion graph so a `\ref` can be resolved against the whole document, and a
-//! key defined in two files of one document can be flagged as a duplicate.
+//! Cross-file label resolution: union the per-file label definitions across the
+//! inclusion graph so a `\ref` can be resolved against the whole document, and
+//! a key defined in two files of one document can be flagged as a duplicate.
 //!
 //! Layered like [`crate::project::graph`]: [`ResolvedLabels::build`] is the
 //! **pure** algorithm (no salsa, no disk), and [`crate::project::resolved_labels`]
@@ -31,8 +31,8 @@ use crate::project::graph::{IncludeGraph, project_graph};
 use crate::semantic::SemanticModel;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
-/// The distinct `\label` names defined in `model`, sorted and deduped — the
-/// per-file label input to [`ResolvedLabels::build`]. Shared by the CLI
+/// The distinct label names defined in `model`, sorted and deduped—the per-file
+/// label input to [`ResolvedLabels::build`]. Shared by the CLI
 /// (one-shot, non-salsa) and the [`crate::incremental::file_labels`] firewall so
 /// both feed identical data into the resolver.
 pub fn document_label_names(model: &SemanticModel) -> Vec<SmolStr> {
@@ -50,7 +50,8 @@ pub fn document_label_names(model: &SemanticModel) -> Vec<SmolStr> {
 /// the per-file reference input to [`ResolvedLabels::build`], the mirror image of
 /// [`document_label_names`]. A `\cref{a,b}` contributes both `a` and `b` (the
 /// model already splits key lists). Feeds the cross-file `unreferenced-label`
-/// lint, which asks whether a `\label` is targeted *anywhere* in the namespace.
+/// lint, which asks whether a label definition is targeted *anywhere* in the
+/// namespace.
 pub fn document_ref_names(model: &SemanticModel) -> Vec<SmolStr> {
     let mut names: Vec<SmolStr> = model.refs().iter().map(|r| r.name.clone()).collect();
     names.sort_unstable();

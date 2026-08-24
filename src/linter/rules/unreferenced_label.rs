@@ -1,4 +1,4 @@
-//! `unreferenced-label`: a `\label` never targeted by any `\ref`-family command
+//! `unreferenced-label`: a label definition never targeted by a `\ref`-family command
 //! anywhere in its document's label namespace.
 //!
 //! The mirror image of [`undefined-ref`](super::undefined_ref): that rule flags a
@@ -8,7 +8,7 @@
 //! namespace:
 //!
 //! - **closed** — every include resolves to an analyzed member, so no opaque file
-//!   could hold the missing `\ref` (a `\label` referenced only from an
+//!   could hold the missing `\ref` (a label referenced only from an
 //!   un-analyzed `\input` would otherwise be a false positive).
 //! - **rooted** — the namespace contains a document root. A bare chapter fragment
 //!   opened on its own, whose labels are referenced from the main document, is
@@ -16,7 +16,7 @@
 //!
 //! Inert when no [`ResolvedLabels`] is available (stdin, or the language server
 //! today). Report-only: two resolutions are always valid (delete the dead
-//! `\label`, or add the missing `\ref`), so there is no single correct-by-
+//! definition, or add the missing `\ref`), so there is no single correct-by-
 //! construction rewrite — no autofix (see [`crate::linter`] tenet 1).
 //! `Severity::Warning` keeps a stray package-defined reference target
 //! conservative.
@@ -46,7 +46,7 @@ impl Rule for UnreferencedLabel {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a `\\label` that no `\\ref`-family command targets anywhere in the \
+        "Flag a label definition that no `\\ref`-family command targets anywhere in the \
          document. The mirror of `undefined-ref`, and sound only when the label \
          namespace is complete, so it stays silent unless the project view is \
          **closed** (every include resolves to an analyzed file) and **rooted**. \

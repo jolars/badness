@@ -213,6 +213,12 @@ jobs:
         # badness does; the other two diagnostics in the file are that error's
         # cascade. No parser change is correct here. Issue #98.
         plk/biblatex|doc/latex/biblatex/biblatex-quickstart.tex|format-error
+        # Genuinely broken upstream: both style files have a stray `{` before
+        # `\newcommand{\eocesol}`. The group remains open after the include, and
+        # LaTeX aborts at `\begin{document}` with "Loading a class or package in
+        # a group." No parser change is correct here. Issue #142.
+        OpenIntroStat/openintro-statistics|extraTeX/style/style.tex|format-error
+        OpenIntroStat/openintro-statistics|extraTeX/style/style_simple.tex|format-error
     steps:
       - uses: actions/checkout@v7
 

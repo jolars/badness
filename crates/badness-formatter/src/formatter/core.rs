@@ -6830,11 +6830,10 @@ fn column_alignments(env: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<ColAlign>
 /// alignment (`aligns`, empty = all-left), join cells with `" & "`, append the row's
 /// `\\` and any trailing comment, and join all items with [`Ir::hard_line`]. A row is
 /// one [`Ir::text`] (no newline; cells are flat), which the caller indents one step.
-/// A row's *last* cell never carries trailing padding, so no line has trailing
-/// whitespace (a right/center-aligned last column still gets its *leading* pad, e.g.
-/// a right-aligned numeric final column). [`GridItem::Passthrough`] lines (comments,
-/// `\hline`/`\midrule`, …) are emitted verbatim between rows and never counted toward
-/// column widths.
+/// Rows terminated by `\\` pad to the full grid width, aligning their terminators;
+/// unterminated rows omit that final padding so they never carry trailing whitespace.
+/// [`GridItem::Passthrough`] lines (comments, `\hline`/`\midrule`, …) are emitted
+/// verbatim between rows and never counted toward column widths.
 ///
 /// A `\multicolumn{n}{…}{…}` cell spans `n` columns: it never defines a single
 /// column's width, and its rendered field is the sum of the spanned column widths
@@ -6879,6 +6878,11 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
             .sum();
         sum + SEP.len() * (span - 1)
     };
+    let grid_width =
+        col_widths.iter().sum::<usize>() + SEP.len() * col_widths.len().saturating_sub(1);
+    let grid_width = grid_width.saturating_sub(usize::from(
+        col_widths.len() > 1 && col_widths.first() == Some(&0),
+    ));
 
     let lines = items.iter().map(|item| {
         let row = match item {
@@ -6942,6 +6946,9 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
         }
         let mut tail = String::new();
         if let Some(line_break) = &row.line_break {
+            if block.is_none() {
+                line.push_str(&" ".repeat(grid_width.saturating_sub(line.chars().count())));
+            }
             tail.push(' ');
             tail.push_str(line_break);
         }

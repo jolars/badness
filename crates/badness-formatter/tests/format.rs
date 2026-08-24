@@ -1061,9 +1061,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // `multlined`'s directly-abutting `[t]` attaches to its `\begin`.
     ("math_bracket_not_optional", WrapMode::Preserve, 80),
     // Alignment-aware formatting: an `align`/matrix-family environment lays its `&`
-    // columns into a grid (left-aligned, single space around `&`, last cell never
-    // padded), preserving the row break (with its `[len]`). A lone interior newline
-    // in a cell is a continuation line and joins onto its aligned row. A nested
+    // columns into a grid (left-aligned, single space around `&`, terminated rows
+    // padded so their `\\` markers align), preserving the row break (with its
+    // `[len]`). An unterminated row remains unpadded. A lone interior newline in a
+    // cell is a continuation line and joins onto its aligned row. A nested
     // block environment (`aligned`, `cases`, a matrix) in the *last* cell of a row
     // keeps the grid: the cell renders multi-line, its later lines hanging at the
     // nested `\begin{…}` column (so the `\end{…}` sits directly under it), and
@@ -1082,6 +1083,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("align_user_env_linebreak_only", WrapMode::Preserve, 80),
     ("align_columns_uneven_rows", WrapMode::Preserve, 80),
     ("align_columns_linebreak_optional", WrapMode::Preserve, 80),
+    ("align_row_terminators", WrapMode::Preserve, 80),
     ("align_continuation_join", WrapMode::Preserve, 80),
     ("pmatrix_columns", WrapMode::Preserve, 80),
     ("align_nested_block_cell", WrapMode::Preserve, 80),
@@ -2807,7 +2809,7 @@ fn trailing_control_crlf_remains_aligned() {
         "\\def\\beaa{\\begin{eqnarray*}}\r\n",
         "\\def\\eeaa{\\end{eqnarray*}}\r\n",
         "\\beaa\r\n",
-        "  a & = & b \\\\\r\n",
+        "  a & = & b  \\\\\r\n",
         "    &   & c\\\r\n",
         "\\eeaa\r\n",
     );

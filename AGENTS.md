@@ -173,6 +173,8 @@ comparison, not a byte target.
 - Derive structural statement boundaries from parse structure under reflow.
 - Keep interior statement wrapping unit-aware and meaning-safe. Underivable
   fallbacks may preserve authored lines but must remain idempotent.
+- In `render_alignment_rows`, pad terminated grid rows to the full grid width so
+  their `\\` markers align; leave unterminated rows unpadded.
 
 ### Formatter validation and linter boundary
 

@@ -196,7 +196,7 @@ impl Declarations {
                     name: SmolStr::new(name),
                 }));
             }
-            if builtin().command(name).is_some() {
+            if is_builtin_command(name) {
                 return Err(error(DeclarationErrorKind::BuiltinCommandName {
                     name: SmolStr::new(name),
                 }));
@@ -205,9 +205,12 @@ impl Declarations {
                 .like
                 .as_ref()
                 .ok_or_else(|| error(DeclarationErrorKind::EmptyCommandEntry))?;
-            if builtin().command(target).is_none()
-                || (ref_command(target).is_none() && !is_cite_command(target))
-            {
+            // The family tables alone decide what `like` copies, so they are the
+            // whole test. Requiring a `signatures.json` entry too would reject the
+            // targets a wrapper most needs: that file carries layout data and omits
+            // most of the ref/cite families, `\cpageref` — the only list-valued page
+            // reference — among them.
+            if ref_command(target).is_none() && !is_cite_command(target) {
                 return Err(DeclarationError {
                     key: dotted_key(["commands", name, "like"]),
                     kind: DeclarationErrorKind::UnknownCommandLikeTarget {
@@ -446,6 +449,18 @@ pub enum DeclarationErrorKind {
     /// no-op — it would take effect, on a command the project did not mean to
     /// redefine.
     SpellingIsABuiltinCommand { name: CommandName },
+}
+
+/// Whether the curated data already knows `name` as a command.
+///
+/// All three sources have to be asked, because `signatures.json` is not a
+/// superset of the ref/cite family tables: it carries layout data, and most of
+/// the families (`\cpageref`, `\supercite`, `\Textcite`, …) have no entry there.
+/// Asking it alone would let a declaration reclassify one of them: `like = "ref"`
+/// on `\cpageref` would demote a list-valued page reference to a single-key
+/// `\ref`, which is exactly what this gate exists to prevent.
+fn is_builtin_command(name: &str) -> bool {
+    builtin().command(name).is_some() || ref_command(name).is_some() || is_cite_command(name)
 }
 
 /// The environment named by `spelling` when it is the written-out delimiter
@@ -741,6 +756,39 @@ mod tests {
             declared.command_names().collect::<Vec<_>>(),
             vec!["everything", "many", "one", "sources"]
         );
+    }
+
+    /// Most of the ref/cite families have no `signatures.json` entry, so a `like`
+    /// target must be checked against the family tables and nothing else. A
+    /// wrapper around `\cpageref` — the only list-valued page reference, and the
+    /// one shape `\pageref` cannot stand in for — has no other target to name.
+    #[test]
+    fn like_may_name_a_family_command_absent_from_the_signature_database() {
+        for target in ["cpageref", "supercite", "Textcite", "fnotecite"] {
+            assert!(
+                builtin().command(target).is_none(),
+                "{target} is in signatures.json; pick another for this test"
+            );
+            let json = format!(r#"{{"commands": {{"wrapper": {{"like": "{target}"}}}}}}"#);
+            let declared = from_json(&json).resolve().expect("resolves");
+            assert_eq!(declared.command_like("wrapper"), Some(target));
+        }
+    }
+
+    /// The reclassification gate has to consult the same tables: `\cpageref`
+    /// splits its key list and `\ref` does not, so accepting this entry would turn
+    /// every `\cpageref{a,b}` in the project into one undefined key `a,b`.
+    #[test]
+    fn a_family_command_absent_from_the_signature_database_may_not_be_redeclared() {
+        for name in ["cpageref", "supercite", "Textcite", "fnotecite"] {
+            let json = format!(r#"{{"commands": {{"{name}": {{"like": "ref"}}}}}}"#);
+            let err = resolve_err(&json);
+            assert_eq!(err.key, format!("commands.{name}"), "{err}");
+            assert!(matches!(
+                err.kind,
+                DeclarationErrorKind::BuiltinCommandName { .. }
+            ));
+        }
     }
 
     #[test]

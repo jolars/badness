@@ -163,6 +163,7 @@ fn times_x_position(text: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::declarations::{Declarations, ResolvedDeclarations};
     use crate::linter::diagnostic::Applicability;
     use crate::linter::fix::apply_fixes;
     use crate::parser::parse;
@@ -170,8 +171,19 @@ mod tests {
     use crate::syntax::SyntaxNode;
 
     fn findings(src: &str) -> Vec<Diagnostic> {
+        findings_with(src, &ResolvedDeclarations::default())
+    }
+
+    fn declared(toml_src: &str) -> ResolvedDeclarations {
+        toml::from_str::<Declarations>(toml_src)
+            .expect("declarations deserialize")
+            .resolve()
+            .expect("declarations resolve")
+    }
+
+    fn findings_with(src: &str, declared: &ResolvedDeclarations) -> Vec<Diagnostic> {
         let root = SyntaxNode::new_root(parse(src).green);
-        let model = SemanticModel::build(&root);
+        let model = SemanticModel::build_with_declarations(&root, declared);
         let ctx = RuleContext::new(
             std::path::Path::new("x.tex"),
             &root,
@@ -269,5 +281,22 @@ mod tests {
     fn trailing_punctuation_is_left_alone() {
         // `640x200.` is one WORD with a non-digit tail; conservatively skipped.
         assert!(findings("sized 640x200.\n").is_empty());
+    }
+
+    /// A declared alias is gated exactly as the command it copies. The key here is
+    /// deliberately unextractable (`\textbf{…}` nested in the group), the shape
+    /// that yields no `LabelRef` at all — so the gate has to answer by name.
+    #[test]
+    fn a_declared_reference_alias_is_a_key_argument() {
+        let src = "\\myref{\\textbf{3x3}}\n";
+        assert!(
+            findings("\\cref{\\textbf{3x3}}\n").is_empty(),
+            "the built-in target is already skipped"
+        );
+        assert!(!findings(src).is_empty(), "undeclared, `\\myref` is prose");
+        assert!(
+            findings_with(src, &declared("[commands.myref]\nlike = 'cref'\n")).is_empty(),
+            "a declared alias must be skipped like its target"
+        );
     }
 }

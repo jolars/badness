@@ -37,9 +37,12 @@ pub use signature::{
     Signatures, match_arg_slot, match_arg_slot_index, match_verbatim_arg_slot,
 };
 
+use std::collections::BTreeSet;
+
+use smol_str::SmolStr;
+
 use crate::declarations::ResolvedDeclarations;
 use crate::syntax::SyntaxNode;
-use rowan::TextRange;
 
 /// A file's label definitions and reference uses.
 ///
@@ -67,6 +70,12 @@ pub struct SemanticModel {
     pub(crate) needs_format: Option<NeedsFormatDecl>,
     /// The file's `\DeclareOption` declarations (including the starred default handler).
     pub(crate) options: Vec<OptionDecl>,
+    /// The project-declared command aliases *used in this file* whose target is a
+    /// key-argument command ([`builder::key_argument_command`]). Recorded by name
+    /// so a name-based gate can treat `\myref` exactly as it treats the `\cref` it
+    /// was declared `like`, and holding only the names the file actually uses so an
+    /// unrelated declaration edit still backdates this model.
+    pub(crate) declared_key_commands: BTreeSet<SmolStr>,
 }
 
 impl SemanticModel {
@@ -97,15 +106,16 @@ impl SemanticModel {
         &self.citations
     }
 
-    /// Whether `range` is a command collected as a reference or citation use.
-    /// This also recognizes project-declared aliases, whose spelling is absent
-    /// from the built-in family tables.
-    pub fn is_reference_or_citation_range(&self, range: TextRange) -> bool {
-        self.refs.iter().any(|reference| reference.range == range)
-            || self
-                .citations
-                .iter()
-                .any(|citation| citation.range == range)
+    /// Whether `name` is a command whose arguments hold opaque keys rather than
+    /// typeset text — a curated one ([`builder::key_argument_command`]) or a
+    /// project-declared alias of one.
+    ///
+    /// Answered by *name*, not by the ranges collected into [`refs`](Self::refs)
+    /// and [`citations`](Self::citations): a command whose key cannot be extracted
+    /// (`\myref{\textbf{a}}` yields no `LabelRef`) still has a key argument, and a
+    /// declared alias must not be gated more weakly than the built-in it copies.
+    pub fn is_key_argument_command(&self, name: &str) -> bool {
+        builder::key_argument_command(name) || self.declared_key_commands.contains(name)
     }
 
     /// The glossary/acronym key definitions (`\newglossaryentry`/`\newacronym`/…)
@@ -296,6 +306,33 @@ mod tests {
                 .all(|citation| citation.command == "sources")
         );
         assert!(model.has_wildcard_nocite());
+    }
+
+    /// The name-based gate the linter uses. It must answer for an alias whose key
+    /// never became a `LabelRef` — a nested-macro key is skipped by the collector,
+    /// but the argument is a key argument all the same.
+    #[test]
+    fn a_declared_alias_is_a_key_argument_command_by_name() {
+        let model = declared_model(
+            "\\myref{\\textbf{a}}\\wrapper{a}\n",
+            r#"{"commands": {
+                 "myref": {"like": "cref"},
+                 "wrapper": {"like": "citeauthor"}
+               }}"#,
+        );
+        assert!(model.refs().is_empty(), "the nested-macro key is skipped");
+        assert!(model.is_key_argument_command("myref"));
+        assert!(model.is_key_argument_command("wrapper"));
+        assert!(
+            model.is_key_argument_command("cref"),
+            "built-ins still pass"
+        );
+        assert!(!model.is_key_argument_command("emph"));
+        assert!(
+            !SemanticModel::build(&SyntaxNode::new_root(parse("\\myref{a}\n").green))
+                .is_key_argument_command("myref"),
+            "undeclared, the alias is an ordinary command"
+        );
     }
 
     #[test]

@@ -269,14 +269,17 @@ pub(crate) fn in_reference_position(command: &SyntaxNode) -> bool {
 /// command are skipped, not just the key slot: argument attachment is greedy
 /// (arity is unknown at parse time, AGENTS.md decision #8), so index mapping is
 /// unreliable, and a false negative beats flagging a key.
+///
+/// The lookup goes through [`SemanticModel::is_key_argument_command`] rather than
+/// the curated table alone, so a project-declared alias
+/// (`[commands.myref] like = "cref"`) is gated exactly as its target is.
 pub(crate) fn in_key_argument(tok: &crate::syntax::SyntaxToken, ctx: &RuleContext<'_>) -> bool {
     tok.parent_ancestors().any(|node| {
         matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL)
             && node.parent().is_some_and(|cmd| {
                 cmd.kind() == SyntaxKind::COMMAND
-                    && (crate::ast::command_name(&cmd)
-                        .is_some_and(|name| crate::semantic::builder::key_argument_command(&name))
-                        || ctx.model.is_reference_or_citation_range(cmd.text_range()))
+                    && crate::ast::command_name(&cmd)
+                        .is_some_and(|name| ctx.model.is_key_argument_command(&name))
             })
     })
 }

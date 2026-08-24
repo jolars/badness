@@ -39,6 +39,16 @@ pub fn build_with_declarations(
             continue;
         };
         let semantic_name = declared.command_like(&name).unwrap_or(&name);
+        // Recorded before the key-collecting arms below, and independently of
+        // them: an alias whose first group holds no extractable key still takes a
+        // key argument, and the name-based gates must see it.
+        if let Some(target) = declared.command_like(&name)
+            && key_argument_command(target)
+        {
+            model
+                .declared_key_commands
+                .insert(SmolStr::new(name.as_str()));
+        }
 
         if name == "label" {
             // A nested-macro key (`\label{\foo}`) or a parameter-template key

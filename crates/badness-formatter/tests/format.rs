@@ -972,8 +972,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // tight, while a gap on either side is made symmetric. Script-size punctuation
     // stays tight throughout, including nested known-math command arguments.
     // Control-word operators retain readable spacing (`a \in A`), while function
-    // application glues to its opener (`\Gamma(x)`). Scientific notation (`1e-5`)
-    // is deliberately not special-cased.
+    // application glues to its opener (`\Gamma(x)`). An operator-adjacent glued
+    // slash reaches its symmetric layout in the same pass (issue #143).
+    // Scientific notation (`1e-5`) is deliberately not special-cased.
     ("math_op_spacing", WrapMode::Preserve, 80),
     // Curated argument domains are positional: only known `Math` slots recurse
     // through math spacing, while `Text`, `Unknown`, and slots shadowed by a

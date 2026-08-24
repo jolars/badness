@@ -8359,6 +8359,7 @@ struct MathPiece {
     ir: Ir,
     role: MathRole,
     spaced_slash: bool,
+    slash: bool,
     /// Whether authored whitespace preceded this atom. Drives operand-operand
     /// spacing exactly as [`lower_math_seq`] does, so a tight command boundary
     /// (`\gamma)`, `}.`) stays tight rather than gaining a spurious space.
@@ -8375,6 +8376,7 @@ struct MathSurfaceAtom {
     class: MathClass,
     delimiter: Option<DelimiterRole>,
     spaced_slash: bool,
+    slash: bool,
     control_word_operator: bool,
     starts_control_word_letter: bool,
     ends_control_word: bool,
@@ -8404,6 +8406,7 @@ fn lower_math_atoms(
             class: atom.class,
             delimiter: atom.delimiter,
             spaced_slash: false,
+            slash: false,
             control_word_operator,
             starts_control_word_letter,
             ends_control_word,
@@ -8427,6 +8430,7 @@ fn lower_math_atoms(
             class: atom.class,
             delimiter: atom.delimiter,
             spaced_slash: false,
+            slash: false,
             control_word_operator,
             starts_control_word_letter,
             ends_control_word,
@@ -8460,10 +8464,32 @@ fn lower_math_atoms(
                         && token
                             .next_token()
                             .is_some_and(|token| is_collapsible_trivia(token.kind()))),
+            slash: atom.class == MathClass::Ord && text == "/",
             control_word_operator: false,
             starts_control_word_letter: text.chars().next().is_some_and(is_control_word_letter),
             ends_control_word: false,
         });
+    }
+    // Anticipate the gap the sequencer will add before a following operator;
+    // otherwise that gap makes only the next pass recognize the slash as spaced.
+    for index in 0..surface.len() {
+        if !surface[index].slash || surface[index].spaced_slash {
+            continue;
+        }
+        let next_operator = surface.get(index + 1).is_some_and(|next| {
+            spacing == MathSpacing::Normal && matches!(next.class, MathClass::Bin | MathClass::Rel)
+        }) || index + 1 == surface.len()
+            && token.next_token().is_some_and(|next| {
+                let class = math_atoms(&SyntaxElement::Token(next.clone()))
+                    .next()
+                    .map(|atom| atom.class);
+                class.is_some_and(|class| {
+                    matches!(class, MathClass::Bin | MathClass::Rel)
+                        && (spacing == MathSpacing::Normal
+                            || next.kind() == SyntaxKind::CONTROL_WORD)
+                })
+            });
+        surface[index].spaced_slash = next_operator;
     }
     surface
 }
@@ -8557,12 +8583,25 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
                         ir: atom.ir,
                         role,
                         spaced_slash: atom.spaced_slash,
+                        slash: atom.slash,
                         space_before: pending_space,
                         bracket_delta,
                     });
                     pending_space = false;
                 }
             }
+        }
+    }
+    // The display breaker computes every effective role up front, so it can make
+    // operator-created slash gaps symmetric before building either layout.
+    for index in 0..pieces.len() {
+        if pieces[index].slash
+            && (index > 0 && pieces[index - 1].role != MathRole::Operand
+                || pieces
+                    .get(index + 1)
+                    .is_some_and(|next| next.role != MathRole::Operand))
+        {
+            pieces[index].spaced_slash = true;
         }
     }
     (pieces.len() >= 2).then_some(pieces)
@@ -8819,7 +8858,11 @@ fn lower_math_seq(
                 );
                 for atom in lower_math_atoms(other, cx, spacing) {
                     let role = math_atom_role(atom.class, prev_role, prev_opener);
-                    let touches_spaced_slash = prev_spaced_slash || atom.spaced_slash;
+                    let spaced_slash = atom.spaced_slash
+                        || atom.slash
+                            && (spacing == MathSpacing::Normal && prev_role != MathRole::Operand
+                                || spacing == MathSpacing::Script && prev_control_word_operator);
+                    let touches_spaced_slash = prev_spaced_slash || spaced_slash;
                     let delimiter_edge = matches!(
                         atom.delimiter,
                         Some(DelimiterRole::Open | DelimiterRole::Close)
@@ -8855,7 +8898,7 @@ fn lower_math_seq(
                     }
                     prev_opener = atom.delimiter == Some(DelimiterRole::Open);
                     prev_delimiter_edge = delimiter_edge;
-                    prev_spaced_slash = atom.spaced_slash;
+                    prev_spaced_slash = spaced_slash;
                     prev_control_word_operator = atom.control_word_operator;
                     prev_ends_control_word = atom.ends_control_word;
                     out.push(atom.ir);

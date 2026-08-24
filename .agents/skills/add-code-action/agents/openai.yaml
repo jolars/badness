@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add Code Action"
+  short_description: "Add safe Badness LSP code actions"
+  default_prompt: "Use $add-code-action to implement a new Badness LSP code action."

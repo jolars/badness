@@ -2794,6 +2794,30 @@ fn trailing_control_newline_reuses_environment_frame_under_reflow() {
 }
 
 #[test]
+fn trailing_control_crlf_remains_aligned() {
+    let input = concat!(
+        "\\def\\beaa{\\begin{eqnarray*}}\r\n",
+        "\\def\\eeaa{\\end{eqnarray*}}\r\n",
+        "\\beaa\r\n",
+        "a&=&b\\\\\r\n",
+        "&&c\\\r\n",
+        "\\eeaa\r\n",
+    );
+    let expected = concat!(
+        "\\def\\beaa{\\begin{eqnarray*}}\r\n",
+        "\\def\\eeaa{\\end{eqnarray*}}\r\n",
+        "\\beaa\r\n",
+        "  a & = & b \\\\\r\n",
+        "    &   & c\\\r\n",
+        "\\eeaa\r\n",
+    );
+
+    let once = format(input).expect("formats");
+    assert_eq!(once, expected);
+    assert_eq!(format(&once).expect("reformats"), once);
+}
+
+#[test]
 fn a_literal_begin_does_not_inherit_the_alias_target() {
     // An alias names a *command*. A literal `\begin{bi}` in a file that also
     // defines `\bi` as an alias for `itemize` is an unrelated environment that

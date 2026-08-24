@@ -60,6 +60,23 @@ fn command_with_required_and_optional_args() {
 }
 
 #[test]
+fn control_symbol_line_endings_have_the_same_shape() {
+    let token_kinds = |input: &str| {
+        let parsed = parse(input);
+        assert_eq!(parsed.syntax().to_string(), input, "losslessness");
+        assert!(parsed.errors.is_empty(), "unexpected parse errors");
+        parsed
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .map(|token| token.kind())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(token_kinds("a\\\nb"), token_kinds("a\\\r\nb"));
+}
+
+#[test]
 fn curated_argument_domains_control_only_argument_body_parsing() {
     let cases = [
         (r"\frac{x_{exp}}{n}", 1),

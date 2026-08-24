@@ -1433,6 +1433,12 @@ and `crlf` are unconditional, and `native` follows the platform. `auto` is the
 default so a CRLF repository does not get a whole-file diff the first time it is
 formatted.
 
+At the lexer boundary, CRLF is one physical end-of-line unit. This remains true
+when a preceding backslash swallows the line ending into a `CONTROL_SYMBOL`: the
+token spans both `\r` and `\n`, just as its LF counterpart spans the `\n`.
+Keeping that unit atomic gives LF and CRLF the same token-kind and CST shape
+while the lossless tree still preserves their original bytes.
+
 This is the one carve-out in the protected-regions rule. A `verbatim` body is
 emitted from source token text, so without a document-wide conversion a CRLF
 document came out CRLF inside the protected region and LF everywhere else. Only

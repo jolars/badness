@@ -1189,11 +1189,17 @@ fn lex_control(rest: &str, word_len: Option<usize>) -> (SyntaxKind, usize) {
             (SyntaxKind::CONTROL_WORD, word_len)
         }
         // Control symbol: backslash + exactly one other character — or a lone
-        // trailing backslash at end of input.
-        None => match rest[1..].chars().next() {
-            Some(d) => (SyntaxKind::CONTROL_SYMBOL, 1 + d.len_utf8()),
-            None => (SyntaxKind::CONTROL_SYMBOL, 1),
-        },
+        // trailing backslash at end of input. CRLF is one physical line ending,
+        // so consume it atomically just as the ordinary newline lexer does.
+        None => {
+            let after = &rest[1..];
+            let symbol_len = if after.starts_with("\r\n") {
+                2
+            } else {
+                after.chars().next().map_or(0, char::len_utf8)
+            };
+            (SyntaxKind::CONTROL_SYMBOL, 1 + symbol_len)
+        }
     }
 }
 
@@ -2028,6 +2034,17 @@ mod tests {
         let toks = lex("a\r\nb");
         assert_eq!(toks[1].kind, SyntaxKind::NEWLINE);
         assert_eq!(toks[1].text, "\r\n");
+    }
+
+    #[test]
+    fn control_symbol_swallows_the_whole_line_ending() {
+        for ending in ["\n", "\r", "\r\n"] {
+            let input = format!("\\{ending}");
+            let toks = lex(&input);
+            assert_eq!(toks.len(), 1, "split line ending {ending:?}");
+            assert_eq!(toks[0].kind, SyntaxKind::CONTROL_SYMBOL);
+            assert_eq!(toks[0].text, input);
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! and leaves cross-file resolution to the project layer.
 
 pub mod builder;
+pub mod completion;
 pub mod define;
 pub mod doc;
 pub mod expl3;

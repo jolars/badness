@@ -6838,11 +6838,11 @@ fn file_completion_items(uri: &Uri, prefix: &str, kind: FileArgKind) -> Vec<Comp
 /// Package/class name candidates for `\usepackage`/`\documentclass`, in three tiers
 /// of decreasing relevance: local `.sty`/`.cls` files in the document directory, then
 /// the **installed set** from the TEXMF index (`texmf`), then the baked name list
-/// ([`crate::completion::package_names`], all of CTAN in rank order). Files/installed
+/// ([`crate::semantic::completion::package_names`], all of CTAN in rank order). Files/installed
 /// names are offered as their **stem** (`\usepackage` takes a name, not a filename),
 /// so `amsmath.sty` becomes `amsmath`; a name already emitted by an earlier tier is
 /// dropped. Every item is enriched with the CTAN one-line description
-/// ([`package_metadata`](crate::semantic::signature::package_metadata)) as `detail`,
+/// ([`package_metadata`](crate::semantic::completion::package_metadata)) as `detail`,
 /// and `sortText` is assigned by final position so the client preserves the tiering
 /// instead of re-sorting alphabetically. An empty `texmf` simply skips the middle
 /// tier (the pre-index behavior).
@@ -6902,7 +6902,7 @@ fn package_completion_items(
         // Attach the CTAN description as detail (when this stem has metadata and no
         // tier already set one).
         if item.detail.is_none()
-            && let Some(meta) = crate::semantic::signature::package_metadata(&item.label)
+            && let Some(meta) = crate::semantic::completion::package_metadata(&item.label)
         {
             item.detail = meta.desc.map(str::to_string);
         }

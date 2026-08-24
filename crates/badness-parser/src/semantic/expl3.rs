@@ -268,16 +268,33 @@ mod tests {
 /// greedy parser over-attached to a consumed sibling rides along in its
 /// statement.
 pub struct StatementMap {
-    boundary_after: Vec<bool>,
-    glue_before: Vec<bool>,
-    glued: Vec<bool>,
-    fallback: Vec<bool>,
+    flags: Vec<ElementFlags>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ElementFlags(u8);
+
+impl ElementFlags {
+    const BOUNDARY_AFTER: u8 = 1 << 0;
+    const GLUE_BEFORE: u8 = 1 << 1;
+    const GLUED: u8 = 1 << 2;
+    const FALLBACK: u8 = 1 << 3;
+
+    fn contains(self, flag: u8) -> bool {
+        self.0 & flag != 0
+    }
+
+    fn insert(&mut self, flag: u8) {
+        self.0 |= flag;
+    }
 }
 
 impl StatementMap {
     /// Whether a statement boundary sits in the gap after element `idx`.
     pub fn boundary_after(&self, idx: usize) -> bool {
-        self.boundary_after.get(idx).copied().unwrap_or(false)
+        self.flags
+            .get(idx)
+            .is_some_and(|flags| flags.contains(ElementFlags::BOUNDARY_AFTER))
     }
 
     /// Whether the gap *before* element `idx` must render unbreakable. Set for
@@ -290,7 +307,9 @@ impl StatementMap {
     /// continuation line starting with anything unrecognized re-segments to
     /// exactly that line and renders to itself, the fallback's fixed point.
     pub fn glue_before(&self, idx: usize) -> bool {
-        self.glue_before.get(idx).copied().unwrap_or(false)
+        self.flags
+            .get(idx)
+            .is_some_and(|flags| flags.contains(ElementFlags::GLUE_BEFORE))
     }
 
     /// Whether element `idx` belongs to a recognized statement that absorbed
@@ -305,7 +324,9 @@ impl StatementMap {
     /// (node-internal layout still breaks freely and re-reads node-internal),
     /// which is a fixed point by construction.
     pub fn is_glued(&self, idx: usize) -> bool {
-        self.glued.get(idx).copied().unwrap_or(false)
+        self.flags
+            .get(idx)
+            .is_some_and(|flags| flags.contains(ElementFlags::GLUED))
     }
 
     /// Whether element `idx` belongs to a fallback statement. A fallback line
@@ -316,7 +337,9 @@ impl StatementMap {
     /// broken lines — a shape the next pass's shorter per-line statements
     /// do not reproduce.
     pub fn is_fallback(&self, idx: usize) -> bool {
-        self.fallback.get(idx).copied().unwrap_or(false)
+        self.flags
+            .get(idx)
+            .is_some_and(|flags| flags.contains(ElementFlags::FALLBACK))
     }
 }
 
@@ -324,10 +347,7 @@ impl StatementMap {
 /// for the model; the caller guarantees the stream is inside an expl3 region
 /// (so `:`/`_` were letters and names carry their argspec suffix).
 pub fn segment_expl_statements(elements: &[SyntaxElement]) -> StatementMap {
-    let mut boundary_after = vec![false; elements.len()];
-    let mut glue_before = vec![false; elements.len()];
-    let mut glued = vec![false; elements.len()];
-    let mut fallback = vec![false; elements.len()];
+    let mut flags = vec![ElementFlags::default(); elements.len()];
     let mut i = 0;
     while i < elements.len() {
         match &elements[i] {
@@ -344,7 +364,7 @@ pub fn segment_expl_statements(elements: &[SyntaxElement]) -> StatementMap {
                 ) =>
             {
                 if followed_by_newline(elements, i) {
-                    boundary_after[i] = true;
+                    flags[i].insert(ElementFlags::BOUNDARY_AFTER);
                 }
                 i += 1;
             }
@@ -362,39 +382,20 @@ pub fn segment_expl_statements(elements: &[SyntaxElement]) -> StatementMap {
                         let end = unit.last;
                         let full = absorb_trailing_junk(elements, end);
                         if full > end {
-                            glued[i..=full].fill(true);
+                            for flags in &mut flags[i..=full] {
+                                flags.insert(ElementFlags::GLUED);
+                            }
                         }
-                        boundary_after[full] = true;
+                        flags[full].insert(ElementFlags::BOUNDARY_AFTER);
                         i = full + 1;
                     }
-                    None => {
-                        i = fallback_line(
-                            elements,
-                            i,
-                            &mut boundary_after,
-                            &mut glue_before,
-                            &mut fallback,
-                        )
-                    }
+                    None => i = fallback_line(elements, i, &mut flags),
                 }
             }
-            _ => {
-                i = fallback_line(
-                    elements,
-                    i,
-                    &mut boundary_after,
-                    &mut glue_before,
-                    &mut fallback,
-                )
-            }
+            _ => i = fallback_line(elements, i, &mut flags),
         }
     }
-    StatementMap {
-        boundary_after,
-        glue_before,
-        glued,
-        fallback,
-    }
+    StatementMap { flags }
 }
 
 /// Whether a `COMMAND`'s name token is one of the shared expl3 region-toggle
@@ -404,6 +405,13 @@ fn node_is_expl_toggle(node: &SyntaxNode) -> bool {
         .filter_map(|el| el.into_token())
         .find(|t| t.kind() == SyntaxKind::CONTROL_WORD)
         .is_some_and(|t| expl_toggle(t.text()).is_some())
+}
+
+/// Whether `node` can begin a structurally recognized expl3 statement.
+fn is_recognized_head(node: &SyntaxNode) -> bool {
+    node.kind() == SyntaxKind::COMMAND
+        && (node_is_expl_toggle(node)
+            || command_name(node).is_some_and(|name| expl3_slots(&name).is_some()))
 }
 
 /// Whether only inline whitespace separates element `idx` from the next
@@ -423,21 +431,17 @@ fn followed_by_newline(elements: &[SyntaxElement], idx: usize) -> bool {
 /// `SplitAtNewlines` rule demoted to a per-statement escape hatch. Marks the
 /// boundary after the line's last non-trivia element and returns the index to
 /// resume the outer walk from.
-fn fallback_line(
-    elements: &[SyntaxElement],
-    start: usize,
-    boundary_after: &mut [bool],
-    glue_before: &mut [bool],
-    fallback: &mut [bool],
-) -> usize {
+fn fallback_line(elements: &[SyntaxElement], start: usize, flags: &mut [ElementFlags]) -> usize {
     let mut last = start;
     let mut j = start;
     while j < elements.len() {
         match &elements[j] {
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
                 if t.kind() == SyntaxKind::NEWLINE {
-                    boundary_after[last] = true;
-                    fallback[start..=last].fill(true);
+                    flags[last].insert(ElementFlags::BOUNDARY_AFTER);
+                    for flags in &mut flags[start..=last] {
+                        flags.insert(ElementFlags::FALLBACK);
+                    }
                     return j;
                 }
                 j += 1;
@@ -447,11 +451,9 @@ fn fallback_line(
                 // continuation line (see [`StatementMap::glue_before`]).
                 if j > start
                     && let SyntaxElement::Node(n) = element
-                    && n.kind() == SyntaxKind::COMMAND
-                    && (node_is_expl_toggle(n)
-                        || command_name(n).is_some_and(|name| expl3_slots(&name).is_some()))
+                    && is_recognized_head(n)
                 {
-                    glue_before[j] = true;
+                    flags[j].insert(ElementFlags::GLUE_BEFORE);
                 }
                 last = j;
                 j += 1;
@@ -473,15 +475,19 @@ fn fallback_line(
                     && n.kind() == SyntaxKind::COMMAND
                     && node_carries_bare_line_break(n)
                 {
-                    boundary_after[last] = true;
-                    fallback[start..=last].fill(true);
+                    flags[last].insert(ElementFlags::BOUNDARY_AFTER);
+                    for flags in &mut flags[start..=last] {
+                        flags.insert(ElementFlags::FALLBACK);
+                    }
                     return j;
                 }
             }
         }
     }
-    boundary_after[last] = true;
-    fallback[start..=last].fill(true);
+    flags[last].insert(ElementFlags::BOUNDARY_AFTER);
+    for flags in &mut flags[start..=last] {
+        flags.insert(ElementFlags::FALLBACK);
+    }
     elements.len()
 }
 
@@ -555,11 +561,7 @@ fn absorb_trailing_junk(elements: &[SyntaxElement], end: usize) -> usize {
                 break;
             }
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::GROUP => break,
-            SyntaxElement::Node(n)
-                if n.kind() == SyntaxKind::COMMAND
-                    && (node_is_expl_toggle(n)
-                        || command_name(n).is_some_and(|name| expl3_slots(&name).is_some())) =>
-            {
+            SyntaxElement::Node(n) if is_recognized_head(n) => {
                 break;
             }
             _ => {
@@ -670,7 +672,7 @@ pub struct Expl3Unit {
 /// arguments too, where there are no statements to segment.
 pub fn expl3_unit(elements: &[SyntaxElement], head_idx: usize) -> Option<Expl3Unit> {
     let node = elements.get(head_idx)?.as_node()?;
-    if node.kind() != SyntaxKind::COMMAND {
+    if !is_recognized_head(node) {
         return None;
     }
     let slots = if node_is_expl_toggle(node) {

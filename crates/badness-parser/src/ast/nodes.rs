@@ -4,6 +4,7 @@
 //! syntax without assigning command meaning or consulting the signature database.
 
 use rowan::{NodeOrToken, TextRange, TextSize};
+use smol_str::{SmolStr, SmolStrBuilder};
 
 use super::{AstNode, AstToken, child, child_token, children};
 use crate::ast::tokens::ControlWord;
@@ -87,8 +88,8 @@ impl Command {
 
     /// The control-word name (leading `\` stripped), or `None` for a control
     /// symbol.
-    pub fn name(&self) -> Option<String> {
-        self.control_word().map(|cw| cw.name())
+    pub fn name(&self) -> Option<SmolStr> {
+        self.control_word().map(|cw| SmolStr::new(cw.name()))
     }
 
     /// The range of the leading `CONTROL_WORD` token (the `\foo` itself, backslash
@@ -119,14 +120,14 @@ impl Command {
     /// The literal text inside the `n`-th `GROUP` argument, braces dropped. Returns
     /// `None` when there is no `n`-th group or it holds non-token content (a nested
     /// command — not a flat literal). See [`Group::inner_text`].
-    pub fn nth_group_text(&self, n: usize) -> Option<String> {
+    pub fn nth_group_text(&self, n: usize) -> Option<SmolStr> {
         self.nth_group(n)?.inner_text()
     }
 
     /// The byte range of the content *inside* the `n`-th `GROUP` argument together
     /// with that inner text — the location-aware counterpart to
     /// [`Command::nth_group_text`]. See [`Group::inner`].
-    pub fn nth_group_inner(&self, n: usize) -> Option<(TextRange, String)> {
+    pub fn nth_group_inner(&self, n: usize) -> Option<(TextRange, SmolStr)> {
         self.nth_group(n)?.inner()
     }
 
@@ -154,8 +155,8 @@ impl Group {
     /// the group holds non-token content (a nested command — not a flat literal) or a
     /// parameter token (`\ref{#1}`, `\eqref{##1}` — a macro-parameter template whose
     /// literal value exists only at expansion time).
-    pub fn inner_text(&self) -> Option<String> {
-        let mut text = String::new();
+    pub fn inner_text(&self) -> Option<SmolStr> {
+        let mut text = SmolStrBuilder::new();
         for element in self.syntax.children_with_tokens() {
             match element {
                 NodeOrToken::Token(token) => match token.kind() {
@@ -168,7 +169,7 @@ impl Group {
                 NodeOrToken::Node(_) => return None,
             }
         }
-        Some(text)
+        Some(text.finish())
     }
 
     /// The byte range of the content *inside* this group (the span between the
@@ -182,8 +183,8 @@ impl Group {
     /// only flat tokens, so its inner bytes are contiguous and per-key sub-ranges can
     /// be sliced off the range by byte offset (used by the semantic builder to give
     /// each key in a `\cref{a,b}` its own precise span).
-    pub fn inner(&self) -> Option<(TextRange, String)> {
-        let mut text = String::new();
+    pub fn inner(&self) -> Option<(TextRange, SmolStr)> {
+        let mut text = SmolStrBuilder::new();
         let mut start: Option<TextSize> = None;
         let mut end: Option<TextSize> = None;
         // Fallback anchor for an empty group: the byte just after the opening brace.
@@ -210,7 +211,7 @@ impl Group {
             (Some(start), Some(end)) => TextRange::new(start, end),
             _ => TextRange::empty(after_l_brace),
         };
-        Some((range, text))
+        Some((range, text.finish()))
     }
 
     /// The raw inner source of this group with its outer braces dropped, but *all*
@@ -231,7 +232,7 @@ impl Group {
     /// The control-word name (leading `\` stripped) of a single `COMMAND` wrapped in
     /// this group, as in a `\newcommand{\foo}` name group. Returns `None` unless the
     /// group's only relevant child is exactly one control word.
-    pub fn command_name(&self) -> Option<String> {
+    pub fn command_name(&self) -> Option<SmolStr> {
         self.command()?.name()
     }
 }

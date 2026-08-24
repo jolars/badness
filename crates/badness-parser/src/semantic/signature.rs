@@ -420,7 +420,7 @@ pub struct SignatureDb {
     commands: HashMap<SmolStr, CommandSig>,
     environments: HashMap<SmolStr, EnvironmentSig>,
     /// Which loaded package (by file stem) a command signature came from, when
-    /// it was merged via [`merge_from_package`](Self::merge_from_package).
+    /// it was merged with an explicit origin via [`merge_from`](Self::merge_from).
     /// Absent for the document's own definitions and for every static tier
     /// (built-in/CWL DBs never carry origins). A side map rather than a
     /// `CommandSig` field so the phf-generated static tables stay untouched.
@@ -526,7 +526,7 @@ impl SignatureDb {
 
     /// The package (file stem) whose merge supplied the current signature of
     /// command `name`, if it came from a package
-    /// ([`merge_from_package`](Self::merge_from_package)) rather than the
+    /// ([`merge_from`](Self::merge_from) with `Some(origin)`) rather than the
     /// document or a static tier.
     pub fn command_origin(&self, name: &str) -> Option<&str> {
         self.command_origins.get(name).map(SmolStr::as_str)
@@ -577,15 +577,17 @@ impl SignatureDb {
     /// document's merged signature scope; the caller orders the merges so the
     /// document's own definitions are applied last and override any package.
     ///
-    /// Origins always describe the *current* entry: each merged name takes
-    /// `other`'s origin when it has one, and clears any stale one of `self`'s
-    /// otherwise — so the document overlay (scanned defs carry no origins)
-    /// automatically strips package provenance from a shadowed name.
-    pub fn merge_from(&mut self, other: &SignatureDb) {
+    /// When `origin` is `Some`, it replaces the provenance of every merged
+    /// signature. When it is `None`, each entry inherits `other`'s provenance,
+    /// clearing stale provenance when `other` has none.
+    pub fn merge_from(&mut self, other: &SignatureDb, origin: Option<&str>) {
         for (name, sig) in &other.commands {
-            match other.command_origins.get(name) {
+            match origin
+                .map(SmolStr::new)
+                .or_else(|| other.command_origins.get(name).cloned())
+            {
                 Some(origin) => {
-                    self.command_origins.insert(name.clone(), origin.clone());
+                    self.command_origins.insert(name.clone(), origin);
                 }
                 None => {
                     self.command_origins.remove(name);
@@ -594,10 +596,12 @@ impl SignatureDb {
             self.commands.insert(name.clone(), sig.clone());
         }
         for (name, sig) in &other.environments {
-            match other.environment_origins.get(name) {
+            match origin
+                .map(SmolStr::new)
+                .or_else(|| other.environment_origins.get(name).cloned())
+            {
                 Some(origin) => {
-                    self.environment_origins
-                        .insert(name.clone(), origin.clone());
+                    self.environment_origins.insert(name.clone(), origin);
                 }
                 None => {
                     self.environment_origins.remove(name);
@@ -607,7 +611,7 @@ impl SignatureDb {
             // above does: an overwrite from a non-declared source clears it, so a
             // scanned definition merged over a declared name cannot leave the
             // alias resolver believing the entry is still curated.
-            if other.is_declared_environment(name) {
+            if origin.is_none() && other.is_declared_environment(name) {
                 self.declared_environments.insert(name.clone());
             } else {
                 self.declared_environments.remove(name);
@@ -627,46 +631,12 @@ impl SignatureDb {
     /// correcting an inference, so it wins over scanned definitions and loaded
     /// packages alike.
     ///
-    /// A named entry rather than `merge_from(declared.as_db())` at each call
+    /// A named entry rather than `merge_from(declared.as_db(), None)` at each call
     /// site, so the precedence rule is stated once and the two scope builders
     /// (the CLI's `collect_package_signatures` and the salsa `scope_signatures`)
     /// cannot disagree about where in the order it goes.
     pub fn merge_declarations(&mut self, declared: &crate::declarations::ResolvedDeclarations) {
-        self.merge_from(declared.as_db());
-    }
-
-    /// Like [`merge_from`](Self::merge_from), additionally recording `origin`
-    /// (a package file stem, e.g. `mypkg`) as the provenance of every merged
-    /// name. Used when folding a loaded package's scanned definitions into a
-    /// document scope, so hover can name the defining package.
-    /// Package-over-package: the last merge wins, consistent with the
-    /// signature overwrite itself.
-    pub fn merge_from_package(&mut self, other: &SignatureDb, origin: &str) {
-        for (name, sig) in &other.commands {
-            self.command_origins
-                .insert(name.clone(), SmolStr::from(origin));
-            self.commands.insert(name.clone(), sig.clone());
-        }
-        for (name, sig) in &other.environments {
-            self.environment_origins
-                .insert(name.clone(), SmolStr::from(origin));
-            // A package's scanned definitions are never declarations, so a name
-            // it supplies loses any declared mark it had — the same
-            // current-entry rule `merge_from` follows.
-            self.declared_environments.remove(name);
-            self.environments.insert(name.clone(), sig.clone());
-        }
-        // Aliases carry no origin: they are not a signature namespace, so there is
-        // nothing for hover to attribute. A package-defined alias is inert (pairing
-        // is same-file-pure, decision #7, so no node in *this* file is one of its
-        // delimiters, and `Signatures::environment_at` only reads the map for a
-        // node that is) — carried only to keep the two merge paths symmetric.
-        for (name, target) in &other.env_begin_aliases {
-            self.env_begin_aliases.insert(name.clone(), target.clone());
-        }
-        for (name, target) in &other.env_end_aliases {
-            self.env_end_aliases.insert(name.clone(), target.clone());
-        }
+        self.merge_from(declared.as_db(), None);
     }
 }
 
@@ -841,172 +811,6 @@ static CWL: CwlDb = CwlDb;
 /// The process-wide CWL tier (see [`CwlDb`]).
 pub fn cwl() -> &'static CwlDb {
     &CWL
-}
-
-// The baked `.sty`/`.cls` **name** lists for `\usepackage`/`\documentclass`
-// completion, generated by `scripts/gen_package_names.py` from TeX Live's tlpdb
-// (see that script and `data/package_names.txt`). Names only — no arity/flags — a
-// read-only tier philosophically identical to the CWL data, never a runtime distro
-// query. Lines starting with `#` and the `---` primary/secondary separator are
-// skipped; the file order is the completion *rank* (namesake/common names first).
-const PACKAGE_NAMES_TXT: &str = include_str!("../../data/package_names.txt");
-const CLASS_NAMES_TXT: &str = include_str!("../../data/class_names.txt");
-
-static PACKAGE_NAMES: LazyLock<Vec<&'static str>> =
-    LazyLock::new(|| parse_name_list(PACKAGE_NAMES_TXT));
-static CLASS_NAMES: LazyLock<Vec<&'static str>> =
-    LazyLock::new(|| parse_name_list(CLASS_NAMES_TXT));
-
-/// Parse a baked name list into names in rank order (primary block, then the
-/// long tail), dropping the `#` header comments and the `---` separator line.
-fn parse_name_list(text: &'static str) -> Vec<&'static str> {
-    text.lines()
-        .filter(|line| !line.is_empty() && !line.starts_with('#') && *line != "---")
-        .collect()
-}
-
-/// All known `.sty` package name stems for `\usepackage` completion, in rank order
-/// (namesake/common names first). See [`PACKAGE_NAMES_TXT`].
-pub fn package_names() -> &'static [&'static str] {
-    &PACKAGE_NAMES
-}
-
-/// All known `.cls` class name stems for `\documentclass` completion, in rank
-/// order. See [`CLASS_NAMES_TXT`].
-pub fn class_names() -> &'static [&'static str] {
-    &CLASS_NAMES
-}
-
-// Static color and TikZ/PGF library name lists for `\color`/`\textcolor`/
-// `\definecolor` and `\usetikzlibrary`/`\usepgflibrary` completion. Small,
-// hand-curated, and option-agnostic (advisory completion), so a plain
-// `LazyLock` serde parse suffices — the bib_fields.json posture, not the
-// phf-baked package tiers. The owned `String`s live for the process in the
-// `LazyLock`, so each accessor's paired `Vec<&'static str>` can borrow them and
-// hand back `&'static [&'static str]` like the name lists above.
-const COLORS_JSON: &str = include_str!("../../data/colors.json");
-const TIKZ_LIBRARIES_JSON: &str = include_str!("../../data/tikz_libraries.json");
-const ARG_ENUMS_JSON: &str = include_str!("../../data/arg_enums.json");
-
-/// `data/colors.json`: the built-in color-name and color-model lists.
-#[derive(Deserialize)]
-struct ColorsData {
-    names: Vec<String>,
-    models: Vec<String>,
-}
-
-/// `data/tikz_libraries.json`: the built-in TikZ and PGF library-name lists.
-#[derive(Deserialize)]
-struct TikzLibrariesData {
-    tikz: Vec<String>,
-    pgf: Vec<String>,
-}
-
-static COLORS: LazyLock<ColorsData> = LazyLock::new(|| {
-    serde_json::from_str(COLORS_JSON).expect("bundled data/colors.json must be valid")
-});
-static TIKZ_LIBRARIES: LazyLock<TikzLibrariesData> = LazyLock::new(|| {
-    serde_json::from_str(TIKZ_LIBRARIES_JSON)
-        .expect("bundled data/tikz_libraries.json must be valid")
-});
-/// `data/arg_enums.json`: fixed value sets for enumerated command arguments,
-/// keyed by command name then *brace-group* index (the same index
-/// `completion::group_index` computes — `OPTIONAL` slots are skipped). Consumed by
-/// completion only; never read by the formatter or parser.
-static ARG_ENUMS: LazyLock<HashMap<String, HashMap<usize, Vec<String>>>> = LazyLock::new(|| {
-    serde_json::from_str(ARG_ENUMS_JSON).expect("bundled data/arg_enums.json must be valid")
-});
-
-/// Borrow a `'static` list of owned names as `&'static str` slices.
-fn as_static_slice(names: &'static [String]) -> Vec<&'static str> {
-    names.iter().map(String::as_str).collect()
-}
-
-/// Built-in color names for `\color`/`\textcolor`/… completion (color/xcolor base
-/// set + dvipsnames). See [`COLORS_JSON`].
-pub fn color_names() -> &'static [&'static str] {
-    static NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(|| as_static_slice(&COLORS.names));
-    &NAMES
-}
-
-/// Built-in color models for the `\definecolor{name}{model}{spec}` model argument.
-/// See [`COLORS_JSON`].
-pub fn color_models() -> &'static [&'static str] {
-    static MODELS: LazyLock<Vec<&'static str>> = LazyLock::new(|| as_static_slice(&COLORS.models));
-    &MODELS
-}
-
-/// Built-in TikZ library names for `\usetikzlibrary` completion. See
-/// [`TIKZ_LIBRARIES_JSON`].
-pub fn tikz_libraries() -> &'static [&'static str] {
-    static LIBS: LazyLock<Vec<&'static str>> =
-        LazyLock::new(|| as_static_slice(&TIKZ_LIBRARIES.tikz));
-    &LIBS
-}
-
-/// Built-in PGF library names for `\usepgflibrary` completion. See
-/// [`TIKZ_LIBRARIES_JSON`].
-pub fn pgf_libraries() -> &'static [&'static str] {
-    static LIBS: LazyLock<Vec<&'static str>> =
-        LazyLock::new(|| as_static_slice(&TIKZ_LIBRARIES.pgf));
-    &LIBS
-}
-
-/// The fixed value set for the `index`-th *brace* argument of command `name`, if
-/// that argument takes an enumerated value (`\pagestyle{plain}`,
-/// `\pagenumbering{roman}`, …). `index` is the brace-only group index (matching
-/// `completion::group_index`). Values are completion *suggestions*, not a closed
-/// set. See [`ARG_ENUMS_JSON`].
-pub fn arg_enum_values(name: &str, index: usize) -> Option<&'static [String]> {
-    ARG_ENUMS.get(name)?.get(&index).map(Vec::as_slice)
-}
-
-// The baked CTAN metadata tier: a one-line description and CTAN catalogue id per
-// `.sty`/`.cls` stem. `data/package_metadata.json` (generated by
-// `scripts/gen_package_names.py` from the pinned tlpdb) is the reviewable source of
-// truth; `build.rs` bakes it into a `phf::Map` of `const fn` constructor calls at
-// `$OUT_DIR/package_metadata.rs`, so the ~730 KB of data is read-only statics with
-// *zero* runtime parse — the same treatment (and reason) as the CWL tier above,
-// whose runtime JSON parse was a measurable startup delay. A *shipped, static*
-// dataset the TEXMF scan cannot cheaply derive; consumed by package hover and
-// completion detail, never a runtime distro query.
-type PackageMetaMap = phf::Map<&'static str, PackageMeta>;
-
-/// CTAN metadata for one package/class stem: an optional one-line description and
-/// the CTAN catalogue id (for a `https://ctan.org/pkg/<id>` URL). Field values are
-/// `&'static str` so the whole map is a compile-time `phf` constant.
-#[derive(Debug, Clone, Copy)]
-pub struct PackageMeta {
-    /// The package's one-line `shortdesc`, absent when tlpdb carried none.
-    pub desc: Option<&'static str>,
-    /// The CTAN catalogue id (defaults to the package name in the generator), absent
-    /// only for a malformed entry.
-    pub ctan: Option<&'static str>,
-}
-
-impl PackageMeta {
-    /// The canonical CTAN package page, `https://ctan.org/pkg/<id>`, when a catalogue
-    /// id is known.
-    pub fn ctan_url(&self) -> Option<String> {
-        self.ctan.map(|id| format!("https://ctan.org/pkg/{id}"))
-    }
-}
-
-/// The `const fn` constructor the generated `phf` map calls per entry (mirrors the
-/// CWL tier's `command`/`environment` constructors).
-const fn meta(desc: Option<&'static str>, ctan: Option<&'static str>) -> PackageMeta {
-    PackageMeta { desc, ctan }
-}
-
-// Defines `static PACKAGE_METADATA: PackageMetaMap = …;`.
-include!(concat!(env!("OUT_DIR"), "/package_metadata.rs"));
-
-/// The shipped CTAN metadata for a `\usepackage`/`\documentclass` stem, if any.
-/// Keyed by the stem the user writes (`amsmath`, `tikz`, `scrartcl`), resolving to
-/// the owning package's description + CTAN id. A zero-parse `phf` lookup (see
-/// [`PackageMetaMap`]).
-pub fn package_metadata(name: &str) -> Option<&'static PackageMeta> {
-    PACKAGE_METADATA.get(name)
 }
 
 // --- On-disk schema (serde) ---------------------------------------------------
@@ -1275,24 +1079,6 @@ mod tests {
         let db = builtin();
         assert!(db.command("section").is_some());
         assert!(db.environment("tabular").is_some());
-    }
-
-    #[test]
-    fn arg_enums_json_loads_and_resolves() {
-        // Exercises data/arg_enums.json through the real loader; a malformed file
-        // would panic here. A modeled brace argument resolves, an unmodeled index
-        // and an unknown command do not.
-        assert_eq!(
-            arg_enum_values("pagenumbering", 0),
-            Some(
-                ["arabic", "roman", "Roman", "alph", "Alph"]
-                    .map(String::from)
-                    .as_slice()
-            )
-        );
-        assert!(arg_enum_values("pagestyle", 0).is_some());
-        assert!(arg_enum_values("pagestyle", 1).is_none());
-        assert!(arg_enum_values("definitelynotacommand", 0).is_none());
     }
 
     #[test]
@@ -1942,9 +1728,9 @@ mod tests {
     }
 
     #[test]
-    fn merge_from_package_records_origin() {
+    fn merge_with_package_origin_records_origin() {
         let mut scope = SignatureDb::default();
-        scope.merge_from_package(&db_with_command("myfoo"), "mypkg");
+        scope.merge_from(&db_with_command("myfoo"), Some("mypkg"));
         assert_eq!(scope.command_origin("myfoo"), Some("mypkg"));
         assert!(scope.command("myfoo").is_some());
     }
@@ -1954,8 +1740,8 @@ mod tests {
         // The document overlay: its scanned defs carry no origins, so merging
         // them last strips the package provenance of a shadowed name.
         let mut scope = SignatureDb::default();
-        scope.merge_from_package(&db_with_command("dup"), "mypkg");
-        scope.merge_from(&db_with_command("dup"));
+        scope.merge_from(&db_with_command("dup"), Some("mypkg"));
+        scope.merge_from(&db_with_command("dup"), None);
         assert_eq!(scope.command_origin("dup"), None);
         assert!(scope.command("dup").is_some());
     }
@@ -1963,15 +1749,15 @@ mod tests {
     #[test]
     fn later_package_merge_overwrites_origin() {
         let mut scope = SignatureDb::default();
-        scope.merge_from_package(&db_with_command("shared"), "first");
-        scope.merge_from_package(&db_with_command("shared"), "second");
+        scope.merge_from(&db_with_command("shared"), Some("first"));
+        scope.merge_from(&db_with_command("shared"), Some("second"));
         assert_eq!(scope.command_origin("shared"), Some("second"));
     }
 
     #[test]
     fn insert_clears_origin() {
         let mut scope = SignatureDb::default();
-        scope.merge_from_package(&db_with_command("myfoo"), "mypkg");
+        scope.merge_from(&db_with_command("myfoo"), Some("mypkg"));
         scope.insert_command("myfoo", CommandSig::default());
         assert_eq!(scope.command_origin("myfoo"), None);
     }
@@ -1981,23 +1767,9 @@ mod tests {
         // Merging a scope that itself carries origins (a package's own scope
         // pulled a dependency) keeps them.
         let mut inner = SignatureDb::default();
-        inner.merge_from_package(&db_with_command("dep"), "deppkg");
+        inner.merge_from(&db_with_command("dep"), Some("deppkg"));
         let mut scope = SignatureDb::default();
-        scope.merge_from(&inner);
+        scope.merge_from(&inner, None);
         assert_eq!(scope.command_origin("dep"), Some("deppkg"));
-    }
-
-    #[test]
-    fn package_metadata_resolves_stem_to_ctan_facts() {
-        // The baked CTAN tier maps the typed stem to the owning package's description
-        // and catalogue id (`amsmath` -> `latex-amsmath` on CTAN).
-        let meta = package_metadata("amsmath").expect("amsmath in metadata DB");
-        assert_eq!(meta.desc, Some("AMS mathematical facilities for LaTeX"));
-        assert_eq!(
-            meta.ctan_url().as_deref(),
-            Some("https://ctan.org/pkg/latex-amsmath")
-        );
-        // A stem the tlpdb never shipped has no metadata.
-        assert!(package_metadata("definitely-not-a-real-package").is_none());
     }
 }

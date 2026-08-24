@@ -21,10 +21,11 @@ use crate::ast::command_name;
 use crate::declarations::ResolvedDeclarations;
 use crate::semantic::SemanticModel;
 use crate::semantic::builder::{is_cite_command, is_glossary_ref_command, ref_command};
-use crate::semantic::signature::{
-    SignatureDb, arg_enum_values, builtin, class_names, color_models, color_names, cwl,
-    package_names, pgf_libraries, tikz_libraries,
+use crate::semantic::completion::{
+    arg_enum_values, class_names, color_models, color_names, package_names, pgf_libraries,
+    tikz_libraries,
 };
+use crate::semantic::signature::{SignatureDb, builtin, cwl};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// What the cursor at a given offset is positioned to complete.

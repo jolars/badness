@@ -230,12 +230,12 @@ fn include_target(
     let raw = match kind {
         IncludeKind::Import | IncludeKind::SubImport => {
             match (nth_group_text(command, 0), nth_group_text(command, 1)) {
-                (Some(dir), Some(file)) => PathBuf::from(dir).join(file),
+                (Some(dir), Some(file)) => PathBuf::from(dir.as_str()).join(file.as_str()),
                 _ => return IncludeTarget::Dynamic,
             }
         }
         _ => match nth_group_text(command, 0) {
-            Some(file) => PathBuf::from(file),
+            Some(file) => PathBuf::from(file.as_str()),
             None => return IncludeTarget::Dynamic,
         },
     };
@@ -348,7 +348,7 @@ pub fn collect_bib_resource_targets(root: &SyntaxNode, base_dir: Option<&Path>) 
             },
             // `\addbibresource{refs.bib}`: a single resource (usually with `.bib`).
             "addbibresource" => match nth_group_text(&command, 0) {
-                Some(file) => targets.push(resolve_bib(PathBuf::from(file), base_dir)),
+                Some(file) => targets.push(resolve_bib(PathBuf::from(file.as_str()), base_dir)),
                 None => targets.push(BibTarget::Dynamic),
             },
             _ => {}

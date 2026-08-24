@@ -32,8 +32,8 @@ impl AstToken for ControlWord {
 impl ControlWord {
     /// The control-word name with the leading `\` stripped (`section` for
     /// `\section`).
-    pub fn name(&self) -> String {
-        self.syntax.text().trim_start_matches('\\').to_string()
+    pub fn name(&self) -> &str {
+        self.syntax.text().trim_start_matches('\\')
     }
 
     /// The byte range of the `\foo` token, backslash included.

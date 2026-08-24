@@ -34,10 +34,9 @@ use crate::ast::{command_name, nth_group, nth_group_inner};
 use crate::bib::ast as bib_ast;
 use crate::bib::syntax::{SyntaxKind as BibSyntaxKind, SyntaxNode as BibSyntaxNode};
 use crate::lsp::document_link::comma_spans;
+use crate::semantic::completion::{PackageMeta, package_metadata};
 use crate::semantic::pkgmeta::{NeedsFormatDecl, OptionDecl, ProvidesDecl, provides_kind};
-use crate::semantic::signature::{
-    ArgKind, CommandSig, EnvironmentSig, OutlineKind, PackageMeta, builtin, cwl, package_metadata,
-};
+use crate::semantic::signature::{ArgKind, CommandSig, EnvironmentSig, OutlineKind, builtin, cwl};
 use crate::semantic::{LabelContext, label_context};
 use crate::syntax::{SyntaxKind, SyntaxToken};
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};

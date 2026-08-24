@@ -1221,7 +1221,7 @@ mod tests {
                }}}"#,
         );
         let mut scope = SignatureDb::default();
-        scope.merge_from(&declared);
+        scope.merge_from(&declared, None);
         assert!(scope.environment("myenv").is_some());
         assert_eq!(scope.env_begin_alias("bea"), Some("eqnarray"));
     }

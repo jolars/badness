@@ -125,6 +125,11 @@ pub fn is_collapsible_trivia(kind: SyntaxKind) -> bool {
     matches!(kind, SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE)
 }
 
+/// Trivia ignored by syntax readers: collapsible whitespace plus comments.
+pub fn is_trivia(kind: SyntaxKind) -> bool {
+    is_collapsible_trivia(kind) || kind == SyntaxKind::COMMENT
+}
+
 /// Whether a `WORD` token is a single TeX parameter digit (`1`..=`9`) — the
 /// shape that follows `#` in a parameter reference. Reads only the token text.
 pub fn is_param_digit(t: &SyntaxToken) -> bool {

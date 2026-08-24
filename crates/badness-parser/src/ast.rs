@@ -13,6 +13,7 @@ pub use nodes::{
 pub use tokens::ControlWord;
 
 use rowan::{NodeOrToken, TextRange};
+use smol_str::SmolStr;
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -70,8 +71,8 @@ pub fn child_token<T: AstToken>(parent: &SyntaxNode) -> Option<T> {
 
 /// The control-word name of a `COMMAND` node (the leading `\` stripped), or `None`
 /// for a control symbol.
-pub fn command_name(command: &SyntaxNode) -> Option<String> {
-    child_token::<ControlWord>(command).map(|cw| cw.name())
+pub fn command_name(command: &SyntaxNode) -> Option<SmolStr> {
+    child_token::<ControlWord>(command).map(|cw| SmolStr::new(cw.name()))
 }
 
 /// The range of a `COMMAND` node's leading `CONTROL_WORD` token, or `None` for a
@@ -81,7 +82,7 @@ pub fn control_word_range(command: &SyntaxNode) -> Option<TextRange> {
 }
 
 /// The literal text inside the `n`-th `GROUP` argument of `command`, braces dropped.
-pub fn nth_group_text(command: &SyntaxNode, n: usize) -> Option<String> {
+pub fn nth_group_text(command: &SyntaxNode, n: usize) -> Option<SmolStr> {
     children::<Group>(command)
         .nth(n)
         .and_then(|g| g.inner_text())
@@ -89,7 +90,7 @@ pub fn nth_group_text(command: &SyntaxNode, n: usize) -> Option<String> {
 
 /// The byte range of the content inside the `n`-th `GROUP` argument together with
 /// that inner text.
-pub fn nth_group_inner(command: &SyntaxNode, n: usize) -> Option<(TextRange, String)> {
+pub fn nth_group_inner(command: &SyntaxNode, n: usize) -> Option<(TextRange, SmolStr)> {
     children::<Group>(command).nth(n).and_then(|g| g.inner())
 }
 
@@ -116,7 +117,7 @@ pub fn first_group_range(command: &SyntaxNode) -> TextRange {
 /// l3doc `v`-type name argument (`\begin{macro}{\foo}`) captures its content as
 /// one opaque `VERB` token instead of a `COMMAND` (issue #60); a control-word-
 /// shaped `VERB` (`\` + letters, nothing else) reads as the same name.
-pub fn group_command_name(group: &SyntaxNode) -> Option<String> {
+pub fn group_command_name(group: &SyntaxNode) -> Option<SmolStr> {
     if let Some(name) = child::<Command>(group).and_then(|c| c.name()) {
         return Some(name);
     }
@@ -129,7 +130,7 @@ pub fn group_command_name(group: &SyntaxNode) -> Option<String> {
         && name
             .chars()
             .all(|c| c.is_alphanumeric() || c == '@' || c == '_' || c == ':'))
-    .then(|| name.to_owned())
+    .then(|| SmolStr::new(name))
 }
 
 /// The raw inner source of `group` with its outer braces dropped, nested braces kept.

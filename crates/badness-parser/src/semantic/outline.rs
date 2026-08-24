@@ -142,7 +142,7 @@ fn collect_command(command: &SyntaxNode, out: &mut Vec<Raw>) {
         out.push(Raw {
             level: Some(level),
             item: OutlineItem {
-                name: section_title(command).unwrap_or(name),
+                name: section_title(command).unwrap_or_else(|| name.to_string()),
                 kind: OutlineSymbol::Section,
                 range: command.text_range(),
                 selection_range: selection,
@@ -260,9 +260,9 @@ fn attach(roots: &mut Vec<OutlineItem>, stack: &mut [(u8, OutlineItem)], item: O
 fn section_title(command: &SyntaxNode) -> Option<String> {
     let group = nth_group(command, 0)?;
     let text = nth_group_text(command, 0)
-        .unwrap_or_else(|| group_inner_source(&group))
-        .trim()
-        .to_owned();
+        .map(|text| text.to_string())
+        .unwrap_or_else(|| group_inner_source(&group));
+    let text = text.trim().to_owned();
     (!text.is_empty()).then_some(text)
 }
 
@@ -363,7 +363,7 @@ pub fn label_context(root: &SyntaxNode, offset: TextSize) -> Option<LabelContext
     }
     let section = best?;
     let title = section_title(&section)
-        .or_else(|| command_name(&section))
+        .or_else(|| command_name(&section).map(|name| name.to_string()))
         .unwrap_or_default();
     Some(LabelContext::Section { title })
 }

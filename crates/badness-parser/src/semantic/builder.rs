@@ -7,6 +7,8 @@
 //! so there is no scope walk—resolution is a flat name match, not a scope-chain
 //! resolution.
 
+use std::collections::HashSet;
+
 use smol_str::SmolStr;
 
 use rowan::{NodeOrToken, TextRange, TextSize};
@@ -65,80 +67,8 @@ pub fn build_with_declarations(
                 .insert(SmolStr::new(name.as_str()));
         }
 
-        if name == "label" {
-            // A nested-macro key (`\label{\foo}`) or a parameter-template key
-            // (`\label{#1}` in a definition body) yields `None`; skip it,
-            // conservative like an unresolvable include target. A label key is the
-            // whole inner content (not comma-split): `split = false`.
-            if let Some((inner_range, inner)) = nth_group_inner(&command, 0) {
-                for (key, key_range) in key_spans(&inner, inner_range, false) {
-                    model.labels.push(LabelDef {
-                        name: SmolStr::from(key),
-                        range: first_group_range(&command),
-                        key_range,
-                        referenced: false,
-                    });
-                }
-            }
-        } else if let Some(kind) = ref_command(semantic_name)
-            && let Some((inner_range, inner)) = nth_group_inner(&command, 0)
-        {
-            for (key, key_range) in key_spans(&inner, inner_range, kind.is_key_list()) {
-                model.refs.push(LabelRef {
-                    name: SmolStr::from(key),
-                    command: kind,
-                    range: command.text_range(),
-                    key_range,
-                    resolved: false,
-                });
-            }
-        } else if let Some(kind) = glossary_definer(&name) {
-            // Like `\label`: the key is the whole first group (never comma-split),
-            // and a nested-macro key (`\newacronym{\foo}…`) is skipped. The
-            // optional `[opts]` of `\newacronym` is an OPTIONAL node, not a GROUP,
-            // so it never shifts the key's group index.
-            if let Some((inner_range, inner)) = nth_group_inner(&command, 0) {
-                for (key, key_range) in key_spans(&inner, inner_range, false) {
-                    model.glossary_defs.push(GlossaryDef {
-                        key: SmolStr::from(key),
-                        kind,
-                        range: first_group_range(&command),
-                        key_range,
-                    });
-                }
-            }
-        } else if let Some(kind) = color_definer(&name) {
-            // The defined color name is the first `{…}` group for all three
-            // definers (`\definecolor{name}…`, `\colorlet{name}{base}`), never
-            // comma-split, and a nested-macro name is skipped like `\label{\foo}`.
-            if let Some((inner_range, inner)) = nth_group_inner(&command, 0) {
-                for (key, key_range) in key_spans(&inner, inner_range, false) {
-                    model.color_defs.push(ColorDef {
-                        name: SmolStr::from(key),
-                        kind,
-                        range: first_group_range(&command),
-                        key_range,
-                    });
-                }
-            }
-        } else if is_cite_command(semantic_name)
-            && let Some((inner_range, inner)) = nth_group_inner(&command, 0)
-        {
-            // `\nocite{*}` is a wildcard pulling in every entry — recorded as a flag,
-            // not a key, so it suppresses `undefined-citation` rather than being one.
-            if semantic_name == "nocite" && inner.trim() == "*" {
-                model.nocite_all = true;
-            } else {
-                // Cite commands always take a comma-separated key list.
-                for (key, key_range) in key_spans(&inner, inner_range, true) {
-                    model.citations.push(CitationRef {
-                        name: SmolStr::from(key),
-                        command: SmolStr::from(name.as_str()),
-                        range: command.text_range(),
-                        key_range,
-                    });
-                }
-            }
+        if collect_key_command(&mut model, &command, &name, semantic_name) {
+            continue;
         } else if pkgmeta::provides_kind(&name).is_some() {
             // Package/class self-identification — first `\Provides…` wins (a file
             // identifies itself once).
@@ -162,6 +92,95 @@ pub fn build_with_declarations(
 
     resolve(&mut model);
     model
+}
+
+#[derive(Clone, Copy)]
+enum KeyCommand {
+    Label,
+    Reference(RefCommand),
+    Glossary(GlossaryDefKind),
+    Color(ColorDefKind),
+    Citation,
+}
+
+fn key_command(name: &str, semantic_name: &str) -> Option<KeyCommand> {
+    if name == "label" {
+        Some(KeyCommand::Label)
+    } else if let Some(kind) = ref_command(semantic_name) {
+        Some(KeyCommand::Reference(kind))
+    } else if let Some(kind) = glossary_definer(name) {
+        Some(KeyCommand::Glossary(kind))
+    } else if let Some(kind) = color_definer(name) {
+        Some(KeyCommand::Color(kind))
+    } else if is_cite_command(semantic_name) {
+        Some(KeyCommand::Citation)
+    } else {
+        None
+    }
+}
+
+/// Collect one of the key-bearing command families through a shared extraction
+/// path. A recognized family returns `true` even when its key is not a flat
+/// literal, preventing unrelated command classifiers from seeing it.
+fn collect_key_command(
+    model: &mut SemanticModel,
+    command: &SyntaxNode,
+    name: &str,
+    semantic_name: &str,
+) -> bool {
+    let Some(kind) = key_command(name, semantic_name) else {
+        return false;
+    };
+    let Some((inner_range, inner)) = nth_group_inner(command, 0) else {
+        return true;
+    };
+    if matches!(kind, KeyCommand::Citation) && semantic_name == "nocite" && inner.trim() == "*" {
+        model.nocite_all = true;
+        return true;
+    }
+
+    let split = match kind {
+        KeyCommand::Reference(kind) => kind.is_key_list(),
+        KeyCommand::Citation => true,
+        _ => false,
+    };
+    for (key, key_range) in key_spans(&inner, inner_range, split) {
+        let key = SmolStr::new(key);
+        match kind {
+            KeyCommand::Label => model.labels.push(LabelDef {
+                name: key,
+                range: first_group_range(command),
+                key_range,
+                referenced: false,
+            }),
+            KeyCommand::Reference(command_kind) => model.refs.push(LabelRef {
+                name: key,
+                command: command_kind,
+                range: command.text_range(),
+                key_range,
+                resolved: false,
+            }),
+            KeyCommand::Glossary(kind) => model.glossary_defs.push(GlossaryDef {
+                key,
+                kind,
+                range: first_group_range(command),
+                key_range,
+            }),
+            KeyCommand::Color(kind) => model.color_defs.push(ColorDef {
+                name: key,
+                kind,
+                range: first_group_range(command),
+                key_range,
+            }),
+            KeyCommand::Citation => model.citations.push(CitationRef {
+                name: key,
+                command: SmolStr::new(name),
+                range: command.text_range(),
+                key_range,
+            }),
+        }
+    }
+    true
 }
 
 /// The final top-level `label` entry in an environment options bracket, when its
@@ -533,19 +552,23 @@ fn key_range(base: TextSize, lo: usize, hi: usize) -> TextRange {
     )
 }
 
-/// Flat name-match resolution: mark each ref `resolved` when a same-named label
-/// exists, and each such label `referenced`.
+/// Flat name-match resolution, indexed by name so duplicate definitions and
+/// references remain linear in their combined count.
 fn resolve(model: &mut SemanticModel) {
-    for ref_idx in 0..model.refs.len() {
-        let name = model.refs[ref_idx].name.clone();
-        let mut hit = false;
-        for label in &mut model.labels {
-            if label.name == name {
-                label.referenced = true;
-                hit = true;
-            }
+    let label_names: HashSet<_> = model
+        .labels
+        .iter()
+        .map(|label| label.name.clone())
+        .collect();
+    let mut referenced_names = HashSet::new();
+    for reference in &mut model.refs {
+        reference.resolved = label_names.contains(&reference.name);
+        if reference.resolved {
+            referenced_names.insert(reference.name.clone());
         }
-        model.refs[ref_idx].resolved = hit;
+    }
+    for label in &mut model.labels {
+        label.referenced = referenced_names.contains(&label.name);
     }
 }
 

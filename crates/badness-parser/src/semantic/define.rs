@@ -34,7 +34,7 @@ use crate::semantic::signature::{
     ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb, builtin,
 };
 use crate::semantic::xparse;
-use crate::syntax::{SyntaxKind, SyntaxNode, is_collapsible_trivia};
+use crate::syntax::{SyntaxKind, SyntaxNode, is_collapsible_trivia, is_trivia};
 use rowan::{NodeOrToken, TextRange, TextSize};
 use smol_str::SmolStr;
 
@@ -843,7 +843,7 @@ fn scan_xparse_command(
 ///   `COMMAND` and hangs the `[n]`/`{body}` (or xparse spec) off *it*, so the host is
 ///   that sibling and signature groups start at index `0`.
 struct CommandDef {
-    name: String,
+    name: SmolStr,
     host: SyntaxNode,
     first_arg_group: usize,
 }
@@ -893,15 +893,6 @@ fn adjacent_sibling_command(command: &SyntaxNode) -> Option<SyntaxNode> {
         }
     }
     None
-}
-
-/// Whether `kind` is trivia (whitespace/newline/comment). Mirrors the parser's
-/// private `Parser::is_trivia`; the trivia set is fixed by AGENTS.md decision #9.
-fn is_trivia(kind: SyntaxKind) -> bool {
-    matches!(
-        kind,
-        SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE | SyntaxKind::COMMENT
-    )
 }
 
 /// `\NewDocumentEnvironment{name}{spec}{begin}{end}` → an [`EnvironmentSig`] with
@@ -1746,7 +1737,7 @@ mod tests {
     #[test]
     fn merge_from_carries_env_aliases() {
         let mut target = SignatureDb::default();
-        target.merge_from(&db_of(EQNARRAY_PAIR));
+        target.merge_from(&db_of(EQNARRAY_PAIR), None);
         assert_eq!(target.env_begin_alias("bea"), Some("eqnarray"));
         assert_eq!(target.env_end_alias("eea"), Some("eqnarray"));
     }

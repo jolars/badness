@@ -272,10 +272,9 @@ fn is_version_like(field: &str) -> bool {
 }
 
 /// Trim a group's text and drop it if empty.
-fn nonempty(text: Option<String>) -> Option<SmolStr> {
-    text.map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-        .map(SmolStr::from)
+fn nonempty(text: Option<impl AsRef<str>>) -> Option<SmolStr> {
+    text.map(|text| SmolStr::new(text.as_ref().trim()))
+        .filter(|text| !text.is_empty())
 }
 
 #[cfg(test)]

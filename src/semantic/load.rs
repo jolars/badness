@@ -53,7 +53,7 @@ pub fn collect_package_signatures(
     let mut visited: HashSet<PathBuf> = HashSet::new();
     collect_loaded(root, base_dir, src, declared, &mut visited, &mut merged);
     // The document's own definitions are applied last, so they win over packages.
-    merged.merge_from(&scan_definitions(root));
+    merged.merge_from(&scan_definitions(root), None);
     // Except the project's declarations, which win over everything: a
     // declaration is the user explicitly correcting an inference.
     merged.merge_declarations(declared);
@@ -84,9 +84,9 @@ fn collect_loaded(
             // (`mypkg.sty` absent, `mypkg.dtx` loaded) still reads `mypkg`.
             match path.file_stem().and_then(|s| s.to_str()) {
                 Some(origin) => {
-                    merged.merge_from_package(&scan_definitions(&pkg_root), origin);
+                    merged.merge_from(&scan_definitions(&pkg_root), Some(origin));
                 }
-                None => merged.merge_from(&scan_definitions(&pkg_root)),
+                None => merged.merge_from(&scan_definitions(&pkg_root), None),
             }
         }
     }

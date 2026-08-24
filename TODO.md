@@ -238,27 +238,6 @@ scope limits recorded at implementation time, not regressions.
   check but not why open-prefix recall is worth those false positives. Either
   write that down or close the set.
 
-- [ ] **Semantic-layer hygiene (audit follow-up).**
-
-  - `ast::command_name` (and `ControlWord::name`, `nth_group_text`) return
-    `SmolStr`/`&str` instead of `String` — called per command node in every
-    tree walk and in expl3's segmentation hot loops; the cheapest real
-    allocation win the audit found.
-
-  - Split the completion word-list tiers (package/class names, colors, tikz
-    libraries, CTAN metadata, `arg_enums`) out of `signature.rs` into their
-    own module — they have nothing to do with signatures, and the file drops
-    from ~1,970 to ~1,100 lines.
-
-  - Collapse `merge_from`/`merge_from_package` into one origin-parametrized
-    helper; table-ize `builder::build`'s four identical key-family arms (the
-    layer's only 100+-line function); extract expl3's `is_recognized_head`
-    predicate (spelled three ways today); consider per-index flags for
-    `StatementMap`'s four parallel `Vec<bool>` so illegal states are
-    unrepresentable; hash-map `builder::resolve` (currently O(refs ×
-    labels)); move `define.rs`'s private `is_trivia` mirror into `syntax`
-    beside `is_collapsible_trivia`.
-
 ## Language server
 
 ### Feature status vs LaTeX Workshop

@@ -597,15 +597,15 @@ pub fn scope_signatures(db: &dyn IncrementalDb, file: SourceFile) -> SignatureDb
             // name the defining package (mirrors `semantic::load`).
             match loaded.file_stem().and_then(|s| s.to_str()) {
                 Some(origin) => {
-                    merged.merge_from_package(document_signatures(db, member), origin);
+                    merged.merge_from(document_signatures(db, member), Some(origin));
                 }
-                None => merged.merge_from(document_signatures(db, member)),
+                None => merged.merge_from(document_signatures(db, member), None),
             }
         }
     }
     // The document's own definitions are applied last, so they win over packages
     // (and clear any package origin for a shadowed name).
-    merged.merge_from(document_signatures(db, file));
+    merged.merge_from(document_signatures(db, file), None);
     // Except the project's declarations, the top tier: a declaration is the user
     // explicitly correcting an inference. Same order as the disk-backed
     // `collect_package_signatures`, so the two scope builders cannot disagree.

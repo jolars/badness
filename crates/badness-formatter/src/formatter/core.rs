@@ -330,7 +330,7 @@ fn format_root(
     // which case this is exactly the old document-only scan. Held by value for the
     // whole lowering.
     let mut user = external.clone();
-    user.merge_from(&scan_definitions(root));
+    user.merge_from(&scan_definitions(root), None);
     // The expl3 source regions, recomputed read-only from the same toggle set the
     // lexer uses ([`expl_toggle`]). Inside them source whitespace is catcode-9
     // (ignored) and `~` is catcode-10 (a literal space), so the formatter fully owns

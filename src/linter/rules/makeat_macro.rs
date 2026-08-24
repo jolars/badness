@@ -108,7 +108,7 @@ impl Rule for MakeatMacro {
             // xypic's `@` DSL (`\ar@{->}`, `\xymatrix@C=3pc`) splits the same
             // way as a stray at-letter macro; the `@` there is intentional, not
             // a forgotten `\makeatletter`. Skip the curated control words.
-            if XYPIC_AT_COMMANDS.contains(&control_word.name().as_str()) {
+            if XYPIC_AT_COMMANDS.contains(&control_word.name()) {
                 return;
             }
             let Some(next) = control_word.syntax().next_token() else {

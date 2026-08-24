@@ -4,15 +4,19 @@ A LaTeX formatter, linter, and language server on a lossless rowan CST,
 following **rust-analyzer's** architecture. See `AGENTS.md` for load-bearing
 design decisions and invariants.
 
-Single-crate package (not a workspace). Parser and formatter are **intentionally interleaved**: the formatter is the primary tool for stress-testing the parser.
+A cargo workspace: the `badness` root crate (CLI, linter, language server,
+project/configuration) plus `badness-parser`, `badness-formatter`, and
+`badness-wasm`. Parser and formatter are **intentionally interleaved**: the
+formatter is the primary tool for stress-testing the parser.
 
 Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [ ] **Keep carving `grammar.rs`** (3,959 lines after the first cut, which
-  took `grammar/facts.rs` and `grammar/trivia.rs`; `grammar/prescan.rs` came
-  out with it). Two candidates remain, each its own commit:
+- [ ] **Keep carving `grammar.rs`** (4,331 lines; the first cut took
+  `grammar/facts.rs`, `grammar/trivia.rs`, and `grammar/prescan.rs`, and
+  `grammar/expl3.rs` came out later). Two candidates remain, each its own
+  commit:
 
   - The **math / `\left…\right` sublanguage** (`dollar_math` through
     `stray_right`, plus `split_math_word`), ~460 lines and highly
@@ -21,9 +25,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
   - The **gate machinery** (`WalkKey`, `GateBatch`, `VerdictSink`, the policy
     vocabulary, `trait GatePolicy`, and the nine gate policies), ~805 lines.
-    Postdates the original audit note. It drags the `scan_work` linearity
-    tests along, so `AGENTS.md` ("pinned linear by the tests in
-    `grammar.rs`") needs a matching one-word update.
+    It drags the `scan_work` linearity tests along.
 
   The rest of the hygiene item is done: the shadow counters, the DOC_COMMENT
   precede dedup (`precede`/`extend_back`/`doc_comment_bind`), the `PreScan`
@@ -40,10 +42,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   and the macrocode-frame rules twice; call sites restate 25-line helper
   docs. Cut each fact to one canonical location (the helper's doc) with
   one-line call-site pointers — roughly a third of the comment mass, zero
-  information loss. The per-gate re-explanations of the shared scan skeleton
-  die with the closer-map work. `catcode_signal` (under *Semantic layer &
-  signatures*) is the cautionary tale for why this matters: the real hazard
-  at this density is a comment asserting something the code stopped doing.
+  information loss. `catcode_signal` (`semantic/define.rs`) is the cautionary
+  tale for why this matters: the real hazard at this density is a comment
+  asserting something the code stopped doing.
 
 ## Formatter
 
@@ -54,15 +55,15 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 - [ ] **Widen mandatory-keyval admission (follow-up to the `{…}` segmentation).**
   `ContentKind::Keyval` on a *mandatory* group is now consumed
-  (`lower_segmented_group`; `keyval_group_splits_entries`), so the setters
+  (`lower_segmented_group`; fixture `keyval_group_splits_entries`), so the setters
   `\pgfkeys`/`\tikzset`/`\lstset`/… take one entry per line instead of a prose
   reflow that wrapped mid-key. Two halves were deliberately left out and neither
   is a bug:
 
   - The bulk CWL tier still drops a `%keyvals` mark on a `{…}`
-    (`gen_cwl_signatures.py`, `_parse_arg_shape`). The reason it gave — "nothing
-    consumes the flag there" — has expired, but the other half has not: the mark
-    is mechanical, and a wrong `Keyval` on a mandatory group changes typeset
+    (`scripts/gen_cwl_signatures.py`, `_parse_arg_shape`). The reason it gave —
+    "nothing consumes the flag there" — has expired, but the other half has not: the
+    mark is mechanical, and a wrong `Keyval` on a mandatory group changes typeset
     output where the same mistake on a bracket is contained. Lifting the scoping
     means first *measuring* which names would gain it (needs the pinned CWL
     source) and putting the textual ones through `task typeset:check`.
@@ -72,6 +73,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     not have — the grid router reads the colspec group, and a verbatim-body
     environment's `\begin` line may never break at all.
 
+  This entry also sets the reach of the `blank-line-in-keyval` rule, which reads
+  only the hand-curated tier: any name admitted here is a name that rule starts
+  protecting.
+
 - [ ] **Formatter-owned trailing comma (parked; the last piece of issue #47).**
   A `[…]` — and, since the segmentation above, a proven-keyval `{…}` — is a
   width-driven group over its top-level entries, and a
@@ -80,8 +85,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   item is the Black-style trailing comma: for a proven-keyval argument, add the
   `,` when expanded and drop it when collapsed — safe as *TeX*, because
   keyval/xkeyval/pgfkeys/l3keys and `\ProcessOptions` clists all ignore empty
-  entries. **Blocked on a tenet, not on data:** inserting or deleting a `,` is a
-  non-trivia token edit, which the whitespace-only invariant forbids and
+  entries. **Blocked on an invariant, not on data:** inserting or deleting a `,`
+  is a non-trivia token edit, which the whitespace-only invariant forbids and
   `assert_format_invariants` actively catches. Landing it means amending that
   invariant and its oracle to carve out this one insertion — a decision worth
   taking on its own, not as a ride-along. The count-based *expansion* half was
@@ -94,8 +99,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 - [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
   a prose arg onto its command line when a source break separates them. (The
   block half of the signature widening landed as `CommandSig::block`; the
-  gluing clause is now a proposal to narrow the command-only-line rule's
-  *residue*, see the Tier-2 entry above.)
+  gluing clause is now a proposal to narrow the *residue* of the
+  command-only-line rule — `docs/src/development/architecture.md` §
+  *Trivia-invariant layout*.)
 
 - [ ] **Key-value continuation indent in an expl3 fallback statement (open scope
   call).** A key whose value continues on the next line should indent the value
@@ -125,10 +131,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   token is `=` hangs its successor +2", which reads only non-trivia token
   content and is therefore trivia-invariant and permissible. **The open call is
   whether to have it at all**: the l3styleguide is silent on key-value dialects,
-  so this is badness inventing layout for a dialect it cannot name — the same
-  objection recorded against the 2e-brace-tightening entry below. Upstream's
+  so this is badness inventing layout for a dialect it cannot name. Upstream's
   65/87 gives the rule an empirical basis; the tenet-#1 pressure is that a
-  `Keyval` content kind (see the parked keyval entry above) would be the
+  `Keyval` content kind (see the trailing-comma entry above) would be the
   principled carrier, not a token-shape heuristic in `lower_expl_code`.
 
   Surfaced while fixing the sibling-coupling and all-or-nothing conditional bugs
@@ -141,13 +146,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   coordinate arithmetic) and `data/signatures.json`'s `statementBody` now curate
   the same family twice — and the flag now has *three* readers (formatter
   routing, the parser's statement mode, and the linter's duplicate set), which
-  strengthens the case for the fold. Merging them needs a `SignatureDb` on `RuleContext`,
-  which carries none today — the same plumbing the user-declared ref/cite
-  families entry below wants, and which the Declarations plan (Semantic layer
-  § *Declarations*) has to build anyway. Until then the two carry cross-references and must
-  be edited in step. Note the sets are not quite identical by design: the flag
-  also names `scope` and `pgfonlayer`, which the linter reaches through the
-  enclosing `tikzpicture` on its ancestor walk.
+  strengthens the case for the fold. Merging them needs a `SignatureDb` on
+  `RuleContext`, which carries none today — the same plumbing the user-declared
+  ref/cite families entry below wants. Until then the two carry cross-references
+  and must be edited in step. Note the sets are not quite identical by design:
+  the flag also names `scope` and `pgfonlayer`, which the linter reaches through
+  the enclosing `tikzpicture` on its ancestor walk.
 
 ## Linter
 
@@ -158,61 +162,28 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   label referenced only through a custom wrapper (`\eqrefs{thm:eq1,thm:eq4}`
   expanding to `\eqref` calls): the semantic builder's ref-family name set
   (`semantic::builder::ref_command`) is fixed, and seeing through the wrapper
-  would take macro expansion (out of scope, decision #1). A `badness.toml`
-  knob declaring extra ref-family (and cite-family) command names — the
-  analog of the parked user-declared-verbatim-envs knob above — would let a
-  project name its wrappers; the declared names feed the builder's name sets
-  (semantic layer only, never argument attachment, so decision #8's
-  text-purity is untouched). Needs plumbing: config does not currently flow
-  into `SemanticModel::build`, and the shared name sets also serve completion
-  and the LSP, which should honor the same declarations. **Land it as
-  `[commands.eqrefs] like = "eqref"`** on the Declarations mechanism (Semantic
-  layer § *Declarations*) — the deferred `[commands.*]` half of it — rather than
-  as a bespoke list-of-names knob.
+  would take macro expansion, which is out of scope — badness is not a TeX
+  interpreter. A `badness.toml` knob declaring extra ref-family (and
+  cite-family) command names — the analog of the shipped
+  `[environments.<name>] like = …` declaration — would let a project name its
+  wrappers; the declared names feed the builder's name sets (semantic layer
+  only, never argument attachment, so parser text-purity is untouched). Needs
+  plumbing: config does not currently flow into `SemanticModel::build`, and the
+  shared name sets also serve completion and the LSP, which should honor the
+  same declarations. **Land it as `[commands.eqrefs] like = "eqref"`** on the
+  declarations mechanism (`docs/src/development/architecture.md` §
+  *Declarations*) rather than as a bespoke list-of-names knob. Note the
+  architecture documentation already describes `[commands.<name>]` as if it
+  exists; only `[environments.<name>]` is implemented, and closing that gap is
+  this item.
 
-- [x] **`codeexample` unknown to the signature DB.** pgfmanual's `codeexample`
-  env holds verbatim-like example source that is *also* executed. Because it was
-  not in `data/signatures.json` (which lists `verbatim`, `lstlisting`, `minted`,
-  `Sinput`, …), the prose rules fired inside it: on the pgf corpus this drove
-  ~1900 `straight-quotes`, ~370 `ellipsis`, and ~100 `dash-length` findings, and
-  — worse — the *default* (`Safe`) `ellipsis` fix rewrote `...`→`\dots` inside
-  executed code (`\immediate\write\w{...}` → `{\dots}`). Resolved by curating
-  `codeexample` into the built-in DB as a `verbatimBody` env, following the
-  precedent of the equally package-specific Sweave (`Sinput`/`Soutput`/`Scode`)
-  and `Code`/`CodeInput`/`CodeOutput` entries; its body now lexes to one opaque
-  `VERBATIM_BODY` token, so the prose rules never see it.
-
-  - [ ] *Follow-up (open):* a project-config knob for user-declared verbatim envs
-    would generalize this to package-specific envs badness cannot name. Config
-    does not currently flow into the signature DB or the lexer's `VerbCtx`, so
-    this is a separable feature, not a data edit. **Subsumed by** the Declarations
-    plan (Semantic layer § *Declarations*): `[environments.x] like = "lstlisting"`
-    is exactly this knob, and falls out of steps 3–5 rather than needing its own.
-
-  - [ ] *Out of scope (catcode limitation):* the sibling `|…|` active-char
-    shortverb (`\catcode`\|=13` + `\gdef|{…\verb|…}`) drives the same class of
-    FP (`straight-quotes`, `unclosed-math-delimiter`, `sectioning-level-jump` on
-    `|\part|`, `missing-nonbreaking-space` on `\ref` inside `|…|`) but is a
-    genuine catcode limitation, not statically resolvable.
-
-The remaining linter findings from the cam-notes sweep are recorded below as open
-follow-ups (each with a minimal reproducer); none is fixed yet.
-
-- [x] **`dash-length` corrupts pgf/TikZ coordinate arithmetic under
-  `--unsafe-fixes`.** The `in_math` guard covered only `$…$`, not a pgfplots
-  expression in `{…}`: `printf '\\addplot3 {(y^2-1)^2};\n' | badness lint --fix
-  --unsafe-fixes` yielded `{(y^2--1)^2}`, a meaning-bearing minus turned into an
-  en-dash. Resolved by two shared pgf gates: `in_pgf_picture` (a `tikzpicture`/
-  `pgfpicture`/pgfplots-`axis`-family ancestor, so coordinate arithmetic like
-  `(2-1,3)` is skipped) and `in_pgfmath_argument` (the `\addplot`/`\pgfmath…`
-  expression argument, attached or detached past the numeric `\addplot3` variant),
-  where a `-` between numbers is a pgfmath subtraction, not a typeset range.
-
-  - [ ] *Follow-up (open):* prose FPs on index-pair/term names (`0-1 law`,
-    `1-2 plane`, `1-1 function` — 22 of 25 findings) where the hyphen is
-    intentional; these are `Unsafe`-gated so `--fix` withholds them, so they are
-    noise rather than corruption. Distinguishing `0-1 law` from `pages 5-10`
-    statically is the open part.
+- [ ] **Prose `dash-length` FPs on index-pair and term names.** `0-1 law`,
+  `1-2 plane`, `1-1 function` (22 of 25 findings in the cam-notes sweep) use an
+  intentional hyphen. These are `Unsafe`-gated, so `--fix` withholds them and
+  they are noise rather than corruption. Distinguishing `0-1 law` from
+  `pages 5-10` statically is the open part. (The *corrupting* half of this —
+  pgf/TikZ coordinate arithmetic under `--unsafe-fixes` — is fixed by the shared
+  `in_pgf_picture` and `in_pgfmath_argument` gates.)
 
 - [ ] **`makeat-macro` residual on plain-`.tex` package internals.** Recognizing
   `*.code.tex` as package flavor fixed 98.9% of the pgf `makeat-macro` FPs, but
@@ -222,6 +193,14 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   There is no clean static signal distinguishing these from a document that
   genuinely forgot `\makeatletter`, so this is a known limitation rather than a
   fixable gap; noted for completeness.
+
+- [ ] **`|…|` active-char shortverb is out of scope (catcode limitation).** The
+  sibling of the `codeexample` fix — `\catcode`\|=13` plus `\gdef|{…\verb|…}` —
+  drives the same class of false positive (`straight-quotes`,
+  `unclosed-math-delimiter`, `sectioning-level-jump` on `|\part|`,
+  `missing-nonbreaking-space` on `\ref` inside `|…|`), but it is a genuine
+  catcode limitation, not statically resolvable. Recorded so it is not
+  re-proposed.
 
 ### Rules
 
@@ -236,27 +215,6 @@ follow-ups (each with a minimal reproducer); none is fixed yet.
   or restrict a `Safe` fix to a column-one `%` whose horizontal space is the
   only malformed part. A related, separate candidate is an indented `%<...>`
   marker: docstrip recognizes a guard only at column zero.
-
-- [x] **Blank line inside a `ContentKind::Keyval` argument.** Shipped as
-  `blank-line-in-keyval` (`Error`, node-shape, `Safe` fix). A blank line is a
-  `\par` and a keyval processor walks its entries with non-`\long` macros, so
-  the call aborts -- and TeX names the *processor*, not the command the author
-  wrote (`\kv@processor@default`, `\pgfkeys@addpath`, `\enit@setlist@i`,
-  `\caption@setup@options@`; `\geometry` fails differently again), which is
-  what makes the finding worth more than the compiler's message.
-
-  Three scope limits, each measured rather than assumed: a blank line *nested*
-  in a value's brace group compiles clean and is not flagged; an unclosed `{` is
-  left to the parse error it already draws; and a `Keyval` *optional* cannot
-  reach the shape at all, since the parser's bracket gate refuses across a
-  paragraph break. Swept over all four gate corpora (6205 files): **zero
-  findings in latex2e, latex3, and pgf**, and 780 in latexindent's own
-  `modifyLineBreaks` output fixtures -- true positives, confirmed by compiling
-  the shape.
-
-  Still open, and deliberately so: the rule reads only the hand-curated tier, so
-  its reach grows exactly with the mandatory-keyval admission entry below. Any
-  name that entry adds is a name this rule starts protecting.
 
 - [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
   LaTeX Workshop adds no lint rules of its own (it only shells out to
@@ -297,11 +255,9 @@ scope limits recorded at implementation time, not regressions.
 
 ## Semantic layer & signatures
 
-- [ ] How much of `\newcommand`/`xparse` to model for the signature DB. *(open
-  decision)*
-
 - [ ] **Make `EnvironmentSig::reflow`/`block` computed, not stored.** Both
-  are derivations of other fields, and mutation sites must hand-sync them —
+  are derivations of other fields — the generated-code const fn already derives
+  them — yet they remain stored, so mutation sites must hand-sync:
   `define.rs` writes `sig.reflow = false` manually after setting
   `verbatim_body` at two sites, and a forgotten sync is silent. Computed
   methods remove the field, the hand-sync, and the derivation duplicated
@@ -310,8 +266,9 @@ scope limits recorded at implementation time, not regressions.
 - [ ] **`is_cite_command` accepts any `\cite*`-prefixed name**
   (`semantic/builder.rs`): `\citebox` or `\citecolor` gets its argument
   recorded as citation keys — an open-ended false-positive surface, unlike
-  the neighboring closed-table predicates, and nothing documents the choice.
-  Either write down why open-prefix recall is intended or close the set.
+  the neighboring closed-table predicates. The doc comment describes the prefix
+  check but not why open-prefix recall is worth those false positives. Either
+  write that down or close the set.
 
 - [ ] **Semantic-layer hygiene (audit follow-up).**
 
@@ -323,7 +280,7 @@ scope limits recorded at implementation time, not regressions.
   - Split the completion word-list tiers (package/class names, colors, tikz
     libraries, CTAN metadata, `arg_enums`) out of `signature.rs` into their
     own module — they have nothing to do with signatures, and the file drops
-    to ~1,100 lines.
+    from ~1,970 to ~1,100 lines.
 
   - Collapse `merge_from`/`merge_from_package` into one origin-parametrized
     helper; table-ize `builder::build`'s four identical key-family arms (the
@@ -344,29 +301,16 @@ regex-driven extension code, and its formatting and linting shell out
 (latexindent/tex-fmt, ChkTeX/lacheck), so badness already leads on language
 smarts. Coexistence is the deliberate story (docs `guide/editor-setup.md`):
 LaTeX Workshop keeps build, PDF preview, and SyncTeX. The features it has that
-badness lacks and wants are filed in the sections below, tagged *(LW)*:
-citation filter-by-title, command argument placeholders, keyval `label={…}`
-scanning, graphics hover preview, package-doc hover links, a texmf bib
-fallback, and surround/promote-demote code actions. Math-preview-on-hover is
-the one big item needing a design decision (see `### Hover` and Open
-decisions). Not adopted: `@a`-style abbreviation snippets and two-letter
-environment snippets (editor-snippet territory), graphics thumbnails inside
-completion items (VS Code-only), and sub/superscript history completion
-(niche).
+badness lacks and wants are filed in the sections below, tagged *(LW)*: command
+argument placeholders, keyval `label={…}` scanning, graphics hover preview, a
+texmf bib fallback, and surround/promote-demote code actions.
+Math-preview-on-hover is the one big item needing a design decision (see
+`### Hover` and Open decisions). Not adopted: `@a`-style abbreviation snippets
+and two-letter environment snippets (editor-snippet territory), graphics
+thumbnails inside completion items (VS Code-only), and sub/superscript history
+completion (niche).
 
 ### Configuration & sync
-
-- [x] config over LSP—the LSP now discovers `badness.toml` per document
-  (`GlobalState::resolve_settings`, cached by anchor dir, cleared on
-  `didChangeConfiguration`). A discovered config wins outright
-  (file-wins); editor settings are the fallback. Both `[format]` (`line-width`,
-  `indent-width`, `wrap`) and `[lint]` (`select`/`ignore`, applied via
-  `RuleSelection` in the analyze/diagnostic/code-action paths) are honored. Two
-  follow-ups remain:
-
-  - Deliberately *not* done: plumbing `wrap` (or other knobs) through
-    `EditorSettings` itself. A discovered config's `wrap` flows via `FormatConfig`,
-    so no new editor knob was needed; `EditorSettings` stays `line_width`/`indent_width`.
 
 - [ ] `workspace/diagnostic` (the workspace-wide pull)—deferred: it is a
   streaming/long-poll protocol (held-open request, per-uri result ids, partial
@@ -396,12 +340,10 @@ sources below are missing.
 
 - [ ] **Labels from keyval options *(LW)*.** LaTeX Workshop scans `label={…}`
   inside environment option blocks (`lstlisting`, beamer frames) and
-  configurable custom label commands (`\linelabel`). Check whether the label
-  scanner catches the keyval form; if not, it is a bounded static pattern for
-  the semantic layer, feeding completion, navigation, and the
+  configurable custom label commands (`\linelabel`). The label scanner
+  (`semantic/label.rs`) does not catch the keyval form today; it is a bounded
+  static pattern for the semantic layer, feeding completion, navigation, and the
   `undefined-ref`/`unreferenced-label`/`duplicate-label` rules alike.
-
-### IntelliSense (signature DB)
 
 ### Hover
 
@@ -411,13 +353,6 @@ sources below are missing.
   rendering on our side, just a file reference: reuse the target resolution
   from `lsp/document_link.rs`; png/jpg/svg only, degrading to the resolved
   path for `.pdf`/`.eps`.
-
-- [x] **Documentation link in package hover *(LW)*.** LaTeX Workshop's
-  `\usepackage` hover offers a "View documentation" link via `texdoc`. The
-  package hover now pairs a texdoc documentation link
-  (`https://texdoc.org/pkg/<name>`, keyed on the package name texdoc resolves,
-  serving the documentation PDF) with the existing CTAN catalogue link (keyed
-  on the `ctan` catalogue id).
 
 - [ ] *(Design decision)* **Math preview on hover *(LW)*.** LaTeX Workshop's
   most-loved language feature: hovering math renders it (MathJax,
@@ -444,63 +379,42 @@ sources below are missing.
 
 ## Performance & hardening
 
-- [x] **Gate the query log behind an observation window.** Recording is disabled
-  in ordinary sessions and starts when `clear_query_log` opens a test observation
-  window. The 10,000-change LSP reproducer's excess live heap fell from 1.51 MiB
-  to 0.02 MiB.
-
-- [x] **Stop leaking interned `Project` snapshots.** Membership is now a
-  medium-durability singleton input; `workspace_project` returns plain `Eq` data,
-  and project-level queries are keyless, so each replaces one memo instead of
-  retaining every membership generation. The progressive-discovery reproducer's
-  excess live heap fell from 4.76 MiB to 0.19 MiB.
-
 - [ ] **Borrowed token text, maybe.** Tokens are `SmolStr`
-  (`crates/badness-parser/src/parser/lexer.rs:42`, same in `bib/lexer.rs:29`),
-  so short tokens are already allocation-free and the fatou-sized win (-60%
-  lexing from `&'src str` tokens) does not transfer wholesale. The payoff
-  concentrates in the pathologically long tokens (`VERBATIM_BODY`, `VERB`),
-  and the conversion is blocked on the half-dozen sites that push constant
-  literals instead of input slices (`push_env_delimiter` at
-  `lexer.rs:1646-1662`, the braced-verb path at `lexer.rs:1344-1356`,
-  `lexer.rs:1457`) — each provably corresponds to contiguous input bytes, so
-  they can be rewritten to slice. Measure with a lexer-only bench first
-  (arity's workload-stratified `benches/lex.rs` is the template); do this
-  last, if at all.
-
-- [x] **Preserve `%` comments during formatting.** The comment oracle originally
-  exposed 95 corpus files whose comments changed, a class the non-trivia-content
-  check could not see because comments are CST trivia. The conditional lowering,
-  prose-argument edge guards, parser guard boundary, and composed `.dtx`
-  documentation-region work removed the affected shapes: adjacent comments remain
-  distinct, and docstrip guards stay at column zero instead of re-lexing as
-  comments. All eight gate baselines now contain zero `comment-change` entries;
-  consecutive-comment and `.dtx` guard fixtures pin both regressions directly.
+  (`Token` in `parser/lexer.rs`, same in `bib/lexer.rs`), so short tokens are
+  already allocation-free and the fatou-sized win (-60% lexing from `&'src str`
+  tokens) does not transfer wholesale. The payoff concentrates in the
+  pathologically long tokens (`VERBATIM_BODY`, `VERB`), and the conversion is
+  blocked on the half-dozen sites that push constant literals instead of input
+  slices (`push_env_delimiter`, the braced-verb path, the synthesized `%`
+  pushes) — each provably corresponds to contiguous input bytes, so they can be
+  rewritten to slice. Measure with a lexer-only bench first (arity's
+  workload-stratified `benches/lex.rs` is the template); do this last, if at all.
 
 - [ ] **`Ir::contains_forced_break` is a per-child subtree walk at lowering
   time**, so nesting depth is still superlinear — 64% of the run on `{{{x}}}`
-  nested 4000 deep, the residue after the `contains_doc_margin` gate above.
-  `saturate` (`ir.rs`) already computes the identical bit bottom-up in one O(n)
-  pass, precisely so it is "computed on the way up, never by re-traversal", but
-  it runs once at the printer seam while lowering asks the question repeatedly
-  on partial sub-IR — which `core.rs` explicitly sanctions today. So this is a
-  documented decision to revisit, not a bug to patch: the bit changes as the IR
-  is rebuilt during lowering, so a memo has to be keyed on something that
-  cannot go stale. `Ir::contains_group` has the same shape. Deep brace nesting
-  is the only shape that reaches it (both bench documents are unaffected), so
-  it is not urgent. `tests/scaling.rs` tolerates the residue at a 3.4x bound;
-  tighten it to 3.0x when this lands.
+  nested 4000 deep. `saturate` (`formatter/ir.rs`) already computes the
+  identical bit bottom-up in one O(n) pass, precisely so it is "computed on the
+  way up, never by re-traversal", but it runs once at the printer seam while
+  lowering asks the question repeatedly on partial sub-IR — which
+  `formatter/core.rs` explicitly sanctions today. So this is a documented
+  decision to revisit, not a bug to patch: the bit changes as the IR is rebuilt
+  during lowering, so a memo has to be keyed on something that cannot go stale.
+  `Ir::contains_group` has the same shape. Deep brace nesting is the only shape
+  that reaches it (both bench documents are unaffected), so it is not urgent.
+  `tests/scaling.rs` deliberately carries **no** brace-nesting case (its ratio
+  sits at ~2.6x quiet and ~4.3x under parallel test binaries, too close to any
+  useful bound); add one at `MAX_RATIO` when this lands.
 
-- [ ] **Split `tests/parser.rs` by area.** It is now 2,923 lines and 230 tests;
-  separate math, verbatim, comments, conditionals, and aliases into focused
-  integration-test targets.
+- [ ] **Split `crates/badness-parser/tests/parser.rs` by area.** It is now 2,970
+  lines and 233 tests; separate math, verbatim, comments, conditionals, and
+  aliases into focused integration-test targets.
 
-- [ ] **`build.rs` renders positional same-typed bool lists** in the
-  generated constructor calls (`command(&[…], None, false, false, false)`;
-  nine positional args for environments), so a swapped `verbatim`/`rule`
-  compiles silently. Named-struct constructors, or `/*verbatim*/`-style
-  inline comments in the rendered source, make the generated code
-  self-checking.
+- [ ] **`crates/badness-parser/build.rs` renders positional same-typed bool
+  lists** in the generated constructor calls (`command(&[…], None, false, false,
+  false)`; nine positional args for environments), so a swapped
+  `verbatim`/`rule` compiles silently. Named-struct constructors, or
+  `/*verbatim*/`-style inline comments in the rendered source, make the
+  generated code self-checking.
 
 - [ ] **Mine the `latexindent` corpus for construct coverage** (human-in-the-loop,
   ongoing). Skill: `.agents/skills/formatter-fixture/`. The corpus is read as a
@@ -515,15 +429,14 @@ sources below are missing.
   out — that is where our rule is usually wrong. Run it at default settings
   (`latexindent probe.tex`, no `-s`) on a hand-authored probe; the committed
   `*-mod*.tex` files are one YAML stack's answer with `-m` on, not its own
-  judgment. Measured gaps against the 265 existing
-  slugs: `items` (157 files) and bare/named brace groups are no longer thin (12
-  and 33 slugs); re-measure before trusting any gap list here. Beamer item
+  judgment. Measured gaps against the 266 existing
+  slugs: `items` (157 files) and bare/named brace groups are no longer thin;
+  re-measure before trusting any gap list here. Beamer item
   overlays are covered by `list_item_overlay_prefix`. `mand-args` /
   `opt-and-mand-args` / `environments` yielded `begin_tail_is_body` — content the
   greedy parser attaches to `BEGIN` past the declared arity is body, not header —
-  which closed a Tier-1 lone-newline read *and* a column-0 indentation bug, and
-  surfaced the paragraph-reflow glued-split entry above; the rest of those three
-  families is still open. `filecontents` is
+  which closed a Tier-1 lone-newline read *and* a column-0 indentation bug; the
+  rest of those three families is still open. `filecontents` is
   done (`filecontents_protected_body`) — it was purely a protected-region
   question, and the survey found no defect: the sharp edge it now pins is that a
   verbatim-body environment's `\begin` line must never break under width
@@ -539,19 +452,10 @@ sources below are missing.
 
 texlab bundles PDF-workflow features. Only position mapping (no typesetting by
 badness) is admissible; the rest are explicit non-goals recorded here so they are
-not re-proposed.
-
-- [x] **Forward/inverse SyncTeX search (no typesetting).**
-  `textDocument/forwardSearch` (a custom LSP method, texlab-wire-compatible)
-  resolves the root document's PDF from `[build]` and launches a viewer
-  configured through editor settings, with `%f`/`%p`/`%l` substituted
-  (`lsp/forward_search.rs`). Inverse search receives a viewer position over IPC
-  and answers with `window/showDocument` (`ipc.rs`, `badness inverse-search`).
-  Badness never typesets. It also never *maps*: investigating texlab showed it
-  parses no SyncTeX either, because every SyncTeX-aware viewer links libsynctex
-  and so takes a file and a line, never a coordinate. Servers publish per-process
-  advertisements rather than sharing texlab's single fixed socket, which a second
-  editor window silently steals.
+not re-proposed. Forward and inverse search ship today
+(`lsp/forward_search.rs`, `ipc.rs`, `badness inverse-search`) without badness
+parsing SyncTeX at all — every SyncTeX-aware viewer links libsynctex and so takes
+a file and a line, never a coordinate.
 
 - [ ] *(Design decision)* **Native `.synctex.gz` reader.** Would let forward
   search drive viewers with *no* SyncTeX support at all by resolving a page
@@ -665,8 +569,8 @@ not re-proposed.
   loss of coverage, never a false positive), hence not urgent. Unwrapping it is
   a *shape* fact, not meaning — `\subfix{p}` is transparent by construction, the
   same class of static recognition as the `subfiles` class-option gate — so it
-  fits decision #8; the open part is where the unwrap belongs so `include.rs`,
-  `document_link`, and completion cannot drift on it.
+  keeps parser text-purity; the open part is where the unwrap belongs so
+  `include.rs`, `document_link`, and completion cannot drift on it.
 
 - [ ] **`project::package` does not collapse `.`/`..` in load targets.**
   `include.rs`'s resolvers now normalize lexically (`resolve_against`), so
@@ -689,11 +593,11 @@ not re-proposed.
 
 - [ ] **[low, latent] No `SyntaxNodePtr`/`AstPtr`.** RA stashes stable node
   pointers in salsa data to re-resolve across reparses; badness sidesteps this by
-  storing the `GreenNode` directly (decision #7) and carrying diagnostics as
-  byte-ranges (decision #4), so the need has not arisen. Latent: a future feature
-  that must stash a *stable node identity* in a salsa query (resolving a
-  completion/hover target to a specific node across edits) has no primitive for
-  it, and byte-ranges alone do not survive edits.
+  storing the `GreenNode` directly and carrying diagnostics as byte-ranges, so
+  the need has not arisen. Latent: a future feature that must stash a *stable
+  node identity* in a salsa query (resolving a completion/hover target to a
+  specific node across edits) has no primitive for it, and byte-ranges alone do
+  not survive edits.
 
 - [ ] **Collapse the four near-identical token walks in `ast/nodes.rs`**
   (`Group::inner_text`/`inner`, `NameGroup::text`/`range`): all four walk
@@ -720,13 +624,10 @@ not re-proposed.
 
 ## Open decisions to revisit
 
-- [ ] How much of `\newcommand`/`xparse` to model. *(Semantics)*
+- [ ] How much of `\newcommand`/`xparse` to model for the signature DB.
+  *(Semantics)*
 
 - [ ] Formatter opinionatedness: configurable vs. fixed. *(Formatter)*
-
-- [x] Model `.dtx` as one lossless CST with margin-aware tokens; project safe,
-  fully margined documentation environments into virtual LaTeX in the formatter.
-  *(Package infrastructure)*
 
 - [ ] Math preview on hover: skip (LaTeX Workshop covers it), render in the
   VS Code extension, or a server-side Rust renderer? *(Language server; see

@@ -166,11 +166,11 @@ safety](#reflow-is-safe-by-construction).
 only consumer; the library API takes a resolved `FormatStyle`. Sections are
 `[format]` (`line-width`, `indent-width`, `wrap`, `math-wrap`, `lang`,
 `no-break-abbreviations`), `[lint]` (`select`, `ignore`), `[build]` (`aux-dir`),
-and the [declaration](#declarations) maps `[environments.<name>]` and
-`[commands.<name>]`. Excludes follow Ruff: `exclude` replaces the built-in
-default, `extend-exclude` adds to it. `wrap` is an `Option` so the LSP can tell
-"unset" from "set" when merging editor settings over project config, not because
-the fallback depends on the file.
+and the [declaration](#declarations) map `[environments.<name>]`. Excludes
+follow Ruff: `exclude` replaces the built-in default, `extend-exclude` adds to
+it. `wrap` is an `Option` so the LSP can tell "unset" from "set" when merging
+editor settings over project config, not because the fallback depends on the
+file.
 
 TEXMF discovery is deliberately not a section here. Where a TeX installation
 lives is machine state rather than project data, so it arrives through editor
@@ -181,11 +181,10 @@ settings.
 Most config only affects behavior after parsing. Declarations are the exception:
 they feed the parser directly.
 
-`[environments.<name>]` and `[commands.<name>]` let a project describe
-constructs that source text alone cannot reliably reveal (issue #109). Typical
-examples are alias delimiters like `\bea`/`\eea`, environment behavior that
-should match a built-in, or verbatim-like environments the definition scan
-cannot infer.
+`[environments.<name>]` lets a project describe constructs that source text
+alone cannot reliably reveal (issue #109). Typical examples are alias delimiters
+like `\bea`/`\eea`, environment behavior that should match a built-in, or
+verbatim-like environments the definition scan cannot infer.
 
 ```toml
 # \begin{myenv} … \end{myenv}, with no built-in counterpart

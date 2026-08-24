@@ -219,6 +219,11 @@ jobs:
         # a group." No parser change is correct here. Issue #142.
         OpenIntroStat/openintro-statistics|extraTeX/style/style.tex|format-error
         OpenIntroStat/openintro-statistics|extraTeX/style/style_simple.tex|format-error
+        # fs.tex is input to xv6-riscv-book's `lineref` preprocessor, not the
+        # LaTeX passed to pdflatex. Its `\linerefs{file:/regex/,/regex/}` DSL
+        # permits raw regex braces and `\)`; the preprocessor replaces each
+        # invocation with ordinary LaTeX before compilation. Issue #146.
+        mit-pdos/xv6-riscv-book|fs.tex|format-error
     steps:
       - uses: actions/checkout@v7
 

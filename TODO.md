@@ -468,22 +468,14 @@ sources below are missing.
   (arity's workload-stratified `benches/lex.rs` is the template); do this
   last, if at all.
 
-- [ ] **95 corpus files change their `%` comments** (`comment-change` in the gate
-  baselines). Surfaced by the comment oracle added alongside the conditional node —
-  the `content-change` check compares `nontrivia_content`, and a comment is trivia
-  to the CST, so this whole class was invisible. All 95 predate the conditional
-  work (verified file by file against `main`; that change fixes 12 of them and
-  regresses none). Two shapes so far:
-
-  - **Adjacent comments merge.** `%\n% just backwards compatibility…` comes out as
-    `% % just backwards compatibility…`, the empty comment's `%` swallowed onto the
-    next line (`pgfrcs.code.tex`, `latexrelease.sty`). Byte-identical meaning to
-    TeX, but the formatter still rewrote a protected region.
-
-  - **`.dtx` guards re-lex as comments.** A `%<+debug>` that no longer opens its
-    line is a comment, not a docstrip guard, so the extracted file changes — a
-    meaning change, not a cosmetic one. Every `.dtx` in the list is this shape.
-    Likely the same margin/guard column-0 pinning the reflow already backstops.
+- [x] **Preserve `%` comments during formatting.** The comment oracle originally
+  exposed 95 corpus files whose comments changed, a class the non-trivia-content
+  check could not see because comments are CST trivia. The conditional lowering,
+  prose-argument edge guards, parser guard boundary, and composed `.dtx`
+  documentation-region work removed the affected shapes: adjacent comments remain
+  distinct, and docstrip guards stay at column zero instead of re-lexing as
+  comments. All eight gate baselines now contain zero `comment-change` entries;
+  consecutive-comment and `.dtx` guard fixtures pin both regressions directly.
 
 - [ ] **`Ir::contains_forced_break` is a per-child subtree walk at lowering
   time**, so nesting depth is still superlinear — 64% of the run on `{{{x}}}`

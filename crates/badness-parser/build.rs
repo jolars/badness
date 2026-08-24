@@ -243,7 +243,7 @@ struct RawEnvironment {
 
 impl RawEnvironment {
     /// `environment(&[…], verbatim_body, math, code, align, no_indent, list,
-    /// block_explicit, outline)` — `reflow`/`block` are derived inside the const fn.
+    /// block_explicit, outline)` — the explicit source facts stored by the const fn.
     fn render(&self) -> String {
         let outline = match self.outline {
             Some(RawOutlineKind::Float) => "Some(OutlineKind::Float)",

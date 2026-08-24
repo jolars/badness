@@ -302,9 +302,6 @@ pub struct EnvironmentSig {
     /// environment here is also math, but the formatter consults this flag, not
     /// `math`, to decide column alignment.
     pub align: bool,
-    /// `true` when the body is ordinary prose the formatter may reflow. Derived as
-    /// `!(verbatim_body || math || code || statement_body)`.
-    pub reflow: bool,
     /// `true` for sectioning-level *containers* whose body the formatter must
     /// *not* indent (`document`, the appendix-package `appendix`, …). The shared
     /// property is that the body is whole sections/paragraphs — content at the
@@ -317,47 +314,33 @@ pub struct EnvironmentSig {
     /// whose `\item`s the formatter lays out one per line, reflowing each item's
     /// body with continuation lines hanging-indented under the item text.
     pub list: bool,
-    /// `true` for block/display environments that occupy their own vertical space
-    /// (`figure`, `center`, lists, display math, verbatim, …). The parser uses this
-    /// to avoid wrapping a lone such environment in a redundant `PARAGRAPH`. Derived
-    /// as `block_explicit || math || list || no_indent`.
-    pub block: bool,
+    /// `true` when this environment is explicitly known to occupy its own vertical
+    /// space (`figure`, `center`, verbatim, …). Math, list, and no-indent
+    /// environments are inherently block-level and are included by [`Self::block`].
+    pub block_explicit: bool,
     /// `Some(_)` for an environment that earns a document-symbol outline entry — a
     /// float or a theorem-like. `None` for everything else. Only meaningful to the
     /// language server's `documentSymbol`; the parser and formatter ignore it.
     pub outline: Option<OutlineKind>,
 }
 
+impl EnvironmentSig {
+    /// Whether the body is ordinary prose that the formatter may reflow.
+    pub const fn reflow(&self) -> bool {
+        !(self.verbatim_body || self.math || self.code || self.statement_body)
+    }
+
+    /// Whether the environment occupies its own vertical space.
+    pub const fn block(&self) -> bool {
+        self.block_explicit || self.math || self.list || self.no_indent
+    }
+}
+
 // --- const constructors (shared by the runtime JSON path and build-time codegen)
 //
 // The build script (`build.rs`) emits the CWL tier as a `phf` map whose values
 // are calls to these `const fn`s, so the static data is baked into the binary
-// with no runtime parse (see `cwl`). They are the single home of the `reflow`/
-// `block` *derivations*, reused by `From<RawEnvironment>` below so the JSON path
-// (builtin DB, scanned defs) and the codegen path can never derive them
-// differently.
-
-/// `reflow`: a body is reflowable prose unless it is verbatim, math, code, or a
-/// statement sequence.
-pub(crate) const fn derive_reflow(
-    verbatim_body: bool,
-    math: bool,
-    code: bool,
-    statement_body: bool,
-) -> bool {
-    !(verbatim_body || math || code || statement_body)
-}
-
-/// `block`: math, lists, and no-indent containers are inherently block/display;
-/// the explicit flag covers the rest (figure, center, verbatim, theorem-likes, …).
-pub(crate) const fn derive_block(
-    block_explicit: bool,
-    math: bool,
-    list: bool,
-    no_indent: bool,
-) -> bool {
-    block_explicit || math || list || no_indent
-}
+// with no runtime parse (see `cwl`).
 
 /// One argument slot, const-constructible for the codegen path.
 pub(crate) const fn arg(required: bool, kind: ArgKind, content: ContentKind) -> ArgSpec {
@@ -394,7 +377,7 @@ pub(crate) const fn command(
 }
 
 /// An environment signature over a `'static` argument slice (the codegen path),
-/// applying the same `reflow`/`block` derivations as the JSON path.
+/// storing the explicit source facts from the generated data.
 #[allow(clippy::too_many_arguments)]
 pub(crate) const fn environment(
     args: &'static [ArgSpec],
@@ -422,10 +405,9 @@ pub(crate) const fn environment(
         // mechanical CWL tier can never grant this fact.
         label_key: false,
         align,
-        reflow: derive_reflow(verbatim_body, math, code, false),
         no_indent,
         list,
-        block: derive_block(block_explicit, math, list, no_indent),
+        block_explicit,
         outline,
     }
 }
@@ -1226,8 +1208,6 @@ struct RawEnvironment {
 
 impl From<RawEnvironment> for EnvironmentSig {
     fn from(raw: RawEnvironment) -> Self {
-        // The `reflow`/`block` derivations live in `derive_reflow`/`derive_block`
-        // (shared with the codegen path); only `args` differs (owned here).
         EnvironmentSig {
             args: Cow::Owned(raw.args.into_iter().map(ArgSpec::from).collect()),
             verbatim_body: raw.verbatim_body,
@@ -1237,10 +1217,9 @@ impl From<RawEnvironment> for EnvironmentSig {
             statement_body: raw.statement_body,
             label_key: raw.label_key,
             align: raw.align,
-            reflow: derive_reflow(raw.verbatim_body, raw.math, raw.code, raw.statement_body),
             no_indent: raw.no_indent,
             list: raw.list,
-            block: derive_block(raw.block, raw.math, raw.list, raw.no_indent),
+            block_explicit: raw.block,
             outline: raw.outline.map(OutlineKind::from),
         }
     }
@@ -1610,14 +1589,31 @@ mod tests {
     }
 
     #[test]
+    fn environment_derived_flags_follow_source_mutation() {
+        let mut sig = EnvironmentSig::from(RawEnvironment::default());
+        assert!(sig.reflow());
+        assert!(!sig.block());
+
+        sig.verbatim_body = true;
+        assert!(!sig.reflow());
+
+        sig.block_explicit = true;
+        assert!(sig.block());
+        sig.block_explicit = false;
+
+        sig.math = true;
+        assert!(sig.block());
+    }
+
+    #[test]
     fn environment_flags_and_derived_reflow() {
         let db = builtin();
         let lstlisting = db.environment("lstlisting").unwrap();
         assert!(lstlisting.verbatim_body);
-        assert!(!lstlisting.reflow);
+        assert!(!lstlisting.reflow());
         let equation = db.environment("equation").unwrap();
         assert!(equation.math);
-        assert!(!equation.reflow);
+        assert!(!equation.reflow());
         // `equation` is math but not an alignment environment (no `&` columns).
         assert!(!equation.align);
         // An alignment environment carries the `align` flag (and is also math).
@@ -1638,7 +1634,7 @@ mod tests {
         for name in ["itemize", "enumerate", "description"] {
             let env = db.environment(name).unwrap();
             assert!(env.list, "{name} should be a list environment");
-            assert!(env.reflow);
+            assert!(env.reflow());
             assert!(!env.math);
         }
         // jss/Sweave verbatim environments are curated built-ins: their bodies are
@@ -1653,7 +1649,7 @@ mod tests {
         ] {
             let env = db.environment(name).unwrap();
             assert!(env.verbatim_body, "{name} should be a verbatim environment");
-            assert!(!env.reflow);
+            assert!(!env.reflow());
         }
     }
 
@@ -1668,7 +1664,7 @@ mod tests {
         for name in ["filecontents", "filecontents*"] {
             let env = db.environment(name).unwrap();
             assert!(env.verbatim_body, "{name} body is written verbatim");
-            assert!(!env.reflow);
+            assert!(!env.reflow());
             // `\begin{filecontents}[force]{\jobname.bib}`: the two leading args are
             // structured; everything after them is the opaque body.
             assert_eq!(env.args.len(), 2, "{name} arity");
@@ -1678,7 +1674,7 @@ mod tests {
         for name in ["ltxcode", "ltxexample"] {
             let env = db.environment(name).unwrap();
             assert!(env.verbatim_body, "{name} body is opaque");
-            assert!(!env.reflow);
+            assert!(!env.reflow());
             // `\lstnewenvironment{…}[1][]` — one optional `\lstset` argument.
             assert_eq!(env.args.len(), 1, "{name} arity");
             assert_eq!(env.args[0].kind, ArgKind::Bracket);
@@ -1689,16 +1685,16 @@ mod tests {
     fn block_flag_is_explicit_or_derived() {
         let db = builtin();
         // Explicitly flagged display environments.
-        assert!(db.environment("figure").unwrap().block);
-        assert!(db.environment("center").unwrap().block);
-        assert!(db.environment("verbatim").unwrap().block);
+        assert!(db.environment("figure").unwrap().block());
+        assert!(db.environment("center").unwrap().block());
+        assert!(db.environment("verbatim").unwrap().block());
         // Derived from `math`, `list`, and `no_indent` respectively.
-        assert!(db.environment("equation").unwrap().block);
-        assert!(db.environment("itemize").unwrap().block);
-        assert!(db.environment("document").unwrap().block);
+        assert!(db.environment("equation").unwrap().block());
+        assert!(db.environment("itemize").unwrap().block());
+        assert!(db.environment("document").unwrap().block());
         // The new explicit flag leaves `reflow` derivation untouched: `center`
         // is a block env but still reflows its prose body.
-        assert!(db.environment("center").unwrap().reflow);
+        assert!(db.environment("center").unwrap().reflow());
     }
 
     #[test]
@@ -1717,8 +1713,8 @@ mod tests {
         for name in ["macro", "environment"] {
             let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
             assert_eq!(env.args.len(), 1, "{name} arity");
-            assert!(env.block, "{name} is a block env");
-            assert!(env.reflow, "{name} body reflows as prose");
+            assert!(env.block(), "{name} is a block env");
+            assert!(env.reflow(), "{name} body reflows as prose");
             assert!(!env.code, "{name} is not a code env");
         }
         // `macrocode`/`macrocode*` are code-not-prose: real parsed code (not an
@@ -1727,9 +1723,9 @@ mod tests {
         for name in ["macrocode", "macrocode*"] {
             let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
             assert!(env.code, "{name} is code");
-            assert!(!env.reflow, "{name} never reflows");
+            assert!(!env.reflow(), "{name} never reflows");
             assert!(!env.verbatim_body, "{name} body is parsed, not verbatim");
-            assert!(env.block, "{name} is a block env");
+            assert!(env.block(), "{name} is a block env");
         }
     }
 
@@ -1746,10 +1742,10 @@ mod tests {
         .expect("valid code schema");
         let plain = db.environment("plain").unwrap();
         assert!(!plain.code);
-        assert!(plain.reflow);
+        assert!(plain.reflow());
         let codeish = db.environment("codeish").unwrap();
         assert!(codeish.code);
-        assert!(!codeish.reflow);
+        assert!(!codeish.reflow());
         assert!(!codeish.verbatim_body);
     }
 
@@ -1768,10 +1764,10 @@ mod tests {
         .expect("valid statementBody schema");
         let plain = db.environment("plain").unwrap();
         assert!(!plain.statement_body);
-        assert!(plain.reflow);
+        assert!(plain.reflow());
         let stmt = db.environment("stmt").unwrap();
         assert!(stmt.statement_body);
-        assert!(!stmt.reflow);
+        assert!(!stmt.reflow());
         assert!(!stmt.code);
         assert!(!stmt.verbatim_body);
     }
@@ -1816,10 +1812,10 @@ mod tests {
         ] {
             let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
             assert!(env.statement_body, "{name} holds statements, not prose");
-            assert!(!env.reflow, "{name} never reflows as prose");
+            assert!(!env.reflow(), "{name} never reflows as prose");
             assert!(!env.code, "{name} is not `.dtx` macrocode");
             assert!(!env.verbatim_body, "{name} body is parsed, not verbatim");
-            assert!(env.block, "{name} is a block env");
+            assert!(env.block(), "{name} is a block env");
         }
         // The curated tier masks the CWL entry wholesale, so the option bracket
         // these carry there has to be restated by hand or it is lost.
@@ -1898,7 +1894,7 @@ mod tests {
         }
         for sig in db.environment_sigs() {
             assert!(!sig.verbatim_body && !sig.math && !sig.code && !sig.align);
-            assert!(!sig.no_indent && !sig.list && !sig.block);
+            assert!(!sig.no_indent && !sig.list && !sig.block());
             assert!(sig.outline.is_none());
             assert!(sig.args.iter().all(|a| match a.content {
                 ContentKind::Opaque => true,

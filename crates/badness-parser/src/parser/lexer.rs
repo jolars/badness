@@ -303,8 +303,10 @@ impl ParseCtx {
     /// layout decisions stay on curated data).
     pub(crate) fn is_block_environment(&self, name: &str) -> bool {
         match self.declared_environment(name) {
-            Some(sig) => sig.block,
-            None => builtin().environment(name).is_some_and(|env| env.block),
+            Some(sig) => sig.block(),
+            None => builtin()
+                .environment(name)
+                .is_some_and(EnvironmentSig::block),
         }
     }
 

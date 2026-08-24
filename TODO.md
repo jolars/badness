@@ -231,14 +231,6 @@ scope limits recorded at implementation time, not regressions.
 
 ## Semantic layer & signatures
 
-- [ ] **Make `EnvironmentSig::reflow`/`block` computed, not stored.** Both
-  are derivations of other fields — the generated-code const fn already derives
-  them — yet they remain stored, so mutation sites must hand-sync:
-  `define.rs` writes `sig.reflow = false` manually after setting
-  `verbatim_body` at two sites, and a forgotten sync is silent. Computed
-  methods remove the field, the hand-sync, and the derivation duplicated
-  across the const fns and `From<RawEnvironment>`.
-
 - [ ] **`is_cite_command` accepts any `\cite*`-prefixed name**
   (`semantic/builder.rs`): `\citebox` or `\citecolor` gets its argument
   recorded as citation keys — an open-ended false-positive surface, unlike

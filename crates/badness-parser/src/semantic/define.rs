@@ -394,7 +394,7 @@ fn apply_verbatim_flags(db: &mut SignatureDb, bodies: &HashMap<SmolStr, DefBody>
 /// is reachable from its **begin-code** (the first definition body), directly or via a
 /// chained helper command. Unlike commands, no argument is dropped: an environment's
 /// declared args are all leading and its body follows the `\begin{…}…` arguments, so
-/// we only flip `verbatim_body` (and the derived `reflow`). The begin-code's called
+/// we only flip `verbatim_body`. The begin-code's called
 /// helpers are resolved against the *command* `bodies` map (`\newcommand`/`\def`
 /// helpers live there). Conservative by construction, like the command case.
 fn apply_verbatim_env_flags(
@@ -413,7 +413,6 @@ fn apply_verbatim_env_flags(
     for name in verbatim {
         if let Some(mut sig) = db.environment(&name).cloned() {
             sig.verbatim_body = true;
-            sig.reflow = false; // a verbatim body is never reflowed
             db.insert_environment(name, sig);
         }
     }
@@ -792,7 +791,6 @@ fn scan_verbatim_environment(defining_command: &str, command: &SyntaxNode, db: &
     };
     let mut sig = environment_sig(args);
     sig.verbatim_body = true;
-    sig.reflow = false;
     db.insert_environment(name, sig);
 }
 
@@ -998,7 +996,6 @@ fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
         // A source definition exposes no package-specific `label` key semantics.
         label_key: false,
         align: false,
-        reflow: true,
         no_indent: false,
         // A user `\newenvironment` is not assumed to be a list; the built-in DB
         // is the source of truth for `\item`-bearing list layout.
@@ -1006,7 +1003,7 @@ fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
         // Block-ness of a user-defined environment is unknown without
         // package-specific knowledge; default to non-block (the parser keeps the
         // conservative `PARAGRAPH` wrapper for it).
-        block: false,
+        block_explicit: false,
         // A scanned user environment carries no outline category; only the curated
         // built-in floats/theorem-likes show up in the document-symbol outline.
         outline: None,
@@ -1114,7 +1111,7 @@ mod tests {
         let db = db_of("\\newenvironment{thm}[1]{begin #1}{end}\n");
         let sig = db.environment("thm").expect("thm defined");
         assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Brace]);
-        assert!(sig.reflow);
+        assert!(sig.reflow());
         assert!(!sig.verbatim_body);
         assert!(!sig.math);
     }
@@ -1376,7 +1373,7 @@ mod tests {
         let db = db_of("\\newenvironment{shellenv}{\\@makeother\\$}{}\n");
         let sig = db.environment("shellenv").expect("shellenv defined");
         assert!(sig.verbatim_body);
-        assert!(!sig.reflow); // a verbatim body is never reflowed
+        assert!(!sig.reflow()); // a verbatim body is never reflowed
     }
 
     #[test]
@@ -1408,7 +1405,7 @@ mod tests {
         let db = db_of("\\newenvironment{remark}{\\par\\noindent\\textbf{Remark.}}{\\par}\n");
         let sig = db.environment("remark").expect("remark defined");
         assert!(!sig.verbatim_body);
-        assert!(sig.reflow);
+        assert!(sig.reflow());
     }
 
     #[test]
@@ -1419,7 +1416,7 @@ mod tests {
         let db = db_of("\\lstnewenvironment{demo}[1][code]{\\lstset{#1}}{}\n");
         let sig = db.environment("demo").expect("demo defined");
         assert!(sig.verbatim_body);
-        assert!(!sig.reflow);
+        assert!(!sig.reflow());
         assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Bracket]);
     }
 
@@ -1437,7 +1434,7 @@ mod tests {
         let db = db_of("\\DefineVerbatimEnvironment{code}{Verbatim}{fontsize=\\small}\n");
         let sig = db.environment("code").expect("code defined");
         assert!(sig.verbatim_body);
-        assert!(!sig.reflow);
+        assert!(!sig.reflow());
         assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Bracket]);
     }
 

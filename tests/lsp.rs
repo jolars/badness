@@ -34,9 +34,9 @@ impl ResponseExt for Response {
     }
 }
 use lsp_types::{
-    ApplyWorkspaceEditParams, ClientCapabilities, CodeActionContext, CodeActionOrCommand,
-    CodeActionParams, CodeActionProviderCapability, CompletionItem, CompletionItemKind,
-    CompletionParams, CompletionResponse, DiagnosticClientCapabilities,
+    ApplyWorkspaceEditParams, ClientCapabilities, CodeActionContext, CodeActionKind,
+    CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CompletionItem,
+    CompletionItemKind, CompletionParams, CompletionResponse, DiagnosticClientCapabilities,
     DiagnosticWorkspaceClientCapabilities, DidChangeTextDocumentParams,
     DidChangeWatchedFilesClientCapabilities, DidChangeWatchedFilesParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
@@ -1315,6 +1315,73 @@ fn lsp_code_action_quickfix() {
     assert!(
         actions.is_empty(),
         "a range off the command yields no quick-fix, got {actions:?}"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_code_action_adds_a_table_column() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///table.tex".parse().unwrap();
+    let doc = "\\begin{tabular}{cc}\n  a & b \\\\\n\\end{tabular}\n";
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+
+    let params = |only| CodeActionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        range: Range::new(Position::new(1, 3), Position::new(1, 3)),
+        context: CodeActionContext {
+            only,
+            ..Default::default()
+        },
+        work_done_progress_params: Default::default(),
+        partial_result_params: Default::default(),
+    };
+    send_request(
+        &client,
+        2,
+        "textDocument/codeAction",
+        serde_json::to_value(params(Some(vec![CodeActionKind::REFACTOR]))).unwrap(),
+    );
+    let resp = recv_response(&client);
+    let actions: Vec<CodeActionOrCommand> =
+        serde_json::from_value(resp.result().unwrap()).expect("a codeAction response");
+    let CodeActionOrCommand::CodeAction(action) = actions
+        .iter()
+        .find(|action| {
+            matches!(action, CodeActionOrCommand::CodeAction(action) if action.title == "Add column at end")
+        })
+        .expect("the table refactoring")
+    else {
+        unreachable!()
+    };
+    assert_eq!(action.kind, Some(CodeActionKind::REFACTOR_REWRITE));
+    let edits = action
+        .edit
+        .as_ref()
+        .and_then(|edit| edit.changes.as_ref())
+        .and_then(|changes| changes.get(&uri))
+        .expect("single-file table edits");
+    assert_eq!(edits.len(), 2);
+    assert_eq!(edits[0].new_text, "c");
+    assert_eq!(edits[1].new_text, " &");
+
+    send_request(
+        &client,
+        3,
+        "textDocument/codeAction",
+        serde_json::to_value(params(Some(vec![CodeActionKind::QUICKFIX]))).unwrap(),
+    );
+    let resp = recv_response(&client);
+    let actions: Vec<CodeActionOrCommand> =
+        serde_json::from_value(resp.result().unwrap()).expect("a codeAction response");
+    assert!(
+        actions.iter().all(|action| !matches!(
+            action,
+            CodeActionOrCommand::CodeAction(action) if action.title == "Add column at end"
+        )),
+        "a quick-fix-only request must exclude refactorings"
     );
 
     shutdown(&client, server_thread);

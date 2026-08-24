@@ -176,6 +176,14 @@ One caveat inherent to SyncTeX: it maps the source **as it was compiled**. With
 unsaved edits, buffer line numbers and PDF line numbers drift apart until you
 rebuild.
 
+## Table refactoring
+
+With the cursor inside a statically understood `tabular`, `tabular*`, or `array`
+environment, the **Add column at end** code action appends a centered `c` column
+to the preamble and an empty trailing cell to every row. The action is withheld
+when the preamble uses unknown column types, a row has an ambiguous width, or
+the environment has been redefined, so it never applies a partial table rewrite.
+
 ## Neovim
 
 With the built-in `vim.lsp` client (Neovim 0.11+):

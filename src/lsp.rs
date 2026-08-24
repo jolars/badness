@@ -86,19 +86,20 @@ use lsp_types::request::{
     WorkspaceDiagnosticRefresh, WorkspaceSymbolRequest,
 };
 use lsp_types::{
-    ApplyWorkspaceEditParams, CodeActionParams, CodeActionProviderCapability, CodeDescription,
-    CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
-    CompletionResponse, Diagnostic, DiagnosticOptions, DiagnosticRelatedInformation,
-    DiagnosticServerCapabilities, DiagnosticSeverity, DiagnosticTag, DidChangeConfigurationParams,
-    DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
-    DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
-    DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentHighlight,
-    DocumentHighlightKind, DocumentHighlightParams, DocumentLink, DocumentLinkOptions,
-    DocumentLinkParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
-    DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    ExecuteCommandOptions, ExecuteCommandParams, FileChangeType, FileSystemWatcher, FoldingRange,
-    FoldingRangeParams, FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
+    ApplyWorkspaceEditParams, CodeActionKind, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CodeDescription, CompletionItem, CompletionItemKind,
+    CompletionList, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
+    DiagnosticOptions, DiagnosticRelatedInformation, DiagnosticServerCapabilities,
+    DiagnosticSeverity, DiagnosticTag, DidChangeConfigurationParams, DidChangeTextDocumentParams,
+    DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
+    DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams, DocumentLink,
+    DocumentLinkOptions, DocumentLinkParams, DocumentOnTypeFormattingOptions,
+    DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
+    DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandOptions, ExecuteCommandParams,
+    FileChangeType, FileSystemWatcher, FoldingRange, FoldingRangeParams,
+    FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PositionEncodingKind,
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, Registration,
@@ -256,8 +257,8 @@ fn server_capabilities(
         // macros, environments) across every tracked project file. No lazy
         // `resolve`, so each result carries its full `Location`.
         workspace_symbol_provider: Some(OneOf::Left(true)),
-        // Surface linter autofixes as quick-fixes. `Simple(true)` returns
-        // fully-built actions (no `codeAction/resolve` step).
+        // Surface linter autofixes and syntax-aware refactorings. `Simple(true)`
+        // returns fully-built actions (no `codeAction/resolve` step).
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         // The change-environment refactor (see [`on_execute_command`]). The
         // `texlab.…` alias keeps texlab client integrations working as-is.
@@ -994,7 +995,7 @@ enum WorkerJob {
         rules: RuleSelection,
     },
     /// A `textDocument/codeAction` request: re-lint the buffer off a fresh snapshot
-    /// and reply with a quick-fix per fix-carrying finding overlapping `range`.
+    /// and reply with quick-fixes plus any syntax-aware refactoring at `range`.
     /// Cross-file state comes from the database snapshot; `uri` is needed to key
     /// the resulting [`WorkspaceEdit`].
     CodeAction {
@@ -1004,6 +1005,9 @@ enum WorkerJob {
         text: Arc<TextBuffer>,
         kind: FileKind,
         range: Range,
+        /// Action kinds requested by the client. A parent kind such as `refactor`
+        /// admits its descendants, including `refactor.rewrite`.
+        only: Option<Vec<CodeActionKind>>,
         /// The document's resolved lint-rule selection, applied to the findings.
         rules: RuleSelection,
     },
@@ -2275,8 +2279,8 @@ fn on_signature_help(
 
 /// `textDocument/codeAction`: build a code-action job for the worker, or reply with
 /// an empty action list when the document is unknown. Surfaces linter autofixes as
-/// quick-fixes; a `.bib` cursor is handled too (its bib-lint fixes are surfaced the
-/// same way).
+/// quick-fixes and syntax-aware LaTeX refactorings; a `.bib` cursor is handled too
+/// (its bib-lint fixes are surfaced the same way).
 fn on_code_action(
     connection: &Connection,
     state: &mut GlobalState,
@@ -2299,6 +2303,7 @@ fn on_code_action(
 
     let uri = params.text_document.uri;
     let range = params.range;
+    let only = params.context.only;
     let Some(doc) = state.documents.get(&uri) else {
         // Unknown document: no actions.
         let _ = connection.sender.send(Message::Response(Response::new_ok(
@@ -2318,6 +2323,7 @@ fn on_code_action(
         text,
         kind,
         range,
+        only,
         rules,
     });
 }
@@ -3316,6 +3322,7 @@ impl Worker {
                 text,
                 kind,
                 range,
+                only,
                 rules,
             } => {
                 // On-demand re-lint, like the pull-diagnostics path, runs against a
@@ -3324,7 +3331,17 @@ impl Worker {
                 let out_tx = self.out_tx.clone();
                 self.read_spawner.spawn(move || {
                     run_code_action(
-                        &snapshot, id, &uri, &path, &text, kind, range, &rules, enc, &out_tx,
+                        &snapshot,
+                        id,
+                        &uri,
+                        &path,
+                        &text,
+                        kind,
+                        range,
+                        only.as_deref(),
+                        &rules,
+                        enc,
+                        &out_tx,
                     )
                 });
             }
@@ -3813,7 +3830,8 @@ fn fallback_diagnostics(
 }
 
 /// Compute a `textDocument/codeAction` reply on the read pool: re-lint the buffer,
-/// then surface each fix-carrying finding overlapping `range` as a quick-fix.
+/// surface each fix-carrying finding overlapping `range` as a quick-fix, and add
+/// any conservative syntax-aware refactoring at the cursor.
 ///
 /// Reuses the same on-demand lint the pull-diagnostics path runs (cached off the
 /// snapshot, single-file fallback on a racing write), but keeps the **raw** linter
@@ -3827,6 +3845,7 @@ fn run_code_action(
     text: &TextBuffer,
     kind: FileKind,
     range: Range,
+    only: Option<&[CodeActionKind]>,
     rules: &RuleSelection,
     enc: PositionEncoding,
     out_tx: &Sender<Outbound>,
@@ -3843,11 +3862,35 @@ fn run_code_action(
         let uri = path_to_uri(p)?;
         Some((uri, snapshot.file_text(file).to_string()))
     };
-    let actions = code_action::code_actions_for_range(
+    let mut actions = code_action::code_actions_for_range(
         &findings, text, uri, path, range, enc, link_docs, &resolve,
     );
+    if !matches!(kind, FileKind::Bib) {
+        let parsed = parse_with_declarations(text, kind.lex_config(), snapshot.declarations());
+        let root = SyntaxNode::new_root(parsed.green);
+        actions.extend(code_action::table_column_actions(&root, text, uri, range));
+    }
+    actions.retain(|action| match action {
+        CodeActionOrCommand::CodeAction(action) => action
+            .kind
+            .as_ref()
+            .is_none_or(|kind| code_action_kind_requested(kind, only)),
+        CodeActionOrCommand::Command(_) => only.is_none(),
+    });
     let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
     let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
+}
+
+fn code_action_kind_requested(kind: &CodeActionKind, only: Option<&[CodeActionKind]>) -> bool {
+    only.is_none_or(|requested| {
+        requested.iter().any(|parent| {
+            kind.as_str() == parent.as_str()
+                || kind
+                    .as_str()
+                    .strip_prefix(parent.as_str())
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+        })
+    })
 }
 
 /// The raw linter findings (byte ranges + fixes) for a pull/code-action, computed
@@ -7161,6 +7204,22 @@ mod tests {
 
     fn uri(s: &str) -> Uri {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn requested_code_action_kind_admits_descendants_only() {
+        assert!(code_action_kind_requested(
+            &CodeActionKind::REFACTOR_REWRITE,
+            None
+        ));
+        assert!(code_action_kind_requested(
+            &CodeActionKind::REFACTOR_REWRITE,
+            Some(std::slice::from_ref(&CodeActionKind::REFACTOR))
+        ));
+        assert!(!code_action_kind_requested(
+            &CodeActionKind::REFACTOR_REWRITE,
+            Some(std::slice::from_ref(&CodeActionKind::QUICKFIX))
+        ));
     }
 
     #[test]

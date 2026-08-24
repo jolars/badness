@@ -1,9 +1,12 @@
-//! Pure code-action logic: turn fix-carrying linter findings into LSP quick-fixes.
+//! Pure code-action logic: turn fix-carrying linter findings into LSP quick-fixes
+//! and build conservative syntax-aware refactorings.
 //!
 //! The threading side ([`super::run_code_action`]) re-lints the buffer off a fresh
 //! snapshot (like the pull-diagnostics path) and hands the raw findings here. This
 //! module is rule-agnostic: any finding whose [`crate::linter::Diagnostic::fix`] is
 //! populated and whose caret overlaps the requested range becomes a `QUICKFIX`.
+//! Independently, a cursor inside a statically understood table can receive an
+//! atomic `REFACTOR_REWRITE` that appends a column to its preamble and rows.
 //!
 //! Fully-built actions are returned (no
 //! `codeAction/resolve` step), and a fix's byte span maps straight to a `TextEdit`
@@ -14,7 +17,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::*;
+use crate::ast::{AstNode, Command, Environment, Group, children};
 use crate::linter::diagnostic::Applicability;
+use crate::syntax::SyntaxElement;
 use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionResponse};
 
 /// Build the quick-fix actions for the findings overlapping `request_range`.
@@ -69,6 +74,213 @@ pub(crate) fn code_actions_for_range(
             }))
         })
         .collect()
+}
+
+/// Offer a structural refactoring that appends one centered column to the table
+/// enclosing the request's start position.
+///
+/// The edit is deliberately conservative: the environment must be a non-redefined
+/// built-in table, its preamble and every data row must have a statically known,
+/// matching width, and comments inside the body cause the action to be withheld.
+/// These gates make the workspace edit atomic—either the preamble and every row
+/// acquire the same trailing column, or no action is offered.
+pub(crate) fn table_column_actions(
+    root: &SyntaxNode,
+    text: &TextBuffer,
+    uri: &Uri,
+    request_range: Range,
+) -> CodeActionResponse {
+    let idx = text.line_index();
+    let offset = idx.offset_at(request_range.start.line, request_range.start.character);
+    let Some((spec_insert, row_inserts)) = table_column_insertions(root, text, offset) else {
+        return Vec::new();
+    };
+
+    let mut edits = Vec::with_capacity(row_inserts.len() + 1);
+    edits.push(TextEdit {
+        range: byte_range_to_lsp(&idx, spec_insert, spec_insert),
+        new_text: "c".to_string(),
+    });
+    edits.extend(row_inserts.into_iter().map(|(at, content)| TextEdit {
+        range: byte_range_to_lsp(&idx, at, at),
+        new_text: content,
+    }));
+
+    Some(CodeActionOrCommand::CodeAction(CodeAction {
+        title: "Add column at end".to_string(),
+        kind: Some(CodeActionKind::REFACTOR_REWRITE),
+        edit: Some(WorkspaceEdit {
+            changes: Some(HashMap::from([(uri.clone(), edits)])),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }))
+    .into_iter()
+    .collect()
+}
+
+fn table_column_insertions(
+    root: &SyntaxNode,
+    text: &str,
+    offset: usize,
+) -> Option<(usize, Vec<(usize, String)>)> {
+    let offset = TextSize::try_from(offset).ok()?;
+    let definitions = crate::semantic::scan_definitions(root);
+    let env = root
+        .descendants()
+        .filter_map(Environment::cast)
+        .filter(|env| env.syntax().text_range().contains_inclusive(offset))
+        .filter(|env| {
+            env.name().is_some_and(|name| {
+                matches!(name.as_str(), "tabular" | "tabular*" | "array")
+                    && definitions.environment(&name).is_none()
+            })
+        })
+        .min_by_key(|env| env.syntax().text_range().len())?;
+    let begin = env.begin()?;
+    let spec = children::<Group>(begin.syntax()).last()?;
+    let columns = crate::formatter::column_count(&spec.inner_source()).filter(|&n| n > 0)?;
+    let close = spec.syntax().last_token()?;
+    if close.kind() != SyntaxKind::R_BRACE {
+        return None;
+    }
+
+    let body = table_body(env.syntax())?;
+    if body.iter().any(|element| {
+        element
+            .as_token()
+            .is_some_and(|token| token.kind() == SyntaxKind::COMMENT)
+    }) {
+        return None;
+    }
+
+    let mut row = Vec::new();
+    let mut inserts = Vec::new();
+    for element in body {
+        if let SyntaxElement::Node(node) = &element
+            && node.kind() == SyntaxKind::LINE_BREAK
+        {
+            if let Some(insert) =
+                row_insertion(&row, columns, node.text_range().start(), text, &definitions)?
+            {
+                inserts.push(insert);
+            }
+            row.clear();
+        } else {
+            row.push(element);
+        }
+    }
+    let end = env.end()?.syntax().text_range().start();
+    if let Some(insert) = row_insertion(&row, columns, end, text, &definitions)? {
+        inserts.push(insert);
+    }
+
+    Some((usize::from(close.text_range().start()), inserts))
+}
+
+/// Flatten the single paragraph/math wrapper in a table body. Multiple wrappers
+/// mean a blank-line boundary, whose row semantics are not safe to rewrite.
+fn table_body(env: &SyntaxNode) -> Option<Vec<SyntaxElement>> {
+    let mut body = Vec::new();
+    let mut wrappers = 0usize;
+    for element in env.children_with_tokens() {
+        match element {
+            SyntaxElement::Node(node)
+                if matches!(node.kind(), SyntaxKind::BEGIN | SyntaxKind::END) => {}
+            SyntaxElement::Node(node)
+                if matches!(node.kind(), SyntaxKind::PARAGRAPH | SyntaxKind::MATH) =>
+            {
+                wrappers += 1;
+                if wrappers > 1 {
+                    return None;
+                }
+                body.extend(node.children_with_tokens());
+            }
+            other => body.push(other),
+        }
+    }
+    Some(body)
+}
+
+fn row_insertion(
+    row: &[SyntaxElement],
+    columns: usize,
+    boundary: TextSize,
+    text: &str,
+    definitions: &crate::semantic::SignatureDb,
+) -> Option<Option<(usize, String)>> {
+    let structural: Vec<&SyntaxElement> = row
+        .iter()
+        .filter(|element| !is_table_trivia(element) && !is_rule_command(element, definitions))
+        .collect();
+    if structural.is_empty() {
+        return Some(None);
+    }
+
+    let mut cell = Vec::new();
+    let mut used = 0usize;
+    for element in &structural {
+        if element.kind() == SyntaxKind::AMPERSAND {
+            used = used.checked_add(table_cell_span(&cell)?)?;
+            cell.clear();
+        } else {
+            cell.push(*element);
+        }
+    }
+    used = used.checked_add(table_cell_span(&cell)?)?;
+    if used != columns {
+        return None;
+    }
+
+    let anchor = structural.last()?.text_range().end();
+    let gap = text.get(usize::from(anchor)..usize::from(boundary))?;
+    if !gap.chars().all(char::is_whitespace) {
+        return None;
+    }
+    let content = if gap.is_empty() { " & " } else { " &" };
+    Some(Some((usize::from(anchor), content.to_string())))
+}
+
+fn table_cell_span(cell: &[&SyntaxElement]) -> Option<usize> {
+    let commands: Vec<Command> = cell
+        .iter()
+        .filter_map(|element| element.as_node())
+        .filter_map(|node| Command::cast(node.clone()))
+        .filter(|command| command.name().as_deref() == Some("multicolumn"))
+        .collect();
+    if commands.is_empty() {
+        return Some(1);
+    }
+    if cell.len() != 1 || commands.len() != 1 {
+        return None;
+    }
+    commands[0]
+        .nth_group_text(0)?
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|&span| span > 0)
+}
+
+fn is_table_trivia(element: &SyntaxElement) -> bool {
+    element
+        .as_token()
+        .is_some_and(|token| matches!(token.kind(), SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE))
+}
+
+fn is_rule_command(element: &SyntaxElement, definitions: &crate::semantic::SignatureDb) -> bool {
+    let Some(command) = element
+        .as_node()
+        .and_then(|node| Command::cast(node.clone()))
+    else {
+        return false;
+    };
+    command.name().is_some_and(|name| {
+        definitions.command(&name).is_none()
+            && crate::semantic::signature::builtin()
+                .command(&name)
+                .is_some_and(|signature| signature.rule)
+    })
 }
 
 /// Group a fix's edits into a `WorkspaceEdit`'s per-URI `TextEdit` lists.
@@ -390,5 +602,102 @@ mod tests {
             )),
             "unresolved cross-file fix must not be offered"
         );
+    }
+
+    fn apply_table_action(src: &str, line: u32, character: u32) -> Option<(CodeAction, String)> {
+        let root = SyntaxNode::new_root(crate::parser::parse(src).green);
+        let buffer = buf(src);
+        let cursor = Range::new(
+            Position::new(line, character),
+            Position::new(line, character),
+        );
+        let mut actions = table_column_actions(&root, &buffer, &uri(), cursor);
+        let CodeActionOrCommand::CodeAction(action) = actions.pop()? else {
+            return None;
+        };
+        let edits = action.edit.as_ref()?.changes.as_ref()?.get(&uri())?;
+        let idx = buffer.line_index();
+        let mut byte_edits: Vec<_> = edits
+            .iter()
+            .map(|edit| {
+                let start = idx.offset_at(edit.range.start.line, edit.range.start.character);
+                let end = idx.offset_at(edit.range.end.line, edit.range.end.character);
+                (start, end, edit.new_text.as_str())
+            })
+            .collect();
+        byte_edits.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+        let mut output = src.to_string();
+        for (start, end, replacement) in byte_edits {
+            output.replace_range(start..end, replacement);
+        }
+        Some((action, output))
+    }
+
+    #[test]
+    fn adds_a_trailing_column_to_every_table_row() {
+        let src = "\\begin{tabular}{lr}\n  a & b \\\\\n  c & d \\\\\n\\end{tabular}\n";
+        let (action, output) = apply_table_action(src, 1, 3).expect("table refactor");
+        assert_eq!(action.title, "Add column at end");
+        assert_eq!(action.kind, Some(CodeActionKind::REFACTOR_REWRITE));
+        assert_eq!(
+            output,
+            "\\begin{tabular}{lrc}\n  a & b & \\\\\n  c & d & \\\\\n\\end{tabular}\n"
+        );
+    }
+
+    #[test]
+    fn adds_a_column_to_an_unterminated_final_row() {
+        let src = "\\begin{tabular}{cc}\n  a & b\n\\end{tabular}\n";
+        let (_, output) = apply_table_action(src, 1, 3).expect("table refactor");
+        assert_eq!(output, "\\begin{tabular}{ccc}\n  a & b &\n\\end{tabular}\n");
+    }
+
+    #[test]
+    fn declines_short_rows_and_dynamic_spans() {
+        let short = "\\begin{tabular}{ccc}\n  a & b \\\\\n\\end{tabular}\n";
+        assert!(apply_table_action(short, 1, 3).is_none());
+
+        let dynamic = "\\begin{tabular}{cc}\n  \\multicolumn{\\n}{c}{a} \\\\\n\\end{tabular}\n";
+        assert!(apply_table_action(dynamic, 1, 3).is_none());
+    }
+
+    #[test]
+    fn handles_static_multicolumn_rows_and_rule_lines() {
+        let src = "\\begin{tabular}{cc}\n  \\toprule\n  \\multicolumn{2}{c}{heading} \\\\\n  a & b \\\\\n  \\bottomrule\n\\end{tabular}\n";
+        let (_, output) = apply_table_action(src, 3, 3).expect("table refactor");
+        assert_eq!(
+            output,
+            "\\begin{tabular}{ccc}\n  \\toprule\n  \\multicolumn{2}{c}{heading} & \\\\\n  a & b & \\\\\n  \\bottomrule\n\\end{tabular}\n"
+        );
+    }
+
+    #[test]
+    fn declines_custom_preambles_redefinitions_and_outside_cursors() {
+        let custom = "\\begin{tabular}{XX}\n  a & b \\\\\n\\end{tabular}\n";
+        assert!(apply_table_action(custom, 1, 3).is_none());
+
+        let redefined =
+            "\\renewenvironment{tabular}[1]{}{}\n\\begin{tabular}{c}\n  a \\\\\n\\end{tabular}\n";
+        assert!(apply_table_action(redefined, 2, 3).is_none());
+
+        let outside = "prose\n\\begin{tabular}{c}\n  a \\\\\n\\end{tabular}\n";
+        assert!(apply_table_action(outside, 0, 2).is_none());
+    }
+
+    #[test]
+    fn covers_tabular_star_and_array_but_declines_commented_tables() {
+        let tabular_star = "\\begin{tabular*}{4cm}{c}\n  a \\\\\n\\end{tabular*}\n";
+        let (_, output) = apply_table_action(tabular_star, 1, 3).expect("tabular* refactor");
+        assert_eq!(
+            output,
+            "\\begin{tabular*}{4cm}{cc}\n  a & \\\\\n\\end{tabular*}\n"
+        );
+
+        let array = "\\begin{array}{c}\n  a \\\\\n\\end{array}\n";
+        let (_, output) = apply_table_action(array, 1, 3).expect("array refactor");
+        assert_eq!(output, "\\begin{array}{cc}\n  a & \\\\\n\\end{array}\n");
+
+        let commented = "\\begin{tabular}{c}\n  a \\\\ % why\n  b \\\\\n\\end{tabular}\n";
+        assert!(apply_table_action(commented, 1, 3).is_none());
     }
 }

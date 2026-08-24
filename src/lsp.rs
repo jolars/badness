@@ -116,6 +116,7 @@ use salsa::Database as _;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
+use crate::ast::{AstNode, Environment};
 use crate::bib::completion::{
     BibCandidateKind, BibCompletionCandidate, bib_candidates, classify_bib_context,
 };
@@ -242,7 +243,7 @@ fn server_capabilities(
             })
         }),
         document_formatting_provider: Some(OneOf::Left(true)),
-        // Format the editor selection, expanded to whole top-level blocks (see
+        // Format the editor selection, expanded to whole document-level blocks (see
         // `compute_range_format`).
         document_range_formatting_provider: Some(OneOf::Left(true)),
         // Re-indent on close: typing `}` re-indents the containing block when that
@@ -785,7 +786,7 @@ enum WorkerJob {
         sentence_no_break: Vec<String>,
     },
     /// A range-formatting request: like [`WorkerJob::Format`] but bounded to the
-    /// editor selection (expanded to whole top-level blocks on the read pool).
+    /// editor selection (expanded to whole document-level blocks on the read pool).
     RangeFormat {
         id: RequestId,
         path: PathBuf,
@@ -4155,7 +4156,7 @@ fn run_range_format(
 /// selection touching no block. LaTeX-only for now; BibTeX returns `None`.
 ///
 /// The whole document is formatted with an emission filter so only the in-range
-/// top-level blocks are laid out (see [`format_node_range_with_signatures`]); the
+/// document-level blocks are laid out (see [`format_node_range_with_signatures`]); the
 /// formatted fragment is then diffed against the original block slice so the edits
 /// are minimal. Shares [`compute_format`]'s salsa fast-path / reparse-fallback
 /// shape.
@@ -4243,7 +4244,7 @@ fn range_edits_for_root(
     external: &SignatureDb,
     sentence: SentenceOptions<'_>,
 ) -> Option<Vec<TextEdit>> {
-    let block_range = expand_to_top_level_blocks(root, sel)?;
+    let block_range = expand_to_document_blocks(root, sel)?;
     let fragment =
         format_node_range_with_signatures_sentence(root, style, external, block_range, sentence)
             .ok()?;
@@ -7102,14 +7103,19 @@ fn byte_range_to_lsp(idx: &LineIndex, start: usize, end: usize) -> Range {
     }
 }
 
-/// Expand a selection to whole top-level-block boundaries: the cover of every
-/// `ROOT` child *node* overlapping `sel`. This is range formatting's safe zone — a
-/// partial selection always pulls in the whole structural units it touches, so the
-/// formatter never lays out a fragment of a block. `root.children()` yields only
-/// nodes (the top-level blocks), so inter-block trivia is naturally skipped.
+/// Expand a selection to whole document-level-block boundaries: the cover of every
+/// `ROOT` child *node* overlapping `sel`, except that a canonical `document`
+/// environment exposes its direct body nodes as document-level blocks. Its body is
+/// formatter-defined to sit flush at the root indentation, so those nodes have the
+/// same independent layout context as root children. Other environments remain
+/// indivisible: their specialized list, alignment, math, and indentation layouts
+/// need the complete environment.
+///
+/// A partial selection always pulls in the whole structural units it touches.
+/// Child-node iteration naturally skips inter-block trivia.
 /// Returns `None` when the selection touches no block (e.g. a cursor in blank space
 /// between blocks), meaning there is nothing to format.
-fn expand_to_top_level_blocks(root: &SyntaxNode, sel: TextRange) -> Option<TextRange> {
+fn expand_to_document_blocks(root: &SyntaxNode, sel: TextRange) -> Option<TextRange> {
     let mut acc: Option<TextRange> = None;
     for child in root.children() {
         let r = child.text_range();
@@ -7121,11 +7127,51 @@ fn expand_to_top_level_blocks(root: &SyntaxNode, sel: TextRange) -> Option<TextR
         } else {
             sel.start() < r.end() && r.start() < sel.end()
         };
-        if hit {
+        if !hit {
+            continue;
+        }
+        if document_body_contains(&child, sel)
+            && let Some(body) = cover_overlapping_children(&child, sel)
+        {
+            acc = Some(acc.map_or(body, |a| a.cover(body)));
+        } else {
             acc = Some(acc.map_or(r, |a| a.cover(r)));
         }
     }
     acc
+}
+
+/// Whether `range` lies wholly between a canonical `document` environment's
+/// delimiters. Only this built-in no-indent environment is transparent here;
+/// custom and specialized environments keep their full structural context.
+fn document_body_contains(node: &SyntaxNode, range: TextRange) -> bool {
+    let Some(environment) = Environment::cast(node.clone()) else {
+        return false;
+    };
+    if environment.name().as_deref() != Some("document") {
+        return false;
+    }
+    let (Some(begin), Some(end)) = (environment.begin(), environment.end()) else {
+        return false;
+    };
+    range.start() >= begin.syntax().text_range().end()
+        && range.end() <= end.syntax().text_range().start()
+}
+
+fn cover_overlapping_children(container: &SyntaxNode, sel: TextRange) -> Option<TextRange> {
+    container
+        .children()
+        .filter(|child| !matches!(child.kind(), SyntaxKind::BEGIN | SyntaxKind::END))
+        .filter_map(|child| {
+            let range = child.text_range();
+            let hit = if sel.is_empty() {
+                range.contains_inclusive(sel.start())
+            } else {
+                sel.start() < range.end() && range.start() < sel.end()
+            };
+            hit.then_some(range)
+        })
+        .reduce(TextRange::cover)
 }
 
 /// Diff the formatted `fragment` against the original `text[block_range]` slice and

@@ -236,10 +236,12 @@ pub fn format_node_with_signatures_sentence(
     Ok(formatted)
 }
 
-/// Range formatting: lay out only the top-level blocks overlapping `range`,
+/// Range formatting: lay out only the document-level blocks overlapping `range`,
 /// returning the formatted text for the `[first block start, last block end]`
 /// span. The caller (the `badness` crate's LSP) expands the editor selection to whole
-/// top-level-block boundaries before calling, so `range` is already block-aligned.
+/// document-level-block boundaries before calling, so `range` is already
+/// block-aligned. Direct children of the canonical no-indent `document` environment
+/// count as document-level blocks alongside children of `ROOT`.
 ///
 /// The whole document is still scanned for `\newcommand` signatures and expl3
 /// regions ([`format_root`]), so a selected block depending on an earlier
@@ -384,6 +386,23 @@ fn format_root(
 /// fragment.
 fn ranges_overlap(a: TextRange, b: TextRange) -> bool {
     a.start() < b.end() && b.start() < a.end()
+}
+
+/// Whether `range` lies wholly inside the body of the canonical `document`
+/// environment. Its body is the formatter's canonical no-indent case, so exposing
+/// direct body blocks does not discard any ancestor indentation context.
+fn document_body_contains(node: &SyntaxNode, range: TextRange) -> bool {
+    let Some(environment) = Environment::cast(node.clone()) else {
+        return false;
+    };
+    if environment.name().as_deref() != Some("document") {
+        return false;
+    }
+    let (Some(begin), Some(end)) = (environment.begin(), environment.end()) else {
+        return false;
+    };
+    range.start() >= begin.syntax().text_range().end()
+        && range.end() <= end.syntax().text_range().start()
 }
 
 /// The nearest preceding sibling *element* of `node`, skipping `WHITESPACE`/`NEWLINE`
@@ -742,12 +761,13 @@ struct LowerCtx<'a> {
     /// under [`WrapMode::Reflow`]/[`WrapMode::Stable`]/[`WrapMode::Preserve`], so an
     /// English default (see [`SentenceOptions::default`]) is harmless there.
     profile: ResolvedProfile<'a>,
-    /// Range-formatting emission filter. When `Some`, only the [`SyntaxKind::ROOT`]
-    /// children overlapping this byte range are lowered (the in-range top-level
-    /// blocks); the rest are skipped and never produce IR (see [`lower_node`]).
-    /// `None` (the default) lowers the whole document. The filter applies *only* at
-    /// `ROOT` — every selected block still lowers in full, at its real indent-0
-    /// context, so the formatter stays the sole authority on layout.
+    /// Range-formatting emission filter. When `Some`, only document-level blocks
+    /// overlapping this byte range are lowered; the rest are skipped and never
+    /// produce IR (see [`lower_node`]). These are children of [`SyntaxKind::ROOT`]
+    /// or direct body children of the canonical no-indent `document` environment.
+    /// `None` (the default) lowers the whole document. Every selected block still
+    /// lowers in full, at its real indent-0 context, so the formatter stays the sole
+    /// authority on layout.
     range: Option<TextRange>,
     /// Memo for [`dtx_doc_paragraph_reflows_safely`]. The answer is needed twice
     /// per `.dtx` doc paragraph — once by the paragraph's own lowering, once by
@@ -983,16 +1003,32 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }
     // Range-formatting emission filter: at the document root, lower only the
     // children (top-level blocks plus the trivia between them) overlapping the
-    // requested range; skip the rest entirely. The filter lives at `ROOT` so each
-    // emitted block still lowers in full below — see [`LowerCtx::range`]. A `None`
-    // range (the whole-document default) never reaches here.
+    // requested range; skip the rest entirely. A canonical `document` environment
+    // is transparent when the range lies wholly in its body: that body's layout is
+    // deliberately flush with the root, so its direct children are equally safe
+    // independent blocks. Other environments still lower in full. A `None` range
+    // (the whole-document default) never reaches here.
     if let Some(range) = cx.range
         && node.kind() == SyntaxKind::ROOT
     {
-        let filtered = node
+        let mut filtered = Vec::new();
+        for element in node
             .children_with_tokens()
-            .filter(move |el| ranges_overlap(range, el.text_range()));
-        return Ir::concat(lower_element_stream(filtered, cx));
+            .filter(|el| ranges_overlap(range, el.text_range()))
+        {
+            if let SyntaxElement::Node(child) = &element
+                && document_body_contains(child, range)
+            {
+                filtered.extend(
+                    child
+                        .children_with_tokens()
+                        .filter(|el| ranges_overlap(range, el.text_range())),
+                );
+            } else {
+                filtered.push(element);
+            }
+        }
+        return Ir::concat(lower_element_stream(filtered.into_iter(), cx));
     }
     // expl3 code layout (catcode-9 whitespace / catcode-10 `~`) applies regardless
     // of `WrapMode`, so it is checked before the wrap-gated arms below. A paragraph

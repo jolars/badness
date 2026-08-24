@@ -607,6 +607,58 @@ fn lsp_range_formatting_formats_only_the_selected_block() {
 }
 
 #[test]
+fn lsp_range_formatting_inside_document_leaves_sibling_environment_unchanged() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///range_document.tex".parse().unwrap();
+
+    let doc = concat!(
+        "\\begin{document}\n\n",
+        "\\begin{frame}{Title}\n",
+        "\\begin{description}\n",
+        "\\item[Item]\n",
+        "  Text    Text\n",
+        "\\end{description}\n",
+        "\\end{frame}\n\n",
+        "Selected    paragraph.\n\n",
+        "\\end{document}\n",
+    );
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "clean doc → no diagnostics");
+
+    send_request(
+        &client,
+        2,
+        "textDocument/rangeFormatting",
+        serde_json::to_value(DocumentRangeFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range: Range {
+                start: Position::new(9, 2),
+                end: Position::new(9, 10),
+            },
+            options: FormattingOptions {
+                tab_size: 2,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(2));
+    let edits: Vec<TextEdit> = serde_json::from_value(resp.result().unwrap()).unwrap();
+    let formatted = apply_edits(doc, &edits);
+    assert_eq!(
+        formatted,
+        doc.replace("Selected    paragraph.", "Selected paragraph."),
+        "formatting a document-body paragraph must not reformat its sibling frame"
+    );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_range_formatting_reindents_multiline_environment() {
     let (client, server_thread) = start_server(None);
     let uri: Uri = "file:///range_env.tex".parse().unwrap();

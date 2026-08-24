@@ -2607,6 +2607,53 @@ fn range_format_multiline_environment_block() {
     );
 }
 
+/// The canonical `document` environment is a transparent range-formatting
+/// container: its body sits at root indentation, so a direct body block can be
+/// lowered without also emitting sibling blocks from the document body.
+#[test]
+fn range_format_document_body_block_excludes_siblings() {
+    let style = FormatStyle::default();
+    let input = concat!(
+        "\\begin{document}\n\n",
+        "\\begin{frame}\nUnselected    text.\n\\end{frame}\n\n",
+        "Selected    paragraph.\n\n",
+        "\\end{document}\n",
+    );
+    let root = parse(input).syntax();
+    let selected = root
+        .descendants()
+        .find(|node| {
+            node.kind() == SyntaxKind::PARAGRAPH && node.text().to_string().contains("Selected")
+        })
+        .expect("the selected paragraph");
+
+    let fragment = format_node_range_with_signatures(
+        &root,
+        style,
+        &SignatureDb::default(),
+        selected.text_range(),
+    )
+    .expect("formats");
+
+    assert_eq!(fragment, "Selected paragraph.");
+
+    let frame = root
+        .descendants()
+        .find(|node| {
+            node.kind() == SyntaxKind::ENVIRONMENT
+                && node.text().to_string().starts_with("\\begin{frame}")
+        })
+        .expect("the sibling frame");
+    let fragment = format_node_range_with_signatures(
+        &root,
+        style,
+        &SignatureDb::default(),
+        frame.text_range(),
+    )
+    .expect("formats");
+    assert_eq!(fragment, "\\begin{frame}\n  Unselected text.\n\\end{frame}");
+}
+
 // --- Line endings -----------------------------------------------------------
 //
 // The formatter's printer always builds output with `\n`; `LineEnding` decides

@@ -382,6 +382,36 @@ impl ResolvedDeclarations {
     pub fn is_empty(&self) -> bool {
         self.db == SignatureDb::default() && self.commands.is_empty()
     }
+
+    /// The parse-facing half of this block: the environment signature tier, with
+    /// the semantic command aliases dropped.
+    ///
+    /// The two halves are split so a reader depends only on the one it uses. A
+    /// command alias provably cannot change a tree
+    /// (`command_declarations_do_not_change_the_parse_tree`), so an incremental
+    /// front end can hold this half behind its own firewall and leave every parse
+    /// standing when only `[commands]` changed. The environment tier is what
+    /// [`parse_with_declarations`](crate::parser::parse_with_declarations) and the
+    /// signature scope read.
+    pub fn parse_tier(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            commands: BTreeMap::new(),
+        }
+    }
+
+    /// The semantic-facing half: the command aliases alone.
+    ///
+    /// The counterpart of [`parse_tier`](Self::parse_tier), read by
+    /// [`SemanticModel::build_with_declarations`](crate::semantic::SemanticModel::build_with_declarations),
+    /// which never looks at the environment tier. Together the two halves
+    /// partition the block: nothing is in both, and nothing in neither.
+    pub fn semantic_tier(&self) -> Self {
+        Self {
+            db: SignatureDb::default(),
+            commands: self.commands.clone(),
+        }
+    }
 }
 
 /// A rule [`Declarations::resolve`] rejected, with the dotted key of the entry
@@ -789,6 +819,43 @@ mod tests {
                 DeclarationErrorKind::BuiltinCommandName { .. }
             ));
         }
+    }
+
+    /// The halves partition the block, which is what lets an incremental front
+    /// end depend on one without depending on the other.
+    #[test]
+    fn the_two_tiers_partition_the_block() {
+        let declared = from_json(
+            r#"{
+                 "commands": {"myref": {"like": "cref"}},
+                 "environments": {"mycode": {"like": "lstlisting"}}
+               }"#,
+        )
+        .resolve()
+        .expect("resolves");
+
+        let parse = declared.parse_tier();
+        assert_eq!(parse.as_db(), declared.as_db());
+        assert_eq!(parse.command_names().count(), 0);
+
+        let semantic = declared.semantic_tier();
+        assert_eq!(semantic.as_db(), &SignatureDb::default());
+        assert_eq!(semantic.command_like("myref"), Some("cref"));
+
+        // Neither half alone is the block, and an edit confined to one leaves the
+        // other's half untouched — the property the firewall rests on.
+        assert!(!parse.is_empty() && !semantic.is_empty());
+        let recommanded = from_json(
+            r#"{
+                 "commands": {"myref": {"like": "eqref"}},
+                 "environments": {"mycode": {"like": "lstlisting"}}
+               }"#,
+        )
+        .resolve()
+        .expect("resolves");
+        assert_ne!(recommanded, declared);
+        assert_eq!(recommanded.parse_tier(), parse);
+        assert_ne!(recommanded.semantic_tier(), semantic);
     }
 
     #[test]

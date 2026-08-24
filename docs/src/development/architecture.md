@@ -237,6 +237,16 @@ In incremental mode, both are carried through one high-durability salsa input
 (`incremental::DeclarationsInput`), so changing `badness.toml` invalidates the
 dependent parse and semantic results, while normal text edits do not.
 
+Each subset then reaches its readers through its own firewall query
+(`parse_declarations`, `semantic_declarations`), which projects out one half and
+backdates when that half is unchanged. Both halves sharing a cell is what makes
+this necessary: without the split, renaming a command alias would invalidate
+every parse in the project, and `parsed_document` is `no_eq`, so it could not
+backdate its way out — every reparse base would go too, since a base records the
+declarations it was parsed under. A command alias provably cannot change a tree,
+so that cost buys nothing. The split makes the cost of an edit proportional to
+what it actually changed.
+
 In the LSP, declarations are republished in the request dispatcher (not ad hoc
 inside handlers). This avoids stale cross-workspace state when the active file
 moves between roots with different config.

@@ -457,6 +457,36 @@ fn unchanged_declarations_do_not_reparse() {
     assert_eq!(parse_count(&db), 0);
 }
 
+/// The other half of the firewall: a command alias cannot change a tree, so
+/// editing one must leave every parse memo — and every reparse base — standing.
+///
+/// The two tiers share one salsa input, so without the
+/// `parse_declarations`/`semantic_declarations` split this write would bump the
+/// revision for every parse in the project, and `parsed_document` (`no_eq`)
+/// could never backdate its way out.
+#[test]
+fn command_declarations_do_not_reparse() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.upsert_file(Path::new("main.tex"), MYCODE_DOC.to_owned());
+    assert!(db.set_declarations(declared(MYCODE_VERBATIM)));
+    assert!(has_verbatim_body(&db, file));
+
+    db.clear_query_log();
+    // The environment half is byte-for-byte what it was; only a command is added.
+    let both = format!("{MYCODE_VERBATIM}\n[commands.myref]\nlike = 'cref'\n");
+    assert!(db.set_declarations(declared(&both)));
+
+    assert!(
+        has_verbatim_body(&db, file),
+        "the declared environment still stands"
+    );
+    assert_eq!(
+        parse_count(&db),
+        0,
+        "a `[commands]` edit must not reparse the project"
+    );
+}
+
 #[test]
 fn command_declarations_rebuild_the_semantic_model() {
     let mut db = IncrementalDatabase::default();
@@ -482,6 +512,11 @@ fn command_declarations_rebuild_the_semantic_model() {
         db.query_log()
             .iter()
             .any(|entry| entry.kind == QueryKind::SemanticModel)
+    );
+    assert_eq!(
+        parse_count(&db),
+        0,
+        "the model rebuilt on the cached tree, not a fresh parse"
     );
 }
 

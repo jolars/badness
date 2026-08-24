@@ -78,16 +78,21 @@ pub struct SourceFile {
 /// value the parse is allowed to read (`AGENTS.md` decision #12).
 ///
 /// A **singleton** — one cell per database, not one per file — because a
-/// declaration block is a property of the project, and because both readers
-/// ([`parsed_document`] and [`scope_signatures`]) want it without threading it
-/// through every caller of `parsed_tree_root`. The language server keys its
-/// config resolution per anchor directory, so a session holding two workspaces
-/// with *different* declaration blocks writes this cell whenever the active
-/// document crosses between them; that reparses the world, exactly as editing
+/// declaration block is a property of the project, and because the readers want
+/// it without threading it through every caller of `parsed_tree_root`. The
+/// language server keys its config resolution per anchor directory, so a session
+/// holding two workspaces with *different* declaration blocks writes this cell
+/// whenever the active document crosses between them, exactly as editing
 /// `badness.toml` does. Declaring nothing is the overwhelmingly common case and
 /// costs nothing — [`IncrementalDatabase::set_declarations`] skips the write
 /// when the value is unchanged, so an undeclaring session never touches the
 /// cell after construction.
+///
+/// Nothing reads this input directly. Both halves of the block reach their
+/// readers through a firewall query — [`parse_declarations`] and
+/// [`semantic_declarations`] — so a write confined to one half leaves the
+/// other's readers standing. See those queries for why the split is what makes
+/// the cost of an edit proportional to what it changed.
 ///
 /// Constructed (and always written) at [`Durability::HIGH`](salsa::Durability::HIGH):
 /// left at the `LOW` default, every keystroke's revision bump would invalidate
@@ -111,15 +116,54 @@ pub struct ProjectFiles {
     pub files: Vec<SourceFile>,
 }
 
-/// The project's declarations as seen from inside a query, registering the salsa
-/// dependency that makes an edit to `badness.toml` invalidate this parse.
+/// The parse-facing half of the project's declarations — the environment
+/// signature tier ([`ResolvedDeclarations::parse_tier`]).
+///
+/// A **firewall**, and the reason the two halves are not read straight off
+/// [`DeclarationsInput`]. That input is one cell holding both tiers, so any
+/// write to it bumps the revision seen by every reader. This query re-executes
+/// on that bump, projects out the environment tier, and — being an ordinary
+/// `Eq` query, unlike `no_eq` [`parsed_document`] — *backdates* when that half
+/// is unchanged. An edit confined to `[commands]` therefore stops here.
+///
+/// Without the firewall it could not stop anywhere: a command alias provably
+/// cannot change a tree (`command_declarations_do_not_change_the_parse_tree`),
+/// yet renaming one would re-execute every parse in the project and, because
+/// [`PrevParse::is_current`] compares the declarations it parsed under, throw
+/// away every reparse base as well.
+#[salsa::tracked(returns(ref))]
+fn parse_declarations(db: &dyn IncrementalDb, input: DeclarationsInput) -> ResolvedDeclarations {
+    input.declarations(db).parse_tier()
+}
+
+/// The semantic-facing half — the command aliases
+/// ([`ResolvedDeclarations::semantic_tier`]).
+///
+/// The counterpart of [`parse_declarations`], and a firewall for the same
+/// reason in the other direction: declaring an environment leaves this half
+/// equal, so it backdates rather than invalidating [`semantic_model`] on its
+/// own account. (The model still rebuilds when its file reparses; what this
+/// prevents is a second, independent invalidation path.)
+#[salsa::tracked(returns(ref))]
+fn semantic_declarations(db: &dyn IncrementalDb, input: DeclarationsInput) -> ResolvedDeclarations {
+    input.declarations(db).semantic_tier()
+}
+
+/// The parse-facing declarations as seen from inside a query, registering the
+/// salsa dependency that makes an edit to `badness.toml`'s `[environments]`
+/// invalidate this parse.
 ///
 /// Free function rather than an [`IncrementalDb`] method so the read stays a
-/// plain field read on the singleton input — a trait method returning the value
-/// could be implemented without touching salsa at all, and would then silently
-/// drop the dependency.
-fn declarations_of(db: &dyn IncrementalDb) -> &ResolvedDeclarations {
-    DeclarationsInput::get(db).declarations(db)
+/// tracked call — a trait method returning the value could be implemented
+/// without touching salsa at all, and would then silently drop the dependency.
+fn parse_declarations_of(db: &dyn IncrementalDb) -> &ResolvedDeclarations {
+    parse_declarations(db, DeclarationsInput::get(db))
+}
+
+/// The semantic-facing declarations as seen from inside a query. The
+/// [`semantic_declarations`] counterpart of [`parse_declarations_of`].
+fn semantic_declarations_of(db: &dyn IncrementalDb) -> &ResolvedDeclarations {
+    semantic_declarations(db, DeclarationsInput::get(db))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -244,6 +288,10 @@ pub struct PrevParse {
     pub errors: Vec<SyntaxError>,
     pub ctx: ParseCtx,
     pub config: LexConfig,
+    /// The *parse-facing* half of the declarations this base was parsed under
+    /// ([`parse_declarations`]), not the whole block. Storing the whole block
+    /// would make [`is_current`](Self::is_current) reject a base over a
+    /// `[commands]` edit that provably could not have changed the tree.
     pub declared: ResolvedDeclarations,
 }
 
@@ -356,9 +404,10 @@ pub fn parsed_document(db: &dyn IncrementalDb, file: SourceFile) -> ParsedDocume
     let config = file_kind_or_tex(file.path(db)).lex_config();
     // The project's declarations seed the parse context, so a declared `\bea`
     // pairs here exactly as it does on the CLI's `parse_with_declarations` path.
-    // Reading them registers a `HIGH`-durability dependency: editing
-    // `badness.toml` reparses every file, and nothing else does.
-    let declared = declarations_of(db);
+    // Reading them registers a `HIGH`-durability dependency on the *parse-facing*
+    // half: editing `[environments]` reparses every file, and nothing else does —
+    // a `[commands]` edit backdates at the firewall.
+    let declared = parse_declarations_of(db);
     let text = file.text(db);
 
     // The side channel (see `IncrementalDb::reparse_prev`). Everything below is a
@@ -488,7 +537,10 @@ pub fn semantic_model(db: &dyn IncrementalDb, file: SourceFile) -> SemanticModel
         kind: QueryKind::SemanticModel,
         file: Some(file),
     });
-    SemanticModel::build_with_declarations(&parsed_tree_root(db, file), declarations_of(db))
+    SemanticModel::build_with_declarations(
+        &parsed_tree_root(db, file),
+        semantic_declarations_of(db),
+    )
 }
 
 /// The file's scanned user-definition signatures — `\newcommand`,
@@ -557,7 +609,9 @@ pub fn scope_signatures(db: &dyn IncrementalDb, file: SourceFile) -> SignatureDb
     // Except the project's declarations, the top tier: a declaration is the user
     // explicitly correcting an inference. Same order as the disk-backed
     // `collect_package_signatures`, so the two scope builders cannot disagree.
-    merged.merge_declarations(declarations_of(db));
+    // The parse-facing half is the whole of it here: `merge_declarations` reads
+    // only the signature tier, so a `[commands]` edit must not rebuild a scope.
+    merged.merge_declarations(parse_declarations_of(db));
     merged
 }
 
@@ -1005,13 +1059,20 @@ impl IncrementalDatabase {
         DeclarationsInput::get(self).declarations(self)
     }
 
-    /// Replace the project's declarations, invalidating every parse that read the
-    /// old ones. Returns whether the write actually happened.
+    /// Replace the project's declarations. Returns whether the write actually
+    /// happened.
+    ///
+    /// What the write invalidates is decided downstream, by which half of the
+    /// block changed: the [`parse_declarations`] and [`semantic_declarations`]
+    /// firewalls each backdate when their own half is equal, so an edit to
+    /// `[commands]` alone costs no parse and an edit to `[environments]` alone
+    /// costs no semantic model beyond the reparse it forces anyway.
     ///
     /// Skipped when the value is unchanged, for the same reason
     /// [`upsert_file`](Self::upsert_file) skips an unchanged text: setting an
-    /// input bumps the revision unconditionally, and here that would reparse the
-    /// whole database on every job the language server dispatches.
+    /// input bumps the revision unconditionally, and re-running both firewalls on
+    /// every job the language server dispatches is waste the caller can avoid for
+    /// free.
     ///
     /// The durability is restated on the write. Salsa would inherit the field's
     /// existing one, so this is a guard rather than a requirement: it keeps the
@@ -1546,6 +1607,17 @@ mod tests {
             ),
             "a `.sty` reads `@` as a letter, so the same bytes are a different parse"
         );
+
+        // Only the parse-facing half is ever compared, so declaring a command
+        // leaves the base usable. A base rejected here costs a full reparse on the
+        // next keystroke, for an edit that cannot have changed the tree.
+        let commands_only = toml::from_str::<crate::declarations::Declarations>(
+            "[commands.myref]\nlike = 'cref'\n",
+        )
+        .expect("declarations deserialize")
+        .resolve()
+        .expect("declarations resolve");
+        assert!(base.is_current(&same, LexConfig::default(), &commands_only.parse_tier()));
     }
 
     /// Eviction drops cold entries first, so a project-wide sweep cannot cost an

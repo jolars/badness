@@ -160,6 +160,10 @@ comparison, not a byte target.
 - Use normalized `Gap` APIs for width paths.
 - Intentional newline-shape reads are Tier 2 and require an explicit fixed-point
   argument and tests.
+- Keep paragraph-level sectioning commands paragraph-separated in
+  `reflow_elements`: emit one blank line before and after the whole command,
+  including any leading bound comment; do not synthesize `\par` inside nested
+  argument or conditional structure.
 
 ### Reflow and structural safety
 

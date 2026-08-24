@@ -1721,7 +1721,9 @@ fn dtx_paragraph_reflows(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// break (a [`SyntaxKind::LINE_BREAK`] node), a `%` comment (which must terminate
 /// its line), and a nested *block* (an environment or multi-line group whose IR
 /// carries a forced break). Each commits the run-so-far as a fill, then a fresh run
-/// continues after, the lines joined by [`Ir::hard_line`].
+/// continues after. Ordinary blocks are joined by [`Ir::hard_line`]; a sectioning
+/// command that is a direct child of a prose paragraph uses [`Ir::empty_line`] on
+/// both sides.
 ///
 /// A lone newline is normally a break opportunity the fill rejoins, *except* when a
 /// physical line is made up solely of command(s) (a `\usepackage{…}` line, a
@@ -1962,6 +1964,17 @@ impl<'a> LineBuilder<'a> {
         self.seps
             .push(std::mem::replace(&mut self.pending_sep, Ir::hard_line()));
         self.lines.push(content);
+    }
+
+    /// Separate a paragraph-level sectioning command from adjacent prose. A
+    /// `.dtx` documentation paragraph needs a bare `%` on the empty physical
+    /// line so the separator remains inside the documentation layer.
+    fn separate_section(&mut self) {
+        self.pending_sep = if self.margin.is_some() {
+            Ir::concat([Ir::hard_line(), Ir::column_zero("%"), Ir::hard_line()])
+        } else {
+            Ir::empty_line()
+        };
     }
 
     /// Commit a forced-break block as its own segment under the `.dtx` margin:
@@ -2474,7 +2487,9 @@ fn reflow_elements_checked(
                 // A block-level command — sectioning (`\part` … `\subparagraph`) or
                 // curated block (`\usepackage`, `\newcommand`, …) — is a block-level
                 // statement: it opens a line and closes one, whatever trivia the
-                // author wrote around it. The old behavior kept the break only when
+                // author wrote around it. At paragraph level, sectioning additionally
+                // receives an empty line on both sides, making the structural
+                // boundary visible. The old behavior kept the break only when
                 // the source had a newline there (via `line_is_command_only` below),
                 // which is exactly the lone-newline predicate trivia-invariant layout
                 // forbids — `\subsection{X}\nprose` and `\subsection{X} prose` are the
@@ -2501,6 +2516,16 @@ fn reflow_elements_checked(
                 // `end_line` pair would bypass.
                 let is_sectioning =
                     child.kind() == SyntaxKind::COMMAND && command_is_sectioning(child, cx);
+                // A blank line is a real `\par`, so synthesize one only where the
+                // parser already identified a top-level prose paragraph. Nested
+                // headings still get the block command's hard-line boundaries;
+                // inserting `\par` inside a macro argument can make a non-`long`
+                // macro invalid, and inside a conditional it can reshape the
+                // wrapper between formatting passes.
+                let is_section_boundary = is_sectioning
+                    && child
+                        .parent()
+                        .is_some_and(|parent| parent.kind() == SyntaxKind::PARAGRAPH);
                 let is_block_stmt = kind != ReflowKind::Statement
                     && child.kind() == SyntaxKind::COMMAND
                     && (is_sectioning
@@ -2509,8 +2534,14 @@ fn reflow_elements_checked(
                             && next_is_separated(&elements, idx)));
                 if is_block_stmt && !ir.contains_forced_break() {
                     b.end_line();
+                    if is_section_boundary {
+                        b.separate_section();
+                    }
                     b.push_atom_piece(ir, &child.text().to_string());
                     b.end_line();
+                    if is_section_boundary {
+                        b.separate_section();
+                    }
                     line_all_commands = true;
                     line_has_content = false;
                     // Committed as a block, so a `%` still on the heading's physical
@@ -2524,6 +2555,14 @@ fn reflow_elements_checked(
                     continue;
                 }
                 if ir.contains_forced_break() {
+                    if is_section_boundary {
+                        // A documentation comment belongs to the heading it
+                        // introduces, so separate the whole forced-break command
+                        // from preceding prose rather than splitting the comment
+                        // from its command.
+                        b.end_line();
+                        b.separate_section();
+                    }
                     // A virtual documentation environment already owns every
                     // physical margin through its `Ir::doc_margin` wrapper. It is
                     // therefore a complete segment in `DtxProse`: surrounding
@@ -2616,6 +2655,9 @@ fn reflow_elements_checked(
                     // filename shape — leaves the line open so following content can
                     // ride it (the `after_block` paths).
                     prev_block_closes_line = is_block_stmt;
+                    if is_section_boundary {
+                        b.separate_section();
+                    }
                 } else {
                     // A block-level `COMMAND` keeps the line command-only; an inline
                     // command (`\citep`, `\ref`, …) is running-text content, as is any
@@ -7718,8 +7760,9 @@ fn command_is_inline(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 
 /// Whether `command` is a *sectioning* command (`\part` … `\subparagraph`), per the
 /// signature DB's [`CommandSig::sectioning`] level. Prose reflow treats such a
-/// command as a block-level statement: a hard break before it and after it, whatever
-/// trivia the author wrote (see [`reflow_elements`]).
+/// command as a block-level statement. When the command is a direct child of a
+/// prose paragraph, it becomes a paragraph-separated block with one blank line on
+/// each side (see [`reflow_elements`]).
 ///
 /// Read from the semantic layer, never from a name list in the formatter (decision
 /// #2): sectioning level is exactly the kind of meaning the signature DB owns, and

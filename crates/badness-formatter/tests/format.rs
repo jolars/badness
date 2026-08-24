@@ -652,17 +652,15 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // same lines (the written Tier-2 argument on `line_is_command_only`).
     // Idempotence, asserted on every fixture, is what pins it.
     ("reflow_command_stranded_by_width", WrapMode::Reflow, 80),
-    // A sectioning command (`\part` … `\subparagraph`, per the signature DB's
-    // `sectioning` level) is a block-level statement: a break before it and after it,
-    // whatever trivia the author wrote. The old rule kept the break only when the
-    // source happened to have a newline there, so `\subsection{X}\nprose` and
-    // `\subsection{X} prose` — the same bytes to the next parse — laid out
-    // differently, reading exactly the predicate trivia-invariant layout forbids.
+    // A paragraph-level sectioning command (`\part` … `\subparagraph`, per the
+    // signature DB's `sectioning` level) is a paragraph-separated block: one blank
+    // line before it and one after it, whatever trivia the author wrote. This is
+    // structural rather than an authored-newline preference, so
+    // `\subsection{X}\nprose` and `\subsection{X} prose` lay out identically.
     ("sectioning_starts_own_line", WrapMode::Reflow, 80),
-    // The trivia predicates the rule *may* read still hold around a heading: an
-    // authored blank line survives (none is added or removed), a `%` on the heading's
-    // own physical line rides it, and a `%` on its own line stays on its own line
-    // (where it binds forward as the heading's `DOC_COMMENT`).
+    // Comments retain their attachment while section boundaries normalize: a `%`
+    // on the heading's own physical line rides it, and a leading own-line `%` stays
+    // with the heading, with the blank separator placed before the whole command.
     ("sectioning_blank_line_and_comment", WrapMode::Reflow, 80),
     // A curated block-level command (`CommandSig::block`: `\usepackage`,
     // `\title`, `\setlength`, …) is a block-level statement like a heading: a
@@ -2528,7 +2526,7 @@ fn appendix_environment_keeps_body_flush() {
     let input = "\\begin{appendix}\n\\section{Proofs}\nText.\n\\end{appendix}\n";
     assert_eq!(
         format(input).expect("formats"),
-        "\\begin{appendix}\n\\section{Proofs}\nText.\n\\end{appendix}\n",
+        "\\begin{appendix}\n\\section{Proofs}\n\nText.\n\\end{appendix}\n",
         "appendix body must stay flush like document"
     );
     assert_format_invariants(input);

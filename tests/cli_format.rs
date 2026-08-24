@@ -178,7 +178,7 @@ fn dash_formats_stdin_to_stdout() {
     assert!(output.status.success(), "stdin should format cleanly");
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "\\section{Hi}\nsome text more\n"
+        "\\section{Hi}\n\nsome text more\n"
     );
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
@@ -194,7 +194,7 @@ fn piped_stdin_still_needs_no_dash() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "\\section{Hi}\nsome text more\n"
+        "\\section{Hi}\n\nsome text more\n"
     );
 }
 

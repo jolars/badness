@@ -27,6 +27,20 @@ fn lint(src: &str) -> Vec<(&'static str, Severity)> {
         .collect()
 }
 
+#[test]
+fn extra_alignment_tab_runs_through_the_public_driver() {
+    let findings = lint(
+        "\\begin{tabular}{ll}\n  a & b & c \\\\\n+\\end{tabular}\n\n\\begin{tabular}{lll}\n  a & b \\\\\n+\\end{tabular}\n",
+    );
+    assert_eq!(
+        findings
+            .into_iter()
+            .filter(|(rule, _)| *rule == "extra-alignment-tab")
+            .collect::<Vec<_>>(),
+        vec![("extra-alignment-tab", Severity::Error)]
+    );
+}
+
 /// Lint a whole `(path, source)` project through the driver exactly as the CLI's
 /// `run_lint` does: build every model first, resolve labels across the include
 /// graph and the package-option model across the members, then lint each file

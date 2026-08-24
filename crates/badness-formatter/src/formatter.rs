@@ -14,6 +14,7 @@ pub(crate) mod printer;
 pub mod sentence;
 pub mod style;
 
+pub use colspec::column_count;
 pub use core::{
     FormatError, declared_scope, format, format_node, format_node_range_with_signatures,
     format_node_range_with_signatures_sentence, format_node_with_signatures,

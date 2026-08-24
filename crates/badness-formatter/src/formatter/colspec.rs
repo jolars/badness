@@ -31,6 +31,16 @@ pub fn parse_column_spec(spec: &str) -> Option<Vec<ColAlign>> {
     Some(out)
 }
 
+/// Count the columns produced by a statically understood column specification.
+///
+/// This is the layout-independent projection used by diagnostics that compare a
+/// table row with its preamble. It deliberately inherits
+/// [`parse_column_spec`]'s conservative `None` for custom or malformed column
+/// types.
+pub fn column_count(spec: &str) -> Option<usize> {
+    parse_column_spec(spec).map(|columns| columns.len())
+}
+
 fn parse_into(chars: &[char], i: &mut usize, out: &mut Vec<ColAlign>) -> Option<()> {
     while *i < chars.len() {
         match chars[*i] {
@@ -120,6 +130,7 @@ mod tests {
     #[test]
     fn plain_lcr() {
         assert_eq!(parse_column_spec("lcr"), Some(vec![Left, Center, Right]));
+        assert_eq!(column_count("lcr"), Some(3));
     }
 
     #[test]

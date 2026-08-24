@@ -1,0 +1,25 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `extra-alignment-tab`
+
+Flags a row in a built-in `tabular`, `tabular*`, or `array` environment that consumes more columns than its column preamble declares. LaTeX cannot place the overflowing cell and reports an extra alignment tab. Short rows are valid and are not flagged. Custom column types and dynamic `\multicolumn` spans are left alone when their width cannot be established statically. No autofix is offered because either the row or the preamble may be wrong.
+
+A row that exceeds the declared table width:
+
+```tex
+\begin{tabular}{ll}
+  a & b & c \\
+\end{tabular}
+```
+
+```text
+error: extra-alignment-tab
+ --> example.tex:2:9
+  |
+1 | \begin{tabular}{ll}
+  |                 -- table preamble declares 2 columns
+2 |   a & b & c \\
+  |         ^ row uses at least 3 columns, but the table preamble declares 2
+```

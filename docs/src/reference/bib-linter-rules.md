@@ -36,6 +36,32 @@ warning: duplicate-key
   |       ^^^^^^^ cite key `knuth84` is defined more than once
 ```
 
+## `deprecated-suppression-syntax`
+
+Flag the retired `@comment{badness-ignore <rule>}` and `@comment{badness-ignore-file [<rule>]}` suppression spellings, which remain accepted for compatibility but are no longer documented. The Safe autofix rewrites only the family and verb to `badness-lint skip` or `badness-lint skip-file`; the selector, reason, delimiters, and remaining entry text stay byte-for-byte unchanged. This meta diagnostic is not silenced by the retired directive it reports; use `[lint].ignore` to disable the rule deliberately.
+
+A retired suppression directive in a structured comment:
+
+```bib
+@comment{badness-ignore unused-string: intentional}
+@string{x = {X}}
+```
+
+```text
+warning: deprecated-suppression-syntax
+ --> references.bib:1:10
+  |
+1 | @comment{badness-ignore unused-string: intentional}
+  |          ^^^^^^^^^^^^^^ retired suppression syntax; use `@comment{badness-lint skip …}` instead
+```
+
+After applying the fix:
+
+```bib
+@comment{badness-lint skip unused-string: intentional}
+@string{x = {X}}
+```
+
 ## `missing-required-field`
 
 Flag a regular entry lacking a field its type requires, per the biblatex data model. An alternation like `date` *or* `year` is satisfied by either, and classic-BibTeX aliases count (`journal` satisfies `journaltitle`). An entry type the built-in database does not know carries no signature and is never flagged. Report-only -- field content cannot be invented.

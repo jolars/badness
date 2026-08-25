@@ -109,6 +109,16 @@ pub struct Directive {
     pub deprecated: bool,
 }
 
+/// A parsed directive together with the exact token and family-name ranges that
+/// carried it. Consumers retain this syntax fact so diagnostics never need to
+/// parse comment text a second time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocatedDirective {
+    pub directive: Directive,
+    pub range: TextRange,
+    pub family_range: TextRange,
+}
+
 /// Read a directive out of a comment token's text. Returns `None` for an
 /// ordinary comment and for an unrecognized verb.
 ///
@@ -201,6 +211,7 @@ pub struct Suppressions {
     format: Vec<TextRange>,
     lint_all: Vec<TextRange>,
     lint_rules: BTreeMap<String, Vec<TextRange>>,
+    directives: Vec<LocatedDirective>,
 }
 
 /// A region opened by an `off` and waiting for its `on`.
@@ -225,6 +236,7 @@ impl Suppressions {
         let mut format = Vec::new();
         let mut lint_all = Vec::new();
         let mut lint_rules: BTreeMap<String, Vec<TextRange>> = BTreeMap::new();
+        let mut directives = Vec::new();
         // Regions are keyed by axis *and* rule: a `% badness-lint off` covering
         // every rule is not closed by a `% badness-lint on some-rule`, which
         // speaks for a strictly narrower thing.
@@ -243,6 +255,20 @@ impl Suppressions {
             let Some(directive) = parse_directive(token.text()) else {
                 continue;
             };
+            let family = directive_family(&directive);
+            let family_start = token
+                .text()
+                .find(family)
+                .expect("parsed directive contains its family name");
+            let token_start = usize::from(token.text_range().start());
+            directives.push(LocatedDirective {
+                directive: directive.clone(),
+                range: token.text_range(),
+                family_range: TextRange::new(
+                    TextSize::from((token_start + family_start) as u32),
+                    TextSize::from((token_start + family_start + family.len()) as u32),
+                ),
+            });
             let mut record = |range: TextRange, rule: &Option<String>| {
                 if directive.axis.covers_format() {
                     format.push(range);
@@ -335,6 +361,7 @@ impl Suppressions {
                 .into_iter()
                 .map(|(rule, ranges)| (rule, merge(ranges)))
                 .collect(),
+            directives,
         }
     }
 
@@ -357,6 +384,27 @@ impl Suppressions {
     /// Ranges in which one named rule is suppressed.
     pub fn lint_rule_ranges(&self) -> &BTreeMap<String, Vec<TextRange>> {
         &self.lint_rules
+    }
+
+    /// Parsed directives in source order, including directives that resolve to
+    /// no range (such as an unmatched `on`).
+    pub fn directives(&self) -> &[LocatedDirective] {
+        &self.directives
+    }
+}
+
+fn directive_family(directive: &Directive) -> &'static str {
+    if directive.deprecated {
+        return match directive.verb {
+            Verb::SkipFile => "badness-ignore-file",
+            Verb::Skip => "badness-ignore",
+            Verb::Off | Verb::On => unreachable!("retired directives have no region verbs"),
+        };
+    }
+    match directive.axis {
+        Axis::Format => "badness-format",
+        Axis::Lint => "badness-lint",
+        Axis::Both => "badness",
     }
 }
 
@@ -438,6 +486,20 @@ mod tests {
 
     fn suppressions_of(src: &str) -> Suppressions {
         Suppressions::build(&SyntaxNode::new_root(parse(src).green))
+    }
+
+    #[test]
+    fn retains_directives_with_their_carrier_ranges() {
+        let src = "% a note\n% badness-ignore deprecated-command: legacy\n\\bf\n";
+        let suppressions = suppressions_of(src);
+        let retained = suppressions.directives();
+
+        assert_eq!(retained.len(), 1);
+        assert!(retained[0].directive.deprecated);
+        assert_eq!(
+            &src[usize::from(retained[0].range.start())..usize::from(retained[0].range.end())],
+            "% badness-ignore deprecated-command: legacy"
+        );
     }
 
     fn slices<'a>(src: &'a str, ranges: &[TextRange]) -> Vec<&'a str> {

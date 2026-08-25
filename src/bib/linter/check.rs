@@ -3,7 +3,7 @@
 //! calls for `.bib` inputs.
 //!
 //! Suppression is a deliberate no-op here: bib has no comment token to carry a
-//! `% badness-ignore` directive (free text is `JUNK`, structured comments are
+//! `% badness-lint` directive (free text is `JUNK`, structured comments are
 //! `@comment`), so there is nothing to filter against yet. The seam is left where
 //! the LaTeX driver runs its `SuppressionMap`; see `TODO.md` for the deferral.
 
@@ -42,11 +42,13 @@ pub fn check_document(path: &Path, text: &str) -> Vec<Diagnostic> {
 /// argument (no bib rule is cross-file-sensitive yet) and the suppression filter
 /// (no carrier yet).
 pub fn lint_document(path: &Path, root: &SyntaxNode, model: &Model) -> Vec<Diagnostic> {
+    let suppress = BibSuppressionMap::build(root);
     let ctx = BibRuleContext {
         path,
         root,
         model,
         db: semantic::builtin(),
+        suppressions: &suppress,
     };
     let rules = all_rules();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -79,9 +81,10 @@ pub fn lint_document(path: &Path, root: &SyntaxNode, model: &Model) -> Vec<Diagn
         rule.check_file(&ctx, &mut diagnostics);
     }
 
-    // Filter out findings suppressed by a `@comment{badness-ignore …}` carrier.
-    let suppress = BibSuppressionMap::build(root);
-    diagnostics.retain(|d| !suppress.is_suppressed(d.rule, d.start, d.end));
+    // Filter out findings suppressed by a `@comment{badness-lint …}` carrier.
+    diagnostics.retain(|d| {
+        d.rule == "deprecated-suppression-syntax" || !suppress.is_suppressed(d.rule, d.start, d.end)
+    });
 
     for d in &mut diagnostics {
         d.path = path.to_path_buf();

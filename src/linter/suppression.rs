@@ -38,6 +38,10 @@ pub struct SuppressionMap {
 impl SuppressionMap {
     pub fn build(root: &SyntaxNode) -> Self {
         let resolved = crate::directives::Suppressions::build(root);
+        Self::from_suppressions(&resolved)
+    }
+
+    pub fn from_suppressions(resolved: &crate::directives::Suppressions) -> Self {
         Self {
             all_ranges: spans(resolved.lint_all_ranges()),
             rule_ranges: resolved

@@ -135,8 +135,10 @@ fn lint_with(
         rule.check_file(&ctx, &mut diagnostics);
     }
 
-    let suppress = SuppressionMap::build(root);
-    diagnostics.retain(|d| !suppress.is_suppressed(d.rule, d.start, d.end));
+    let suppress = SuppressionMap::from_suppressions(&ctx.suppressions);
+    diagnostics.retain(|d| {
+        d.rule == "deprecated-suppression-syntax" || !suppress.is_suppressed(d.rule, d.start, d.end)
+    });
 
     for d in &mut diagnostics {
         d.path = path.to_path_buf();
@@ -169,21 +171,21 @@ mod tests {
 
     #[test]
     fn node_directive_suppresses_following_command() {
-        let out = lint("% badness-ignore deprecated-command: legacy\n{\\bf x}\n");
+        let out = lint("% badness-lint skip deprecated-command: legacy\n{\\bf x}\n");
         assert!(out.is_empty(), "expected suppression, got: {out:?}");
     }
 
     #[test]
     fn node_directive_only_targets_named_rule() {
         // The directive names a different rule, so the `\bf` is still reported.
-        let out = lint("% badness-ignore duplicate-label: nope\n{\\bf x}\n");
+        let out = lint("% badness-lint skip duplicate-label: nope\n{\\bf x}\n");
         assert_eq!(rules_of_diags(&out), vec!["deprecated-command"]);
     }
 
     #[test]
     fn node_directive_does_not_leak_past_first_target() {
         // Only the first block is suppressed; a later `\it` still fires.
-        let out = lint("% badness-ignore deprecated-command: legacy\n{\\bf x}\n\n{\\it y}\n");
+        let out = lint("% badness-lint skip deprecated-command: legacy\n{\\bf x}\n\n{\\it y}\n");
         assert_eq!(rules_of_diags(&out), vec!["deprecated-command"]);
     }
 
@@ -194,7 +196,7 @@ mod tests {
         // child* of the `COMMAND` node, not a preceding sibling of it.
         let out = lint(
             "\\usepackage{amsmath}\n\
-             % badness-ignore duplicate-package: legacy, loaded twice on purpose\n\
+             % badness-lint skip duplicate-package: legacy, loaded twice on purpose\n\
              \\usepackage{amsmath}\n",
         );
         assert!(out.is_empty(), "expected suppression, got: {out:?}");
@@ -207,13 +209,13 @@ mod tests {
         // a range the old walk never reached at all (it stopped at the
         // `\cline` control word).
         let out =
-            lint("% badness-ignore dash-length: interval, not a numeric range\n\\cline{2-7}\n");
+            lint("% badness-lint skip dash-length: interval, not a numeric range\n\\cline{2-7}\n");
         assert!(out.is_empty(), "expected suppression, got: {out:?}");
     }
 
     #[test]
     fn file_directive_suppresses_all_occurrences() {
-        let out = lint("% badness-ignore-file deprecated-command: legacy\n{\\bf x}\n{\\it y}\n");
+        let out = lint("% badness-lint skip-file deprecated-command: legacy\n{\\bf x}\n{\\it y}\n");
         assert!(
             out.is_empty(),
             "expected file-wide suppression, got: {out:?}"

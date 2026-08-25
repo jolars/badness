@@ -14,9 +14,9 @@
 //! extract later" (`AGENTS.md`). A future shared linter-core crate parameterized
 //! over kind + context would lift both sides mechanically.
 //!
-//! **Suppression** is carried in `@comment{badness-ignore …}` entries (bib has no
+//! **Suppression** is carried in `@comment{badness-lint …}` entries (bib has no
 //! `%` line-comment token), parsed by [`suppression::BibSuppressionMap`] — the bib
-//! analog of the LaTeX `% badness-ignore` directive.
+//! analog of the LaTeX `% badness-lint` directive.
 //!
 //! [`SyntaxKind`]: crate::bib::syntax::SyntaxKind
 //! [`Model`]: crate::bib::semantic::Model

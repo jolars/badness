@@ -25,6 +25,7 @@ use crate::linter::diagnostic::{Diagnostic, Severity};
 // bib rules reuse the LaTeX linter's `Example` rather than duplicating it.
 pub use crate::linter::rules::Example;
 
+pub mod deprecated_suppression_syntax;
 pub mod duplicate_field;
 pub mod duplicate_key;
 pub mod edits;
@@ -36,6 +37,7 @@ pub mod undefined_string;
 pub mod unknown_field;
 pub mod unused_string;
 
+pub use deprecated_suppression_syntax::DeprecatedSuppressionSyntax;
 pub use duplicate_field::DuplicateField;
 pub use duplicate_key::DuplicateKey;
 pub use empty_field::EmptyField;
@@ -57,6 +59,7 @@ pub struct BibRuleContext<'a> {
     pub model: &'a Model,
     /// The built-in field/entry signature database ([`crate::bib::semantic::builtin`]).
     pub db: &'a BibFieldDb,
+    pub(crate) suppressions: &'a super::suppression::BibSuppressionMap,
 }
 
 /// A single bib lint. `Send + Sync` so the registry can be shared across a future
@@ -121,6 +124,7 @@ pub trait BibRule: Send + Sync {
 pub fn all_rules() -> Vec<Box<dyn BibRule>> {
     vec![
         Box::new(DuplicateKey),
+        Box::new(DeprecatedSuppressionSyntax),
         Box::new(MissingRequiredField),
         Box::new(UnknownField),
         Box::new(EmptyField),
@@ -135,6 +139,7 @@ pub fn all_rules() -> Vec<Box<dyn BibRule>> {
 /// The ids of every built-in bib rule. Kept in lockstep with [`all_rules`].
 pub const ALL_BIB_RULE_IDS: &[&str] = &[
     "duplicate-key",
+    "deprecated-suppression-syntax",
     "missing-required-field",
     "unknown-field",
     "empty-field",

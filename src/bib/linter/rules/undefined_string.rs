@@ -80,6 +80,7 @@ mod tests {
             root: &root,
             model: &model,
             db: crate::bib::semantic::builtin(),
+            suppressions: &crate::bib::linter::suppression::BibSuppressionMap::build(&root),
         };
         let mut out = Vec::new();
         UndefinedString.check_file(&ctx, &mut out);

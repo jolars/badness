@@ -31,7 +31,13 @@ use std::collections::HashMap;
 use rowan::NodeOrToken;
 
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
-use crate::directives::{Verb, parse_directive};
+use crate::directives::{Directive, Verb, parse_directive};
+
+#[derive(Debug, Clone)]
+pub(crate) struct LocatedDirective {
+    pub directive: Directive,
+    pub family_range: rowan::TextRange,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct BibSuppressionMap {
@@ -39,6 +45,7 @@ pub struct BibSuppressionMap {
     all_ranges: Vec<(usize, usize)>,
     /// `rule → byte ranges` for the rule-selective directives.
     rule_ranges: HashMap<String, Vec<(usize, usize)>>,
+    directives: Vec<LocatedDirective>,
 }
 
 /// A region opened by an `off` and waiting for its `on`.
@@ -62,6 +69,31 @@ impl BibSuppressionMap {
             let Some(directive) = parse_directive(body.trim()) else {
                 continue;
             };
+            let text = node.to_string();
+            let family = if directive.deprecated {
+                match directive.verb {
+                    Verb::Skip => "badness-ignore",
+                    Verb::SkipFile => "badness-ignore-file",
+                    Verb::Off | Verb::On => unreachable!("retired directives have no regions"),
+                }
+            } else {
+                match directive.axis {
+                    crate::directives::Axis::Format => "badness-format",
+                    crate::directives::Axis::Lint => "badness-lint",
+                    crate::directives::Axis::Both => "badness",
+                }
+            };
+            let relative = text
+                .find(family)
+                .expect("parsed directive contains its family name");
+            let start = usize::from(node.text_range().start()) + relative;
+            map.directives.push(LocatedDirective {
+                directive: directive.clone(),
+                family_range: rowan::TextRange::new(
+                    rowan::TextSize::from(start as u32),
+                    rowan::TextSize::from((start + family.len()) as u32),
+                ),
+            });
             if !directive.axis.covers_lint() {
                 continue;
             }
@@ -123,6 +155,10 @@ impl BibSuppressionMap {
         let covers =
             |ranges: &[(usize, usize)]| ranges.iter().any(|(rs, re)| *rs <= start && end <= *re);
         covers(&self.all_ranges) || self.rule_ranges.get(rule).is_some_and(|r| covers(r))
+    }
+
+    pub(crate) fn directives(&self) -> &[LocatedDirective] {
+        &self.directives
     }
 }
 

@@ -131,6 +131,32 @@ After applying the fix:
 {\bfseries important}
 ```
 
+## `deprecated-suppression-syntax`
+
+Flag the retired `% badness-ignore <rule>` and `% badness-ignore-file [<rule>]` suppression spellings, which remain accepted for compatibility but are no longer documented. The Safe autofix rewrites only the family and verb to `% badness-lint skip <rule>` or `% badness-lint skip-file [<rule>]`; the selector and reason remain byte-for-byte unchanged, and the edit stays entirely inside a comment. This meta diagnostic is not silenced by the retired directive it reports; use `[lint].ignore` to disable the rule deliberately.
+
+A retired suppression directive:
+
+```tex
+% badness-ignore deprecated-command: legacy source
+{\bf text}
+```
+
+```text
+warning: deprecated-suppression-syntax
+ --> example.tex:1:3
+  |
+1 | % badness-ignore deprecated-command: legacy source
+  |   ^^^^^^^^^^^^^^ retired suppression syntax; use `% badness-lint skip` instead
+```
+
+After applying the fix:
+
+```tex
+% badness-lint skip deprecated-command: legacy source
+{\bf text}
+```
+
 ## `missing-nonbreaking-space`
 
 Flag a plain space where a TeX tie (`~`) belongs, before a command whose output a line break would orphan: a bare-number reference (`Figure \ref{x}`, `\eqref`, `\pageref`) or a bracketed citation (`see \cite{a}`, `\parencite`, `\autocite`). A tie keeps the reference on the same line. Self-describing references (`\autoref`, `\cref`) and textual citations (`\textcite`, `\citet`) are not flagged -- they emit their own noun, so a break orphans nothing. Both a same-line space and a single source line break before the command are flagged (a blank line is not -- that starts a new paragraph). For a same-line space the fix is **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves it alone; `--unsafe-fixes` and the editor code action apply it. A line break is report-only: rewriting the newline to `~` would join the two lines, a reflow the formatter owns.

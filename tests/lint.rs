@@ -1,6 +1,6 @@
 //! End-to-end tests for the lint driver (`linter::lint_document`): the public
 //! entry both the CLI and the language server call. Exercises rule collection,
-//! cross-rule ordering, and `% badness-ignore` suppression over realistic
+//! cross-rule ordering, and `% badness-lint` suppression over realistic
 //! multi-line documents — complementing the focused per-rule unit tests in
 //! `src/linter/`.
 
@@ -283,7 +283,7 @@ fn clean_document_has_no_findings() {
 #[test]
 fn node_ignore_suppresses_only_the_next_block() {
     let src = "\
-% badness-ignore deprecated-command: legacy macro
+% badness-lint skip deprecated-command: legacy macro
 {\\bf one}
 
 {\\it two}
@@ -295,7 +295,7 @@ fn node_ignore_suppresses_only_the_next_block() {
 #[test]
 fn file_ignore_silences_a_rule_everywhere() {
     let src = "\
-% badness-ignore-file deprecated-command: legacy file
+% badness-lint skip-file deprecated-command: legacy file
 {\\bf one}
 {\\it two}
 \\label{a}\\label{a}
@@ -307,11 +307,34 @@ fn file_ignore_silences_a_rule_everywhere() {
 #[test]
 fn file_ignore_all_silences_everything() {
     let src = "\
-% badness-ignore-file: vendored
+% badness-lint skip-file: vendored
 {\\bf one}
 \\label{a}\\label{a}
 ";
     assert!(lint(src).is_empty());
+}
+
+#[test]
+fn retired_suppression_reports_and_fixes_end_to_end() {
+    let src = "% badness-ignore deprecated-command: legacy\n{\\bf one}\n";
+    assert_eq!(
+        lint(src),
+        vec![("deprecated-suppression-syntax", Severity::Warning)]
+    );
+    assert_eq!(
+        fix_to_fixpoint(src),
+        "% badness-lint skip deprecated-command: legacy\n{\\bf one}\n"
+    );
+    assert_fix_is_correct(src);
+}
+
+#[test]
+fn retired_file_suppression_cannot_hide_its_own_deprecation() {
+    let src = "% badness-ignore-file: vendored\n{\\bf one}\n";
+    assert_eq!(
+        lint(src),
+        vec![("deprecated-suppression-syntax", Severity::Warning)]
+    );
 }
 
 #[test]
@@ -376,7 +399,7 @@ code
 #[test]
 fn node_ignore_silences_a_stylistic_rule() {
     let src = "\
-% badness-ignore dollar-display-math: legacy snippet
+% badness-lint skip dollar-display-math: legacy snippet
 $$x = y$$
 ";
     assert!(lint(src).is_empty(), "got: {:?}", lint(src));

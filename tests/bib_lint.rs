@@ -111,10 +111,10 @@ fn phase_4b_rules_surface() {
 
 #[test]
 fn comment_directive_suppresses_following_entry() {
-    // A `@comment{badness-ignore …}` carrier suppresses the named rule on the next
+    // A `@comment{badness-lint skip …}` carrier suppresses the named rule on the next
     // entry only.
     let src = "\
-@comment{badness-ignore unused-string: intentional}
+@comment{badness-lint skip unused-string: intentional}
 @string{cup = {Cambridge University Press}}
 @string{other = {O}}
 ";
@@ -130,11 +130,32 @@ fn comment_directive_suppresses_following_entry() {
 #[test]
 fn file_directive_suppresses_all() {
     let src = "\
-@comment{badness-ignore-file: quiet}
+@comment{badness-lint skip-file: quiet}
 @string{a = {A}}
 @misc{k, title = {DNA}}
 ";
     assert!(rules(src).is_empty(), "got: {:?}", rules(src));
+}
+
+#[test]
+fn retired_suppression_reports_and_fixes_end_to_end() {
+    let src = "@comment{badness-ignore unused-string: intentional}\n@string{x = {X}}\n";
+    let diagnostics = check_document(Path::new("refs.bib"), src);
+    assert_eq!(
+        diagnostics.iter().map(|d| d.rule).collect::<Vec<_>>(),
+        vec!["deprecated-suppression-syntax"]
+    );
+    let fixes: Vec<_> = diagnostics.into_iter().filter_map(|d| d.fix).collect();
+    assert_eq!(
+        apply_fixes(src, &fixes, false).output,
+        "@comment{badness-lint skip unused-string: intentional}\n@string{x = {X}}\n"
+    );
+}
+
+#[test]
+fn retired_file_suppression_cannot_hide_its_own_deprecation() {
+    let src = "@comment{badness-ignore-file: vendored}\n@string{x = {X}}\n";
+    assert_eq!(rules(src), vec!["deprecated-suppression-syntax"]);
 }
 
 #[test]

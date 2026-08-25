@@ -1,0 +1,29 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `deprecated-suppression-syntax`
+
+Flag the retired `% badness-ignore <rule>` and `% badness-ignore-file [<rule>]` suppression spellings, which remain accepted for compatibility but are no longer documented. The Safe autofix rewrites only the family and verb to `% badness-lint skip <rule>` or `% badness-lint skip-file [<rule>]`; the selector and reason remain byte-for-byte unchanged, and the edit stays entirely inside a comment. This meta diagnostic is not silenced by the retired directive it reports; use `[lint].ignore` to disable the rule deliberately.
+
+A retired suppression directive:
+
+```tex
+% badness-ignore deprecated-command: legacy source
+{\bf text}
+```
+
+```text
+warning: deprecated-suppression-syntax
+ --> example.tex:1:3
+  |
+1 | % badness-ignore deprecated-command: legacy source
+  |   ^^^^^^^^^^^^^^ retired suppression syntax; use `% badness-lint skip` instead
+```
+
+After applying the fix:
+
+```tex
+% badness-lint skip deprecated-command: legacy source
+{\bf text}
+```

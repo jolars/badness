@@ -333,19 +333,6 @@ a file and a line, never a coordinate.
 
 ## BibTeX/BibLaTeX
 
-- [ ] **`deprecated-suppression-syntax`: report the retired `% badness-ignore`
-  family.** `% badness-ignore <rule>` and `% badness-ignore-file [<rule>]` are
-  undocumented but still resolve (permanently — a directive spelling is
-  user-facing API). Nothing tells a user their file carries the old spelling, so
-  a warning with a **safe** autofix rewriting to `% badness-lint skip <rule>` /
-  `% badness-lint skip-file <rule>` is the missing half of the deprecation. The
-  rewrite is entirely inside a comment, so it is textual, trivially lossless,
-  and needs no layout decision — exactly the fix contract. The fact is already
-  computed: `directives::Directive::deprecated` marks these at parse time, so the
-  rule needs `Suppressions` to retain the directives it saw (with the comment
-  token's range) rather than only the resolved ranges. Covers both carriers —
-  the `%` comment and the `.bib` `@comment{…}` entry.
-
 - [ ] **A meta rule for inert suppression directives.** Ruff's documented wart is
   that a misplaced `# fmt: off` does nothing and says nothing; badness now has
   the same hole. Report a `% badness…` directive that suppresses nothing: an

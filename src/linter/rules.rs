@@ -24,6 +24,7 @@ pub mod abbreviation_spacing;
 pub mod blank_line_in_keyval;
 pub mod dash_length;
 pub mod deprecated_command;
+pub mod deprecated_suppression_syntax;
 pub mod dollar_display_math;
 pub mod duplicate_label;
 pub mod duplicate_package;
@@ -57,6 +58,7 @@ pub use abbreviation_spacing::AbbreviationSpacing;
 pub use blank_line_in_keyval::BlankLineInKeyval;
 pub use dash_length::DashLength;
 pub use deprecated_command::DeprecatedCommand;
+pub use deprecated_suppression_syntax::DeprecatedSuppressionSyntax;
 pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
 pub use duplicate_package::DuplicatePackage;
@@ -131,6 +133,9 @@ pub struct RuleContext<'a> {
     /// [`RuleContext::user_definitions`] call, so a lint that never asks (the common
     /// case, since these rules ask only after matching a curated name) pays nothing.
     user_definitions: OnceLock<SignatureDb>,
+    /// Parsed suppression directives and their resolved ranges, computed once for
+    /// both meta rules and the driver's post-filter.
+    pub(crate) suppressions: crate::directives::Suppressions,
 }
 
 impl<'a> RuleContext<'a> {
@@ -156,6 +161,7 @@ impl<'a> RuleContext<'a> {
             conditionals: super::conditional::ConditionalIndex::compute(root),
             expl3_regions: OnceLock::new(),
             user_definitions: OnceLock::new(),
+            suppressions: crate::directives::Suppressions::build(root),
         }
     }
 
@@ -760,6 +766,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(BlankLineInKeyval),
         Box::new(DuplicateLabel),
         Box::new(DeprecatedCommand),
+        Box::new(DeprecatedSuppressionSyntax),
         Box::new(MissingNonbreakingSpace),
         Box::new(ObsoleteEnvironment),
         Box::new(PrimitiveCommand),
@@ -850,6 +857,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "blank-line-in-keyval",
     "duplicate-label",
     "deprecated-command",
+    "deprecated-suppression-syntax",
     "missing-nonbreaking-space",
     "obsolete-environment",
     "primitive-command",
@@ -889,10 +897,12 @@ pub const ALL_RULE_IDS: &[&str] = &[
 /// and the CLI silently drops it (the LSP, which doesn't post-filter, still shows
 /// them — the source of the CLI/LSP divergence).
 pub fn all_known_rule_ids() -> impl Iterator<Item = &'static str> {
-    ALL_RULE_IDS
-        .iter()
-        .copied()
-        .chain(crate::bib::linter::ALL_BIB_RULE_IDS.iter().copied())
+    ALL_RULE_IDS.iter().copied().chain(
+        crate::bib::linter::ALL_BIB_RULE_IDS
+            .iter()
+            .copied()
+            .filter(|id| !ALL_RULE_IDS.contains(id)),
+    )
 }
 
 /// The pseudo-rule id parse diagnostics carry. It is never a lint rule, so

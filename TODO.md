@@ -291,7 +291,7 @@ sources below are missing.
   out — that is where our rule is usually wrong. Run it at default settings
   (`latexindent probe.tex`, no `-s`) on a hand-authored probe; the committed
   `*-mod*.tex` files are one YAML stack's answer with `-m` on, not its own
-  judgment. Measured gaps against the 266 existing
+  judgment. Measured gaps against the 267 existing
   slugs: `items` (157 files) and bare/named brace groups are no longer thin;
   re-measure before trusting any gap list here. Beamer item
   overlays are covered by `list_item_overlay_prefix`. `mand-args` /
@@ -304,6 +304,9 @@ sources below are missing.
   verbatim-body environment's `\begin` line must never break under width
   pressure, since it defines where the protected body starts and `filecontents`'s
   optional is `Keyval` (which elsewhere licenses a comma split).
+  `environment_leading_body_command` pins that a command after a completed
+  `BEGIN` header starts the indented body even when authored on the header line;
+  the remaining environment and argument shapes are still open.
   Sectioning/`headings` is done (two slugs, and the Tier-1 lone-newline
   bug that lived there). `ifelsefi` (402 files) is done too, via the
   `CONDITIONAL` node under *Parser* and eight fixtures — do not re-derive a

@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 265 existing fixture slugs. **Re-measure before trusting
+Measured against the 267 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -229,14 +229,13 @@ family is about what its directory name suggests.
 
 Candidates not yet checked against a fresh count:
 
-1. **`items`** (157 corpus files) — 12 `list`/`item`-matching slugs after
-   `list_item_overlay_prefix`. Decent but not deep; the corpus family is much
-   larger than the coverage.
-2. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
-   partly mined (see `begin_tail_is_body` under Done); 24 and 19 slugs already
-   match `env`/`arg`, so verify against current slugs before picking.
-3. **`namedGroupingBracesBrackets`** (29), **`unnamed-braces`** (15) — small and
-   unexamined, but latexindent-specific concepts; read the files first.
+1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
+   partly mined (see `begin_tail_is_body` and
+   `environment_leading_body_command` under Done); 29 and 23 slugs now match
+   `env`/`arg`, so verify against current slugs before picking.
+
+`items` and bare/named brace groups are no longer thin; re-measure before
+returning either family to the ranked backlog.
 
 Off the list, on their content rather than their quality:
 
@@ -272,6 +271,15 @@ an inter-word space, since a paragraph trims its own leading newline — no orac
 sees this), and the A/B whitespace-collapse sweep that caught it is the only
 mechanical check for that class. It also surfaced a pre-existing glued-split bug
 in `reflow_elements` (recorded in TODO.md, not fixed here).
+
+Done: `environment_leading_body_command` — once the structural `BEGIN` header
+ends, a following command starts the indented environment body even when the
+author wrote it on the header line. The `environments/issue-508` shape exposed
+the missing lock-in; the formatter was already correct, so this landed a fixture
+and recorded rule without a production-code change. Default latexindent
+preserved both inline spellings (explained divergence: it does not add breaks),
+while an already-broken control corroborated the body placement and nesting
+depth.
 
 Done: `filecontents` (`filecontents_protected_body`) — no defect found; it pins
 that a verbatim-body environment's `\begin` line never breaks under width

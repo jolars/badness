@@ -178,6 +178,8 @@ comparison, not a byte target.
 - `.dtx` margin and guard escapes must fall back safely to preservation, and
   required `macrocode` framing bytes must remain literal.
 - Derive structural statement boundaries from parse structure under reflow.
+- In `lower_environment`, keep commands after a completed `BEGIN` header in the
+  indented body, even when the author wrote them on the header line.
 - Keep interior statement wrapping unit-aware and meaning-safe. Underivable
   fallbacks may preserve authored lines but must remain idempotent.
 - In `render_alignment_rows`, pad terminated grid rows to the full grid width so

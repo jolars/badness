@@ -566,6 +566,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // `Glued`-versus-not is the only trivia predicate read, so a lone newline
     // never reaches the decision.
     ("begin_tail_is_body", WrapMode::Reflow, 80),
+    // Once the structural `BEGIN` header ends, a following command is body even
+    // when authored on the header line; it starts on the environment's first
+    // indented body line with the prose that follows it.
+    ("environment_leading_body_command", WrapMode::Reflow, 80),
     // A `%` run on its *own* line(s) immediately before a command or environment
     // binds *leading* into that construct (the parser's leading comment-bind) and
     // is rendered on its own line above `\section` / `\begin`, at the construct's

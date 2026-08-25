@@ -21,16 +21,12 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable]
 
     steps:
       - uses: actions/checkout@v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-          targets: wasm32-unknown-unknown
+        run: rustup toolchain install
 
       - name: Cache cargo registry
         uses: actions/cache@v6
@@ -55,6 +51,30 @@ jobs:
       - name: Run formatter feature tests
         run: cargo test -p badness-formatter --features schema --verbose
 
+  msrv:
+    if: github.event_name != 'schedule'
+    name: MSRV (1.94)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust 1.94.1
+        run: |
+          rustup toolchain install 1.94.1 --profile minimal
+          rustup target add --toolchain 1.94.1 wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.94
+
+      - name: Check every host target and feature
+        run: cargo +1.94.1 check --workspace --all-targets --all-features --locked
+
+      - name: Check published libraries for Wasm
+        run: >
+          cargo +1.94.1 check -p badness-parser -p badness-formatter
+          --all-features --locked --target wasm32-unknown-unknown
+
   parser-properties:
     if: github.event_name == 'schedule'
     name: Parser Properties
@@ -63,7 +83,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -81,9 +102,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
+      - name: Install Rust
+        run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -179,7 +199,8 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_TOKEN }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        run: rustup toolchain install
 
       - id: versionary
         uses: jolars/versionary@v1

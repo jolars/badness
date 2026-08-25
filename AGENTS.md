@@ -40,8 +40,10 @@ Keep these boundaries intact:
 ## Development workflow
 
 - Prefer test-driven development.
-- Rust edition 2024 is used throughout; the toolchain is pinned in
-  `rust-toolchain.toml`.
+- Rust edition 2024 is used throughout. Keep the supported Rust 1.94 floor in
+  `workspace.package.rust-version`, its per-crate inheritance, and the MSRV CI
+  job in lockstep; `rust-toolchain.toml` separately pins the current development
+  and release compiler.
 - Use `go-task` through `Taskfile.yml` for project tasks.
 - Run targeted tests while developing and `cargo fmt` before committing.
 - Keep Clippy warning-free. Run `task check` before handing off a substantial

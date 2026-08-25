@@ -2469,8 +2469,10 @@ fn reflow_elements_checked(
                     && !after_block
                     && child.kind() == SyntaxKind::COMMAND
                     && command_is_inline(child, cx)
-                    && let Some(atoms) = inline_token_list_atoms(child, cx) =>
+                    && inline_token_list_atoms(child, cx).is_some() =>
             {
+                let atoms = inline_token_list_atoms(child, cx)
+                    .expect("match guard proved the inline token list");
                 for (index, atom) in atoms.into_iter().enumerate() {
                     if index > 0 {
                         b.flush_atom();

@@ -8,6 +8,7 @@ exclude = ["docs/doc-utils"]
 
 [workspace.package]
 edition = "2024"
+rust-version = "1.94"
 license = "MIT"
 repository = "https://github.com/jolars/badness"
 authors = ["Johan Larsson <johan@jolars.co>"]
@@ -16,6 +17,7 @@ authors = ["Johan Larsson <johan@jolars.co>"]
 name = "badness"
 version = "0.19.0"
 edition.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 description = "A language server, formatter, and linter for LaTeX"
 license.workspace = true

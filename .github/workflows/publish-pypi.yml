@@ -59,9 +59,9 @@ jobs:
 
       - name: Install Rust (non-Linux)
         if: runner.os != 'Linux'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
 
       - name: Cache Rust artifacts
         if: runner.os != 'Linux'

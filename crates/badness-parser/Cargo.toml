@@ -2,6 +2,7 @@
 name = "badness-parser"
 version = "0.5.0"
 edition.workspace = true
+rust-version.workspace = true
 readme = "README.md"
 description = "Lossless CST parser, semantic model, and command-signature database for LaTeX and BibTeX"
 license.workspace = true

@@ -85,9 +85,9 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2

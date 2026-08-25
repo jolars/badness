@@ -70,6 +70,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::SystemTime;
 
 use crossbeam_channel::{Receiver, Sender, never, select, unbounded};
 use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
@@ -348,9 +349,10 @@ struct GlobalState {
     editor_settings: EditorSettings,
     /// Per-document config resolutions, keyed by the document's **anchor directory**
     /// (its parent). A discovered `badness.toml` is authoritative; editor settings
-    /// are the fallback. Populated lazily by [`GlobalState::resolve_settings`] and
-    /// cleared wholesale on `didChangeConfiguration`.
-    config_cache: HashMap<PathBuf, ResolvedSettings>,
+    /// are the fallback. Each entry carries a filesystem fingerprint so clients that
+    /// cannot register watched files still notice config changes on normal activity.
+    /// The cache is also cleared wholesale on `didChangeConfiguration`.
+    config_cache: HashMap<PathBuf, CachedSettings>,
     /// The declarations the worker's salsa input currently holds — the last value
     /// [`GlobalState::analysis_settings`] sent it. The main loop keeps the mirror
     /// so it can send a [`WorkerJob::Declarations`] only when the value actually
@@ -516,6 +518,72 @@ struct ResolvedSettings {
     declarations: Arc<ResolvedDeclarations>,
 }
 
+/// The cheap part of a config file's identity. Modification time catches an
+/// in-place save; length catches writes on coarse-mtime filesystems when their
+/// size changes. Missing files are represented by `None` in the enclosing
+/// fingerprint, which also makes creation and deletion observable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigFileStamp {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+fn config_file_stamp(path: &Path) -> Option<ConfigFileStamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    metadata.is_file().then(|| ConfigFileStamp {
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+    })
+}
+
+/// Snapshot every project-config candidate consulted by the ancestor walk. The
+/// absent entries matter: if a nearer `badness.toml` is created, it must displace
+/// the cached parent, environment, global, or default configuration.
+fn project_config_fingerprint(anchor: &Path) -> Option<Vec<(PathBuf, Option<ConfigFileStamp>)>> {
+    let canonical = anchor.canonicalize().ok()?;
+    let mut fingerprint = Vec::new();
+    for dir in canonical.ancestors() {
+        let candidate = dir.join(crate::config::CONFIG_FILE_NAME);
+        let stamp = config_file_stamp(&candidate);
+        let found = stamp.is_some();
+        fingerprint.push((candidate, stamp));
+        if found || dir.join(".git").exists() {
+            break;
+        }
+    }
+    Some(fingerprint)
+}
+
+#[derive(Debug, Clone)]
+struct CachedSettings {
+    resolved: ResolvedSettings,
+    project_fingerprint: Option<Vec<(PathBuf, Option<ConfigFileStamp>)>>,
+    /// The resolved environment/global file may live outside the project walk.
+    source_fingerprint: Option<(PathBuf, Option<ConfigFileStamp>)>,
+}
+
+impl CachedSettings {
+    fn new(resolved: ResolvedSettings, anchor: &Path, source: Option<PathBuf>) -> Self {
+        let source_fingerprint = source.map(|path| {
+            let stamp = config_file_stamp(&path);
+            (path, stamp)
+        });
+        Self {
+            resolved,
+            project_fingerprint: project_config_fingerprint(anchor),
+            source_fingerprint,
+        }
+    }
+
+    fn is_fresh(&self, anchor: &Path) -> bool {
+        self.project_fingerprint == project_config_fingerprint(anchor)
+            && self
+                .source_fingerprint
+                .as_ref()
+                .is_none_or(|(path, stamp)| *stamp == config_file_stamp(path))
+    }
+}
+
 impl ResolvedSettings {
     /// Resolution from a discovered config (when `present`), else from the editor
     /// settings, applying the file-wins rule. The `exclude` filter is left
@@ -572,8 +640,9 @@ impl GlobalState {
     /// Resolve (and cache) the [`ResolvedSettings`] for `uri`'s document: discover a
     /// `badness.toml` from the document's anchor directory (its parent), falling back
     /// to the global user config (`~/.config/badness/config.toml`), then to the
-    /// editor settings when neither is found. Cached by anchor dir, so repeated
-    /// format/lint requests in a workspace pay the filesystem walk once.
+    /// editor settings when neither is found. Cached by anchor dir; cache hits
+    /// stat the small ancestor candidate set and the resolved source, but avoid
+    /// rereading, parsing, and rebuilding derived settings while it is unchanged.
     ///
     /// A non-`file` buffer (untitled) or a directory-less / unreadable / malformed
     /// config resolves to the editor settings and is **not** cached, so fixing a
@@ -583,12 +652,17 @@ impl GlobalState {
         else {
             return ResolvedSettings::from_editor(&self.editor_settings);
         };
-        if let Some(cached) = self.config_cache.get(&anchor) {
-            return cached.clone();
+        if let Some(cached) = self
+            .config_cache
+            .get(&anchor)
+            .filter(|cached| cached.is_fresh(&anchor))
+        {
+            return cached.resolved.clone();
         }
-        let resolved = match Config::resolve(None, false, &anchor) {
+        let (resolved, source_path) = match Config::resolve(None, false, &anchor) {
             Ok((config, source)) => {
                 let present = source.path().is_some();
+                let source_path = source.path().map(Path::to_path_buf);
                 let mut resolved =
                     ResolvedSettings::from_config(&config, present, &self.editor_settings);
                 if present {
@@ -615,13 +689,16 @@ impl GlobalState {
                         resolved.build.root = Some(root.join(build_root));
                     }
                 }
-                resolved
+                (resolved, source_path)
             }
             // No good channel to report a bad/unreadable config; fall back without
             // caching so a fix is picked up next time.
             Err(_) => return ResolvedSettings::from_editor(&self.editor_settings),
         };
-        self.config_cache.insert(anchor, resolved.clone());
+        self.config_cache.insert(
+            anchor.clone(),
+            CachedSettings::new(resolved.clone(), &anchor, source_path),
+        );
         resolved
     }
 
@@ -7981,6 +8058,30 @@ mod tests {
         assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
         state.config_cache.clear();
         assert_eq!(state.resolve_settings(&uri).style.line_width, 72);
+    }
+
+    #[test]
+    fn resolve_settings_detects_nearer_config_creation_and_deletion() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(repo.path().join(".git")).expect("create git boundary");
+        std::fs::write(
+            repo.path().join("badness.toml"),
+            "[format]\nline-width = 60\n",
+        )
+        .expect("write root config");
+        let nested = repo.path().join("chapters");
+        std::fs::create_dir(&nested).expect("create nested dir");
+        let uri = file_uri_in(&nested);
+        let mut state = state_with_editor(EditorSettings::default());
+
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
+
+        let nearer = nested.join("badness.toml");
+        std::fs::write(&nearer, "[format]\nline-width = 40\n").expect("write nearer config");
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
+
+        std::fs::remove_file(nearer).expect("remove nearer config");
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
     }
 
     #[test]

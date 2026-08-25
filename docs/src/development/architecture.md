@@ -176,6 +176,15 @@ TEXMF discovery is deliberately not a section here. Where a TeX installation
 lives is machine state rather than project data, so it arrives through editor
 settings.
 
+The language server caches resolved configuration per document directory, but
+does not make cache correctness depend on `workspace/didChangeWatchedFiles`.
+Each entry records the existence, modification time, and length of the
+`badness.toml` candidates examined by the ancestor walk and of any resolved
+fallback file. Normal document activity validates that fingerprint before using
+the entry. This catches edits, deletion, and creation of a nearer project config
+for clients such as Neovim that cannot dynamically register file watchers;
+watcher notifications remain the eager invalidation path.
+
 ### Declarations
 
 Most config only affects behavior after parsing. Environment declarations are

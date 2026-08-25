@@ -1870,6 +1870,58 @@ fn line_width_from_initialization_options() {
 }
 
 #[test]
+fn formatting_reloads_changed_config_without_watcher_support() {
+    // Neovim advertises no dynamic watched-file registration. A config edit must
+    // therefore become visible on the next request without relying on a
+    // `workspace/didChangeWatchedFiles` notification.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let config_path = dir.path().join("badness.toml");
+    std::fs::write(&config_path, "[format]\nline-width = 20\n").expect("write config");
+    let uri = path_to_file_uri(&dir.path().join("main.tex"));
+    let para = "alpha beta gamma delta epsilon zeta eta theta\n";
+
+    let (client, server_thread) = start_server(None);
+    did_open(&client, &uri, 1, para);
+    assert!(recv_diagnostics(&client).diagnostics.is_empty());
+
+    let narrow = one_formatting_edit(&client, &uri, 2);
+    let expected_narrow = format_with_style(
+        para,
+        FormatStyle {
+            line_width: 20,
+            ..FormatStyle::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(narrow.new_text, expected_narrow);
+
+    // Keep the byte length unchanged, matching `20` -> `40` in the reported bug,
+    // and move the mtime explicitly so the test is reliable on coarse filesystems.
+    std::fs::write(&config_path, "[format]\nline-width = 40\n").expect("rewrite config");
+    let modified = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+    std::fs::File::options()
+        .append(true)
+        .open(&config_path)
+        .unwrap()
+        .set_modified(modified + Duration::from_secs(2))
+        .unwrap();
+
+    let wide = one_formatting_edit(&client, &uri, 3);
+    let expected_wide = format_with_style(
+        para,
+        FormatStyle {
+            line_width: 40,
+            ..FormatStyle::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(wide.new_text, expected_wide);
+    assert_ne!(wide.new_text, narrow.new_text);
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn did_close_clears_and_allows_reopen() {
     let (client, server_thread) = start_server(None);
     let uri: Uri = "file:///close.tex".parse().unwrap();

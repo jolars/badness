@@ -92,6 +92,14 @@ jobs:
           cargo run --quiet --manifest-path docs/doc-utils/Cargo.toml \
             --bin sitemap -- docs/book https://badness.dev/
 
+      - name: Publish installers
+        run: |
+          install -m 0644 scripts/badness-installer.sh docs/book/install
+          install -m 0644 scripts/badness-installer.ps1 docs/book/install.ps1
+          cmp scripts/badness-installer.sh docs/book/install
+          cmp scripts/badness-installer.ps1 docs/book/install.ps1
+          sh -n docs/book/install
+
       - name: Upload Pages artifact
         if: >-
           github.event_name == 'workflow_dispatch' ||

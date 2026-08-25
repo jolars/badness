@@ -52,22 +52,23 @@ Badness is available from several sources:
   [Nixpkgs](https://search.nixos.org/packages?channel=unstable&show=badness&from=0&size=50&sort=relevance&type=packages)
 - **From source**: `cargo install --path .` in a checkout
 
-### Installation Scripts
+### Install Script
 
-If you prefer a one-liner installer that picks the right binary for your
-platform, you can use the installer scripts below.
+The installer scripts pick the right release artifact for your platform and
+install to a user-local directory by default. They download the matching Badness
+CLI release asset and verify its checksum. If you prefer, download and inspect
+the script before running it.
 
 For macOS and Linux:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf \
-    https://github.com/jolars/badness/releases/latest/download/badness-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://badness.dev/install | sh
 ```
 
 For Windows PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/jolars/badness/releases/latest/download/badness-installer.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://badness.dev/install.ps1 | iex"
 ```
 
 The VS Code/Open VSX extension bundles the `badness` binary and starts the

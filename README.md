@@ -72,7 +72,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://badness.dev/
 ```
 
 The VS Code/Open VSX extension bundles the `badness` binary and starts the
-language server automatically when you open a `.tex` file.
+language server automatically when you open a supported LaTeX or BibTeX file:
+`.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, or `.bib`.
 
 ## Usage
 

@@ -20,7 +20,7 @@ use rowan::{TextSize, TokenAtOffset};
 use crate::ast::command_name;
 use crate::declarations::ResolvedDeclarations;
 use crate::semantic::SemanticModel;
-use crate::semantic::builder::{is_cite_command, is_glossary_ref_command, ref_command};
+use crate::semantic::builder::{cite_command, is_glossary_ref_command, ref_command};
 use crate::semantic::completion::{
     arg_enum_values, class_names, color_models, color_names, package_names, pgf_libraries,
     tikz_libraries,
@@ -250,7 +250,7 @@ fn command_arg_context(
             prefix: prefix.to_string(),
         });
     }
-    if is_cite_command(semantic_name) && index == 0 {
+    if cite_command(semantic_name).is_some() && index == 0 {
         // A `\cite{a,b|}` completes the key after the last comma, like `\cref`.
         let inner = group_prefix(group, offset);
         let prefix = inner.rsplit(',').next().unwrap_or(&inner).trim_start();
@@ -994,6 +994,18 @@ mod tests {
                 prefix: "b".to_string()
             }
         );
+    }
+
+    #[test]
+    fn cite_prefixed_non_citation_commands_do_not_complete_keys() {
+        for name in ["citestyle", "citetext", "citebox", "citecolor"] {
+            let src = format!("\\{name}{{value}}\n");
+            let context = classify(&src, at(&src, "value"));
+            assert!(
+                !matches!(context, CompletionContext::CitationKey { .. }),
+                "{name} classified as a citation command"
+            );
+        }
     }
 
     #[test]

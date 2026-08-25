@@ -209,15 +209,6 @@ scope limits recorded at implementation time, not regressions.
   findings on ordinary layout environments; the float set is curated signature
   data precisely so this stays a data question.
 
-## Semantic layer & signatures
-
-- [ ] **`is_cite_command` accepts any `\cite*`-prefixed name**
-  (`semantic/builder.rs`): `\citebox` or `\citecolor` gets its argument
-  recorded as citation keys — an open-ended false-positive surface, unlike
-  the neighboring closed-table predicates. The doc comment describes the prefix
-  check but not why open-prefix recall is worth those false positives. Either
-  write that down or close the set.
-
 ## Language server
 
 ### Feature status vs LaTeX Workshop

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::parser::lexer::is_control_word_name;
-use crate::semantic::builder::{is_cite_command, ref_command};
+use crate::semantic::builder::{cite_command, ref_command};
 use crate::semantic::signature::{EnvironmentSig, SignatureDb, builtin};
 
 /// A control-word name as written in a declaration, stored **without** the
@@ -210,7 +210,7 @@ impl Declarations {
             // targets a wrapper most needs: that file carries layout data and omits
             // most of the ref/cite families, `\cpageref` — the only list-valued page
             // reference — among them.
-            if ref_command(target).is_none() && !is_cite_command(target) {
+            if ref_command(target).is_none() && cite_command(target).is_none() {
                 return Err(DeclarationError {
                     key: dotted_key(["commands", name, "like"]),
                     kind: DeclarationErrorKind::UnknownCommandLikeTarget {
@@ -490,7 +490,7 @@ pub enum DeclarationErrorKind {
 /// on `\cpageref` would demote a list-valued page reference to a single-key
 /// `\ref`, which is exactly what this gate exists to prevent.
 fn is_builtin_command(name: &str) -> bool {
-    builtin().command(name).is_some() || ref_command(name).is_some() || is_cite_command(name)
+    builtin().command(name).is_some() || ref_command(name).is_some() || cite_command(name).is_some()
 }
 
 /// The environment named by `spelling` when it is the written-out delimiter

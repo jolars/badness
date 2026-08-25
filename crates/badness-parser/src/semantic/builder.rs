@@ -100,7 +100,7 @@ enum KeyCommand {
     Reference(RefCommand),
     Glossary(GlossaryDefKind),
     Color(ColorDefKind),
-    Citation,
+    Citation(CiteCommand),
 }
 
 fn key_command(name: &str, semantic_name: &str) -> Option<KeyCommand> {
@@ -112,10 +112,8 @@ fn key_command(name: &str, semantic_name: &str) -> Option<KeyCommand> {
         Some(KeyCommand::Glossary(kind))
     } else if let Some(kind) = color_definer(name) {
         Some(KeyCommand::Color(kind))
-    } else if is_cite_command(semantic_name) {
-        Some(KeyCommand::Citation)
     } else {
-        None
+        cite_command(semantic_name).map(KeyCommand::Citation)
     }
 }
 
@@ -134,14 +132,14 @@ fn collect_key_command(
     let Some((inner_range, inner)) = nth_group_inner(command, 0) else {
         return true;
     };
-    if matches!(kind, KeyCommand::Citation) && semantic_name == "nocite" && inner.trim() == "*" {
+    if matches!(kind, KeyCommand::Citation(CiteCommand::Nocite)) && inner.trim() == "*" {
         model.nocite_all = true;
         return true;
     }
 
     let split = match kind {
         KeyCommand::Reference(kind) => kind.is_key_list(),
-        KeyCommand::Citation => true,
+        KeyCommand::Citation(_) => true,
         _ => false,
     };
     for (key, key_range) in key_spans(&inner, inner_range, split) {
@@ -172,7 +170,7 @@ fn collect_key_command(
                 range: first_group_range(command),
                 key_range,
             }),
-            KeyCommand::Citation => model.citations.push(CitationRef {
+            KeyCommand::Citation(_) => model.citations.push(CitationRef {
                 name: key,
                 command: SmolStr::new(name),
                 range: command.text_range(),
@@ -352,34 +350,34 @@ fn ranges_overlap(left: TextRange, right: TextRange) -> bool {
     left.start() < right.end() && right.start() < left.end()
 }
 
-/// Whether `name` is a citation command (`\cite` and the natbib/biblatex family,
-/// plus `\nocite`). Capitalized biblatex variants (`\Cite`, `\Textcite`, …) and
-/// the `cite`-prefixed natbib set are covered by the prefix check; an explicit
-/// short list catches the rest. Keys are comma-separated for all of them.
-pub fn is_cite_command(name: &str) -> bool {
-    const EXTRA: &[&str] = &[
-        "parencite",
-        "Parencite",
-        "footcite",
-        "footcitetext",
-        "textcite",
-        "Textcite",
-        "smartcite",
-        "Smartcite",
-        "autocite",
-        "Autocite",
-        "supercite",
-        "fullcite",
-        "footfullcite",
-        "nocite",
-        "notecite",
-        "Notecite",
-        "pnotecite",
-        "fnotecite",
-    ];
-    // The `\cite` family: `\cite`, `\citep`, `\citet`, `\citeauthor`,
-    // `\citeyear`, `\Citep`, … all begin with `cite`/`Cite`.
-    name.starts_with("cite") || name.starts_with("Cite") || EXTRA.contains(&name)
+/// The behavior of a curated citation command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiteCommand {
+    /// A command whose first braced argument is a comma-separated citation-key list.
+    Cite,
+    /// `\nocite`, whose key list additionally accepts the `*` wildcard.
+    Nocite,
+}
+
+/// The recognized citation command for a control-word name, or `None`.
+///
+/// This is a closed table because a `cite` prefix does not establish argument
+/// semantics: `\citestyle` and `\citetext`, for example, do not take citation
+/// keys. Multicite and volume-cite commands are also excluded because their
+/// repeated or shifted key groups need a different extractor.
+pub fn cite_command(name: &str) -> Option<CiteCommand> {
+    Some(match name {
+        "nocite" => CiteCommand::Nocite,
+        "cite" | "Cite" | "citep" | "Citep" | "citet" | "Citet" | "citealt" | "Citealt"
+        | "citealp" | "Citealp" | "citenum" | "citeauthor" | "Citeauthor" | "citefullauthor"
+        | "Citefullauthor" | "citeyear" | "citeyearpar" | "citetalias" | "citepalias"
+        | "parencite" | "Parencite" | "footcite" | "Footcite" | "footcitetext" | "Footcitetext"
+        | "textcite" | "Textcite" | "smartcite" | "Smartcite" | "autocite" | "Autocite"
+        | "supercite" | "fullcite" | "footfullcite" | "citetitle" | "Citetitle" | "citedate"
+        | "citeurl" | "notecite" | "Notecite" | "pnotecite" | "Pnotecite" | "fnotecite"
+        | "Fnotecite" | "citename" | "citelist" | "citefield" => CiteCommand::Cite,
+        _ => return None,
+    })
 }
 
 /// The recognized reference command for a control-word name, or `None`. A small
@@ -433,7 +431,7 @@ pub(crate) fn color_definer(name: &str) -> Option<ColorDefKind> {
 /// Whether `name` is a glossary/acronym *reference* command whose first `{…}`
 /// group is an entry key (`\gls`, `\acrshort`, `\glsxtrfull`, …). Shared with the
 /// completion classifier (`crate::completion`), like [`ref_command`] and
-/// [`is_cite_command`], so the name set has a single source of truth. Unlike
+/// [`cite_command`], so the name set has a single source of truth. Unlike
 /// citations, every command here takes exactly **one** key per group (no comma
 /// list).
 pub fn is_glossary_ref_command(name: &str) -> bool {
@@ -478,8 +476,7 @@ pub fn is_glossary_ref_command(name: &str) -> bool {
         return true;
     }
     // The acronym set: `\acrshort`/`\acrlong`/`\acrfull`, plural `pl`, in
-    // `acr`/`Acr`/`ACR` casing — a stem check like `is_cite_command`'s
-    // `cite`/`Cite` prefix trick.
+    // `acr`/`Acr`/`ACR` casing.
     for stem in ["acr", "Acr", "ACR"] {
         if let Some(rest) = name.strip_prefix(stem) {
             return matches!(
@@ -501,7 +498,7 @@ pub fn is_glossary_ref_command(name: &str) -> bool {
 pub fn key_argument_command(name: &str) -> bool {
     matches!(name, "label" | "tag" | "hyperref")
         || ref_command(name).is_some()
-        || is_cite_command(name)
+        || cite_command(name).is_some()
         || is_glossary_ref_command(name)
         || glossary_definer(name).is_some()
         || color_definer(name).is_some()
@@ -577,7 +574,7 @@ mod tests {
     use crate::parser::parse;
     use crate::syntax::SyntaxNode;
 
-    use super::build;
+    use super::{CiteCommand, build, cite_command};
 
     fn model(src: &str) -> crate::semantic::SemanticModel {
         build(&SyntaxNode::new_root(parse(src).green))
@@ -754,5 +751,39 @@ mod tests {
             .map(|c| (c.name.as_str(), &src[c.key_range]))
             .collect();
         assert_eq!(keys, vec![("foo", "foo"), ("bar", "bar")]);
+    }
+
+    #[test]
+    fn cite_prefixed_non_citation_commands_are_ignored() {
+        let model = model(
+            "\\citestyle{authoryear}\\citetext{see \\cite{real}}\\citebox{content}\\citecolor{blue}\n",
+        );
+        let names: Vec<_> = model
+            .citations()
+            .iter()
+            .map(|citation| citation.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["real"]);
+    }
+
+    #[test]
+    fn citation_command_table_is_closed_and_shape_specific() {
+        assert_eq!(cite_command("nocite"), Some(CiteCommand::Nocite));
+        for name in [
+            "cite",
+            "Citep",
+            "citenum",
+            "citetalias",
+            "Footcite",
+            "Autocite",
+            "Citetitle",
+            "Pnotecite",
+            "citefield",
+        ] {
+            assert_eq!(cite_command(name), Some(CiteCommand::Cite), "{name}");
+        }
+        for name in ["citestyle", "citetext", "cites", "volcite", "citebox"] {
+            assert_eq!(cite_command(name), None, "{name}");
+        }
     }
 }

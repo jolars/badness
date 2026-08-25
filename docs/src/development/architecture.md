@@ -259,13 +259,14 @@ tree.
 `like` is the main mechanism. Environment declarations copy a curated built-in
 entry, resolved against `builtin()`; command declarations copy only a curated
 ref/cite command's semantic family, resolved against the family tables
-(`ref_command`, `is_cite_command`). The command side deliberately does not
-consult `builtin()`: `signatures.json` carries layout data and has no entry for
-most of the families, `\cpageref` — the only list-valued page reference —
-included. Neither side resolves against CWL or scanned definitions. Unknown
-`like` targets are config errors, and a name either curated source already knows
-may not be redeclared, since that would reclassify a command the project never
-meant to touch.
+(`ref_command`, `cite_command`). Both are closed tables: spelling alone does not
+establish key semantics. The command side deliberately does not consult
+`builtin()`: `signatures.json` carries layout data and has no entry for most of
+the families, `\cpageref` — the only list-valued page reference — included.
+Neither side resolves against CWL or scanned definitions. Unknown `like` targets
+are config errors, and a name either curated source already knows may not be
+redeclared, since that would reclassify a command the project never meant to
+touch.
 
 `like` also stays category-local. Cross-category relationships (for example,
 command spellings that stand in for environment delimiters) use explicit keys

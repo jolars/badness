@@ -544,17 +544,6 @@ a file and a line, never a coordinate.
   APIs for the same reads with no forcing function is a standing invitation
   for new code to pick the wrong one.
 
-- [ ] **Share the cross-language boilerplate that is past due**: one
-  `SyntaxError` for `parser::core` and `bib::core` (two identical structs
-  today, a type-level fork consumers handle twice), an `impl_rowan_lang!`
-  macro for the duplicated `Language`/transmute boilerplate (leaves one
-  audited `unsafe` instead of two), and a compile-time `ROOT`-is-last
-  assertion making the "do not add variants after `ROOT`" comment
-  mechanical. Leave the rest of the bib parallel alone — it is disciplined,
-  self-labeled duplication with the unification path recorded in place, and
-  genericizing events/tree_builder/`Parser` at n=2 would be a premature
-  abstraction.
-
 ## Open decisions to revisit
 
 - [ ] How much of `\newcommand`/`xparse` to model for the signature DB.

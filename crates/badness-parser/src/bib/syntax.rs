@@ -6,14 +6,12 @@
 //! deliberately mirrors that module (`#[repr(u16)]`, tokens first, nodes after,
 //! `ROOT` last + `COUNT`) so the two stay easy to compare.
 
-use rowan::Language;
-
 /// Kinds of tokens (terminals, from the lexer) and nodes (composites, from the
 /// parser) in the BibTeX CST.
 ///
 /// Token kinds come first, node kinds after; `ROOT` is kept **last** so
-/// [`BibLang::kind_from_raw`] can bounds-check the raw discriminant with a single
-/// comparison. Do not add variants after `ROOT`.
+/// [`rowan::Language::kind_from_raw`] can bounds-check the raw discriminant with
+/// a single comparison. Keep the hidden end marker immediately after `ROOT`.
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
@@ -51,43 +49,22 @@ pub enum SyntaxKind {
     QUOTED,         // " … "  (may contain nested BRACE_GROUP)
     LITERAL,        // a bare word / number value piece (macro ref or number)
     ROOT,           // the file root  (keep LAST)
+    #[doc(hidden)]
+    __LAST,
 }
 
 impl SyntaxKind {
     /// The number of `SyntaxKind` variants. Sound because the enum is
     /// `#[repr(u16)]` with contiguous discriminants `0..=ROOT` and `ROOT` is kept
     /// last; used to size kind-indexed tables.
-    pub const COUNT: usize = SyntaxKind::ROOT as usize + 1;
-}
-
-impl From<SyntaxKind> for rowan::SyntaxKind {
-    fn from(kind: SyntaxKind) -> Self {
-        Self(kind as u16)
-    }
+    pub const COUNT: usize = SyntaxKind::__LAST as usize;
 }
 
 /// The rowan language marker for badness's BibTeX CST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BibLang {}
 
-impl Language for BibLang {
-    type Kind = SyntaxKind;
-
-    fn kind_from_raw(raw: rowan::SyntaxKind) -> SyntaxKind {
-        assert!(
-            raw.0 <= SyntaxKind::ROOT as u16,
-            "invalid bib SyntaxKind discriminant: {}",
-            raw.0
-        );
-        // SAFETY: `SyntaxKind` is `#[repr(u16)]` with contiguous discriminants
-        // `0..=ROOT`, and the assert above bounds `raw.0` into that range.
-        unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
-    }
-
-    fn kind_to_raw(kind: SyntaxKind) -> rowan::SyntaxKind {
-        kind.into()
-    }
-}
+impl_rowan_lang!(BibLang, SyntaxKind, "BibTeX");
 
 pub type SyntaxNode = rowan::SyntaxNode<BibLang>;
 pub type SyntaxToken = rowan::SyntaxToken<BibLang>;

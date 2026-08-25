@@ -1,14 +1,12 @@
 //! `SyntaxKind` — the kinds of CST tokens and nodes — and the rowan `Language`
 //! binding for badness's LaTeX surface CST.
 
-use rowan::Language;
-
 /// Kinds of tokens (terminals, from the lexer) and nodes (composites, from the
 /// parser) in the CST.
 ///
 /// Token kinds come first, node kinds after; `ROOT` is kept **last** so
-/// [`BadnessLang::kind_from_raw`] can bounds-check the raw discriminant with a
-/// single comparison. Do not add variants after `ROOT`.
+/// [`rowan::Language::kind_from_raw`] can bounds-check the raw discriminant with
+/// a single comparison. Keep the hidden end marker immediately after `ROOT`.
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
@@ -75,43 +73,22 @@ pub enum SyntaxKind {
     // paragraph content — recognition is retrospective and degrades silently.
     STATEMENT,
     ROOT, // the document root  (keep LAST)
+    #[doc(hidden)]
+    __LAST,
 }
 
 impl SyntaxKind {
     /// The number of `SyntaxKind` variants. Sound because the enum is
     /// `#[repr(u16)]` with contiguous discriminants `0..=ROOT` and `ROOT` is kept
     /// last; used to size kind-indexed tables (e.g. the linter's dispatch table).
-    pub const COUNT: usize = SyntaxKind::ROOT as usize + 1;
-}
-
-impl From<SyntaxKind> for rowan::SyntaxKind {
-    fn from(kind: SyntaxKind) -> Self {
-        Self(kind as u16)
-    }
+    pub const COUNT: usize = SyntaxKind::__LAST as usize;
 }
 
 /// The rowan language marker for badness's CST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BadnessLang {}
 
-impl Language for BadnessLang {
-    type Kind = SyntaxKind;
-
-    fn kind_from_raw(raw: rowan::SyntaxKind) -> SyntaxKind {
-        assert!(
-            raw.0 <= SyntaxKind::ROOT as u16,
-            "invalid SyntaxKind discriminant: {}",
-            raw.0
-        );
-        // SAFETY: `SyntaxKind` is `#[repr(u16)]` with contiguous discriminants
-        // `0..=ROOT`, and the assert above bounds `raw.0` into that range.
-        unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
-    }
-
-    fn kind_to_raw(kind: SyntaxKind) -> rowan::SyntaxKind {
-        kind.into()
-    }
-}
+impl_rowan_lang!(BadnessLang, SyntaxKind, "LaTeX");
 
 pub type SyntaxNode = rowan::SyntaxNode<BadnessLang>;
 pub type SyntaxToken = rowan::SyntaxToken<BadnessLang>;

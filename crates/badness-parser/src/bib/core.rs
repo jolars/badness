@@ -11,6 +11,8 @@ use crate::bib::lexer::lex;
 use crate::bib::syntax::SyntaxNode;
 use crate::bib::tree_builder::build_tree;
 
+pub use crate::SyntaxError;
+
 /// A parsed `.bib` file: the green tree plus any syntax errors gathered
 /// alongside it. Errors never abort the parse.
 #[derive(Debug, Clone)]
@@ -25,14 +27,6 @@ impl Parse {
     pub fn syntax(&self) -> SyntaxNode {
         SyntaxNode::new_root(self.green.clone())
     }
-}
-
-/// A syntax error, carried on a side channel keyed by byte range.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SyntaxError {
-    pub message: String,
-    pub start: usize,
-    pub end: usize,
 }
 
 /// Parse BibTeX/BibLaTeX source into a lossless CST.

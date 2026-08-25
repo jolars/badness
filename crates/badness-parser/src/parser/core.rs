@@ -17,6 +17,8 @@ use crate::semantic::define::scan_definitions;
 use crate::semantic::signature::builtin;
 use crate::syntax::SyntaxNode;
 
+pub use crate::SyntaxError;
+
 /// A green tree and the syntax errors gathered while parsing it.
 #[derive(Debug, Clone)]
 pub struct Parse {
@@ -29,14 +31,6 @@ impl Parse {
     pub fn syntax(&self) -> SyntaxNode {
         SyntaxNode::new_root(self.green.clone())
     }
-}
-
-/// A syntax error, carried on a side channel keyed by byte range.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SyntaxError {
-    pub message: String,
-    pub start: usize,
-    pub end: usize,
 }
 
 /// Parse LaTeX source into a lossless CST.

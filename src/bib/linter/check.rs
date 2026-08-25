@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::bib::parse;
 use crate::bib::semantic::{self, Model};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
-use crate::linter::diagnostic::{Diagnostic, Severity};
+use crate::linter::diagnostic::Diagnostic;
 
 use super::rules::{BibRuleContext, all_rules};
 use super::suppression::BibSuppressionMap;
@@ -23,22 +23,10 @@ use super::suppression::BibSuppressionMap;
 /// (notably the CLI) get everything in one call.
 pub fn check_document(path: &Path, text: &str) -> Vec<Diagnostic> {
     let parsed = parse(text);
-    // The bib `SyntaxError` is shape-identical to the LaTeX parser's but a distinct
-    // type, so build the parse `Diagnostic` inline rather than via
-    // `Diagnostic::from_parse` (which is typed to `crate::parser::SyntaxError`).
     let mut diagnostics: Vec<Diagnostic> = parsed
         .errors
         .iter()
-        .map(|err| Diagnostic {
-            rule: "parse",
-            severity: Severity::Error,
-            path: path.to_path_buf(),
-            start: err.start,
-            end: err.end,
-            message: err.message.clone(),
-            fix: None,
-            related: Vec::new(),
-        })
+        .map(|err| Diagnostic::from_parse(path.to_path_buf(), err))
         .collect();
     let root = parsed.syntax();
     let model = Model::build(&root);

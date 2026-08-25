@@ -331,6 +331,34 @@ warning: hard-coded-reference
   | ^^^^^^^ hard-coded reference `Table~1`; use `\ref`/`\cref` to a `\label` so the number stays in sync
 ```
 
+## `invalid-macrocode-frame`
+
+Flag a `.dtx` `macrocode` or `macrocode*` closing frame unless exactly four spaces separate its column-one `%` from `\end{…}`. The `doc` package scans for that literal physical delimiter, so a near match does not close the code chunk even though it looks like an ordinary environment to Badness. The safe autofix replaces only the malformed horizontal space with the required four spaces.
+
+A `macrocode` closer with only three spaces after `%`:
+
+```tex
+%    \begin{macrocode}
+\def\example{value}
+%   \end{macrocode}
+```
+
+```text
+error: invalid-macrocode-frame
+ --> example.dtx:3:2
+  |
+3 | %   \end{macrocode}
+  |  ^^^ `macrocode` closing frame requires exactly four spaces after `%`
+```
+
+After applying the fix:
+
+```tex
+%    \begin{macrocode}
+\def\example{value}
+%    \end{macrocode}
+```
+
 ## `straight-quotes`
 
 Flag a literal ASCII double quote (`"`) used for quotation. In LaTeX a straight `"` always sets a *closing* double quote, so an opening one comes out backwards; the correct forms are `` `` `` (two backticks) to open and `''` (two apostrophes) to close. A quotation is reported **once**, spanning both quotes, and its fix rewrites the pair in one atomic edit -- so a single editor code action repairs it from either end. A quote left unpaired (no closer before the paragraph ends) reports on its own. The fix is **unsafe**: it infers direction from context -- a quote preceded by whitespace, a line break, an opening delimiter (`(`, `[`, `{`), a backtick, or the start of the document opens, anything else closes -- and applies only under `--unsafe-fixes` or as an editor code action, since the guess can flip the typeset glyph. Single straight quotes (`'`) are left alone (they are legitimately apostrophes), and comments, verbatim, math, TeX hex constants (`"2D`), and `\pdfmapline` font maps are never touched.

@@ -1062,12 +1062,50 @@ fn sectioning_level_jump_flags_skipped_level() {
 /// Lint `src` at a chosen path (extension matters for the package rules) through
 /// the public driver, returning just the rule ids.
 fn lint_at(path: &str, src: &str) -> Vec<&'static str> {
-    let root = SyntaxNode::new_root(parse(src).green);
+    let kind = file_kind_or_tex(Path::new(path));
+    let root = SyntaxNode::new_root(parse_with_flavor(src, kind.lex_config()).green);
     let model = SemanticModel::build(&root);
     lint_document(Path::new(path), &root, &model, None, None, None)
         .into_iter()
         .map(|d| d.rule)
         .collect()
+}
+
+#[test]
+fn invalid_macrocode_frame_fixes_dtx_closer_end_to_end() {
+    let path = Path::new("pkg.dtx");
+    let src = "%    \\begin{macrocode}\n\\def\\foo{bar}\n%   \\end{macrocode}\n";
+    let kind = file_kind_or_tex(path);
+    let root = SyntaxNode::new_root(parse_with_flavor(src, kind.lex_config()).green);
+    let model = SemanticModel::build(&root);
+    let findings: Vec<_> = lint_document(path, &root, &model, None, None, None)
+        .into_iter()
+        .filter(|d| d.rule == "invalid-macrocode-frame")
+        .collect();
+
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].severity, Severity::Error);
+    let fixed = apply_fixes(
+        src,
+        std::slice::from_ref(findings[0].fix.as_ref().expect("a safe spacing fix")),
+        false,
+    )
+    .output;
+    assert_eq!(
+        fixed,
+        "%    \\begin{macrocode}\n\\def\\foo{bar}\n%    \\end{macrocode}\n"
+    );
+
+    let reparsed = parse_with_flavor(&fixed, kind.lex_config());
+    assert!(reparsed.errors.is_empty(), "{:#?}", reparsed.errors);
+    let root = SyntaxNode::new_root(reparsed.green);
+    assert_eq!(root.to_string(), fixed);
+    let model = SemanticModel::build(&root);
+    assert!(
+        lint_document(path, &root, &model, None, None, None)
+            .iter()
+            .all(|d| d.rule != "invalid-macrocode-frame")
+    );
 }
 
 #[test]

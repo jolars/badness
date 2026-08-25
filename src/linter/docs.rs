@@ -20,7 +20,7 @@ use crate::linter::diagnostic::{Diagnostic, Fix};
 use crate::linter::fix::apply_fixes;
 use crate::linter::render::{OutputMode, render_findings};
 use crate::linter::rules::{Example, Rule, all_rules};
-use crate::parser::{parse, parse_with_flavor};
+use crate::parser::parse_with_flavor;
 use crate::project::include::BibTarget;
 use crate::project::labels::{document_label_names, document_ref_names};
 use crate::project::{
@@ -72,7 +72,8 @@ pub fn demo_diagnostics_with(
     companions: &[(&str, &str)],
 ) -> Vec<Diagnostic> {
     let path = path.to_path_buf();
-    let root = SyntaxNode::new_root(parse(source).green);
+    let root =
+        SyntaxNode::new_root(parse_with_flavor(source, file_kind_or_tex(&path).lex_config()).green);
     let model = SemanticModel::build(&root);
 
     let mut option_facts: Vec<PackageOptionFacts> = package_option_facts(&path, &root, &model)

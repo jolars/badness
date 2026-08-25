@@ -169,17 +169,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ### Rules
 
-- [ ] **Lint malformed `.dtx` `macrocode` closing frames.** The `doc` package
-  terminates a code chunk by scanning for the literal physical line
-  `%    \end{macrocode}` (or its starred form), with exactly four spaces after
-  the column-one `%`; Badness currently parses near misses with a different
-  space count as ordinary, clean `ENVIRONMENT` nodes. Add a `.dtx`-only
-  `invalid-macrocode-frame` file check that reports such near matches as errors.
-  The opener's four-space spelling is conventional rather than the critical
-  delimiter, so do not report it at error severity. Start without an autofix,
-  or restrict a `Safe` fix to a column-one `%` whose horizontal space is the
-  only malformed part. A related, separate candidate is an indented `%<...>`
-  marker: docstrip recognizes a guard only at column zero.
+- [ ] **Lint indented `.dtx` docstrip guards.** Docstrip recognizes `%<...>`
+  markers only at column zero; report indented near matches without treating them
+  as guards.
 
 - [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
   LaTeX Workshop adds no lint rules of its own (it only shells out to

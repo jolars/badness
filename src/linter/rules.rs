@@ -30,6 +30,7 @@ pub mod duplicate_package;
 pub mod ellipsis;
 pub mod extra_alignment_tab;
 pub mod hard_coded_reference;
+pub mod invalid_macrocode_frame;
 pub mod label_before_caption;
 pub mod makeat_macro;
 pub mod math_operator_name;
@@ -62,6 +63,7 @@ pub use duplicate_package::DuplicatePackage;
 pub use ellipsis::Ellipsis;
 pub use extra_alignment_tab::ExtraAlignmentTab;
 pub use hard_coded_reference::HardCodedReference;
+pub use invalid_macrocode_frame::InvalidMacrocodeFrame;
 pub use label_before_caption::LabelBeforeCaption;
 pub use makeat_macro::MakeatMacro;
 pub use math_operator_name::MathOperatorName;
@@ -765,6 +767,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(Ellipsis),
         Box::new(ExtraAlignmentTab),
         Box::new(HardCodedReference),
+        Box::new(InvalidMacrocodeFrame),
         Box::new(StraightQuotes),
         Box::new(SwallowedSpace),
         Box::new(SpaceBeforeCommand),
@@ -854,6 +857,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "ellipsis",
     "extra-alignment-tab",
     "hard-coded-reference",
+    "invalid-macrocode-frame",
     "straight-quotes",
     "swallowed-space",
     "space-before-command",

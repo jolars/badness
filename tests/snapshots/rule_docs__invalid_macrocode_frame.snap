@@ -1,0 +1,31 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `invalid-macrocode-frame`
+
+Flag a `.dtx` `macrocode` or `macrocode*` closing frame unless exactly four spaces separate its column-one `%` from `\end{…}`. The `doc` package scans for that literal physical delimiter, so a near match does not close the code chunk even though it looks like an ordinary environment to Badness. The safe autofix replaces only the malformed horizontal space with the required four spaces.
+
+A `macrocode` closer with only three spaces after `%`:
+
+```tex
+%    \begin{macrocode}
+\def\example{value}
+%   \end{macrocode}
+```
+
+```text
+error: invalid-macrocode-frame
+ --> example.dtx:3:2
+  |
+3 | %   \end{macrocode}
+  |  ^^^ `macrocode` closing frame requires exactly four spaces after `%`
+```
+
+After applying the fix:
+
+```tex
+%    \begin{macrocode}
+\def\example{value}
+%    \end{macrocode}
+```

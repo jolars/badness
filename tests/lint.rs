@@ -1149,7 +1149,7 @@ fn label_before_caption_is_reported_end_to_end() {
 
 #[test]
 fn label_before_caption_fix_clears_the_finding() {
-    let src = "\\begin{figure}\n  \\includegraphics{a}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n";
+    let src = "\\begin{figure}\n  \\begin{subfigure}{b}\n    \\caption{Sub}\n  \\end{subfigure}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n";
     let fixed = fix_to_fixpoint(src);
     let remaining: Vec<_> = check_document(
         Path::new("doc.tex"),
@@ -1172,6 +1172,7 @@ fn label_before_caption_fix_is_correct() {
         "\\begin{figure}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n",
         "\\begin{table}\\label{t}\\caption{C}\\end{table}\n",
         "\\begin{figure}\n  x \\label{a} y\n  \\caption{C}\n\\end{figure}\n",
+        "\\begin{figure}\n  \\subcaptionbox{Sub}{x}\n  \\label{a}\n  \\caption{C}\n\\end{figure}\n",
         "\\begin{figure}\n  \\caption{Cap}\n  \\label{fig:x}\n\\end{figure}\n",
     ] {
         assert_fix_is_correct(case);

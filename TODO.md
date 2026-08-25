@@ -209,15 +209,6 @@ scope limits recorded at implementation time, not regressions.
   findings on ordinary layout environments; the float set is curated signature
   data precisely so this stays a data question.
 
-- [ ] **`label-before-caption` misses the nested-subfigure case.** The detection
-  cutoff is the first counter-stepping command at *any* depth, so a `subfigure`'s
-  own `\caption` silences a later statement-level `\label` in the outer float —
-  which really does capture the sub-counter. Deliberate: the liberal cutoff is
-  what keeps `\subcaptionbox` and the `\caption{Text\label{x}}` idiom from
-  producing false positives. Recovering the miss needs a per-scope stepper model
-  that knows *which* counter each caption stepped, so it is a modeling change
-  rather than a gate tweak.
-
 ## Semantic layer & signatures
 
 - [ ] **`is_cite_command` accepts any `\cite*`-prefixed name**

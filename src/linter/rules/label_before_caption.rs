@@ -22,14 +22,13 @@
 //!   subfigure. Neither may be touched, and greedy argument attachment
 //!   (AGENTS.md decision #8) makes "which command owns this group" too soft to
 //!   lean on, so anything below statement level is skipped wholesale.
-//! - **Any counter-stepping command before the label silences it**, at *any*
-//!   depth: a `\caption`-family command or a hand-rolled
-//!   `\refstepcounter`/`\stepcounter` may already have set `\@currentlabel`. That
-//!   costs a true positive when the earlier caption belongs to a nested
-//!   `subfigure` (the outer `\label` really is wrong there), which is the
-//!   preferred direction — a miss over an invented finding.
-//! - **A float with no caption at all is never flagged**: there is no counter to
-//!   attach to and no place to move the label, so the shape is left alone.
+//! - **Counter steps are classified against the outer float.** A nested
+//!   `subfigure`/`subtable` caption and `\subcaption`-family commands step a
+//!   sub-counter, so they do not silence an outer label. Dynamic counter names,
+//!   unrecognized nested scopes, starred captions, and `\stepcounter` remain
+//!   conservative barriers: uncertainty costs a miss, not an invented finding.
+//! - **A float with no caption or counter step is never flagged**: there is no
+//!   evidence of a numbered target, so the shape is left alone.
 //!
 //! **Unsafe autofix**, when a target exists: delete the `\label` and re-insert it
 //! immediately after the first statement-level `\caption`. It is `Unsafe` because
@@ -48,7 +47,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{AstNode, Environment, command_name};
+use crate::ast::{AstNode, Environment, command_name, nth_group_text};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 use crate::semantic::signature::{self, OutlineKind};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
@@ -60,11 +59,7 @@ const EXAMPLES: &[Example] = &[Example {
     source: "\\begin{figure}\n  \\includegraphics{plot}\n  \\label{fig:plot}\n  \\caption{A plot.}\n\\end{figure}\n",
 }];
 
-/// Commands that set `\@currentlabel` by typesetting a caption, so a `\label`
-/// after one is correctly attached. Curated: an entry only ever *silences* a
-/// finding, so a wrong one costs a miss rather than an invented diagnostic.
-/// Starred forms are not distinguished — `\caption*` does not step the counter,
-/// but treating it as though it does keeps the rule on the silent side.
+/// Commands that may set `\@currentlabel` by typesetting a caption.
 const CAPTION_COMMANDS: &[&str] = &[
     "caption",
     "captionof",
@@ -103,11 +98,12 @@ impl Rule for LabelBeforeCaption {
          prints a number unrelated to the float. LaTeX gives no warning. Scoped to \
          statement-level labels, so the recommended `\\caption{Text\\label{x}}` \
          idiom and a `\\subcaptionbox{A\\label{x}}{…}` subfigure label are never \
-         touched; any earlier caption or hand-rolled \
-         `\\refstepcounter`/`\\stepcounter` also silences it, and a float with no \
-         caption is left alone. The fix moves the label to just after the first \
-         statement-level `\\caption`, and is Unsafe because it changes what `\\ref` \
-         prints (by design) from an inferred intent."
+         touched. Captions that provably step a nested sub-counter do not hide a \
+         later outer label, while dynamic counter names, unknown scopes, starred \
+         captions, and `\\stepcounter` remain conservative cutoffs. The fix moves \
+         the label to just after the first statement-level caption proven to step \
+         the outer counter, and is Unsafe because it changes what `\\ref` prints \
+         (by design) from an inferred intent."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -125,18 +121,17 @@ impl Rule for LabelBeforeCaption {
         let Some(name) = float_name(float) else {
             return;
         };
+        let outer_counter = name.strip_suffix('*').unwrap_or(&name);
 
-        // Detection cutoff: the first counter-stepping command anywhere in the
-        // float. Nothing at or after it can be diagnosed, since `\@currentlabel`
-        // may legitimately already name this float (or a nested one).
-        let Some(cutoff) = first_stepper(float) else {
+        // Detection cutoff: the first command that may have stepped this float's
+        // own counter. Proven sub-counter steps do not silence an outer label.
+        let Some(cutoff) = outer_counter_cutoff(float, outer_counter) else {
             return; // no caption and no manual step: nothing to attach to.
         };
 
-        // Insertion target: the first *statement-level* caption. A nested
-        // subfigure's caption is not a legal destination — moving the label there
-        // would relabel the subfigure — so its absence means report-only.
-        let target = statement_level_captions(float).next();
+        // Only a statement-level caption proven to step the outer counter is a
+        // legal destination for the unsafe move.
+        let target = outer_caption_targets(float, outer_counter).next();
 
         for label in float.descendants() {
             if label.kind() != SyntaxKind::COMMAND {
@@ -162,8 +157,8 @@ impl Rule for LabelBeforeCaption {
                 start,
                 end: usize::from(label.text_range().end()),
                 message: format!(
-                    "`\\label` before `\\caption` in this `{name}` captures the enclosing \
-                     counter, not the float number"
+                    "`\\label` before the outer `\\caption` in this `{name}` does not \
+                     capture the float number"
                 ),
                 fix,
                 related: Vec::new(),
@@ -203,30 +198,109 @@ fn at_statement_level(node: &SyntaxNode, float: &SyntaxNode) -> bool {
     false
 }
 
-/// The start offset of the first counter-stepping command anywhere inside
-/// `float`. `descendants()` is preorder, so the first match is also the earliest.
-fn first_stepper(float: &SyntaxNode) -> Option<usize> {
-    float
-        .descendants()
-        .filter(|node| node.kind() == SyntaxKind::COMMAND)
-        .find(|node| {
-            command_name(node).is_some_and(|name| {
-                let bare = name.strip_suffix('*').unwrap_or(&name);
-                CAPTION_COMMANDS.contains(&bare) || COUNTER_STEPPERS.contains(&bare)
-            })
-        })
-        .map(|node| usize::from(node.text_range().start()))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CounterEffect {
+    Outer,
+    Other,
+    Unknown,
 }
 
-/// The float's statement-level caption commands, in document order.
-fn statement_level_captions(float: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> + '_ {
+/// The first command that may establish the outer float's label, or the end of
+/// the float when it contains only proven sub-counter steps. The latter keeps
+/// report-only findings for outer labels in caption-less floats that nevertheless
+/// contain a nested caption.
+fn outer_counter_cutoff(float: &SyntaxNode, outer_counter: &str) -> Option<usize> {
+    let mut saw_other = false;
+    for command in float
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::COMMAND)
+    {
+        match counter_effect(&command, float, outer_counter) {
+            Some(CounterEffect::Outer | CounterEffect::Unknown) => {
+                return Some(usize::from(command.text_range().start()));
+            }
+            Some(CounterEffect::Other) => saw_other = true,
+            None => {}
+        }
+    }
+    saw_other.then(|| usize::from(float.text_range().end()))
+}
+
+/// Statement-level captions proven to step the outer float's counter.
+fn outer_caption_targets<'a>(
+    float: &'a SyntaxNode,
+    outer_counter: &'a str,
+) -> impl Iterator<Item = SyntaxNode> + 'a {
     float.descendants().filter(move |node| {
         node.kind() == SyntaxKind::COMMAND
             && command_name(node).is_some_and(|name| {
                 CAPTION_COMMANDS.contains(&name.strip_suffix('*').unwrap_or(&name))
             })
             && at_statement_level(node, float)
+            && counter_effect(node, float, outer_counter) == Some(CounterEffect::Outer)
     })
+}
+
+/// Classify a command's effect on `\@currentlabel` relative to the outer float.
+/// Unknown effects are deliberately barriers, preserving the rule's silent-side
+/// bias for syntax or caption scopes that cannot be proved from source shape.
+fn counter_effect(
+    command: &SyntaxNode,
+    float: &SyntaxNode,
+    outer_counter: &str,
+) -> Option<CounterEffect> {
+    let name = command_name(command)?;
+    let bare = name.strip_suffix('*').unwrap_or(&name);
+    if !CAPTION_COMMANDS.contains(&bare) && !COUNTER_STEPPERS.contains(&bare) {
+        return None;
+    }
+    if name.ends_with('*') || bare == "stepcounter" {
+        return Some(CounterEffect::Unknown);
+    }
+
+    match bare {
+        "subcaption" | "subcaptionbox" => Some(CounterEffect::Other),
+        "captionof" | "refstepcounter" => Some(counter_argument_effect(command, outer_counter)),
+        "caption" | "captionlistentry" | "phantomcaption" => {
+            Some(caption_scope_effect(command, float))
+        }
+        _ => Some(CounterEffect::Unknown),
+    }
+}
+
+fn counter_argument_effect(command: &SyntaxNode, outer_counter: &str) -> CounterEffect {
+    match nth_group_text(command, 0) {
+        Some(counter) if counter.trim() == outer_counter => CounterEffect::Outer,
+        Some(_) => CounterEffect::Other,
+        None => CounterEffect::Unknown,
+    }
+}
+
+/// Plain caption commands use the current caption scope. Only the float's own
+/// statement level and the two standard subcaption environments are modeled;
+/// every other nested owner remains an unknown barrier.
+fn caption_scope_effect(command: &SyntaxNode, float: &SyntaxNode) -> CounterEffect {
+    let mut cursor = command.parent();
+    while let Some(current) = cursor {
+        if &current == float {
+            return CounterEffect::Outer;
+        }
+        match current.kind() {
+            SyntaxKind::PARAGRAPH => {}
+            SyntaxKind::ENVIRONMENT => {
+                let name = Environment::cast(current.clone())
+                    .and_then(|env| env.begin())
+                    .and_then(|begin| begin.name());
+                return match name.as_deref() {
+                    Some("subfigure" | "subtable") => CounterEffect::Other,
+                    _ => CounterEffect::Unknown,
+                };
+            }
+            _ => return CounterEffect::Unknown,
+        }
+        cursor = current.parent();
+    }
+    CounterEffect::Unknown
 }
 
 /// The two-edit move: delete the `\label` where it stands, re-insert it directly
@@ -404,9 +478,78 @@ mod tests {
     }
 
     #[test]
+    fn flags_outer_label_after_a_nested_subcaption() {
+        for (outer, inner) in [("figure", "subfigure"), ("table", "subtable")] {
+            let src = format!(
+                "\\begin{{{outer}}}\n  \\begin{{{inner}}}{{b}}\n    \\caption{{Sub}}\n  \\end{{{inner}}}\n  \\label{{outer:x}}\n  \\caption{{Outer}}\n\\end{{{outer}}}\n"
+            );
+            let out = findings(&src);
+            assert_eq!(out.len(), 1, "{outer}/{inner}");
+            assert_eq!(&src[out[0].start..out[0].end], "\\label{outer:x}");
+        }
+    }
+
+    #[test]
+    fn fix_targets_the_outer_caption_after_a_nested_subcaption() {
+        let src = "\\begin{figure}\n  \\begin{subfigure}{b}\n    \\caption{Sub}\n  \\end{subfigure}\n  \\label{fig:x}\n  \\caption{Outer}\n\\end{figure}\n";
+        assert_eq!(
+            fixed(src),
+            "\\begin{figure}\n  \\begin{subfigure}{b}\n    \\caption{Sub}\n  \\end{subfigure}\n  \\caption{Outer}\\label{fig:x}\n\\end{figure}\n"
+        );
+    }
+
+    #[test]
+    fn subcaptionbox_does_not_hide_an_outer_label_or_receive_its_fix() {
+        for src in [
+            "\\begin{figure}\n  \\subcaptionbox{Sub}{x}\n  \\label{fig:x}\n  \\caption{Outer}\n\\end{figure}\n",
+            "\\begin{figure}\n  \\label{fig:x}\n  \\subcaptionbox{Sub}{x}\n  \\caption{Outer}\n\\end{figure}\n",
+        ] {
+            assert_eq!(
+                fixed(src),
+                "\\begin{figure}\n  \\subcaptionbox{Sub}{x}\n  \\caption{Outer}\\label{fig:x}\n\\end{figure}\n"
+            );
+        }
+    }
+
+    #[test]
     fn silent_after_a_manual_refstepcounter() {
-        let src = "\\begin{figure}\n  \\refstepcounter{figure}\n  \\label{fig:x}\n  \
+        for env in ["figure", "figure*"] {
+            let src = format!(
+                "\\begin{{{env}}}\n  \\refstepcounter{{figure}}\n  \\label{{fig:x}}\n  \\caption{{Cap}}\n\\end{{{env}}}\n"
+            );
+            assert!(findings(&src).is_empty(), "{env}");
+        }
+    }
+
+    #[test]
+    fn a_different_manual_counter_does_not_hide_the_finding() {
+        let src = "\\begin{figure}\n  \\refstepcounter{subfigure}\n  \\label{fig:x}\n  \
                    \\caption{Cap}\n\\end{figure}\n";
+        assert_eq!(findings(src).len(), 1);
+    }
+
+    #[test]
+    fn an_unknown_manual_counter_remains_a_conservative_barrier() {
+        let src = "\\begin{figure}\n  \\refstepcounter{\\countername}\n  \\label{fig:x}\n  \
+                   \\caption{Cap}\n\\end{figure}\n";
+        assert!(findings(src).is_empty());
+    }
+
+    #[test]
+    fn captionof_is_matched_against_the_outer_counter() {
+        let matching = "\\begin{figure}\n  \\captionof{figure}{Earlier}\n  \\label{fig:x}\n  \
+                        \\caption{Later}\n\\end{figure}\n";
+        assert!(findings(matching).is_empty());
+
+        let different = "\\begin{figure}\n  \\captionof{table}{Table}\n  \\label{fig:x}\n  \
+                         \\caption{Figure}\n\\end{figure}\n";
+        assert_eq!(findings(different).len(), 1);
+    }
+
+    #[test]
+    fn starred_caption_remains_a_conservative_barrier() {
+        let src = "\\begin{figure}\n  \\caption*{Unnumbered}\n  \\label{fig:x}\n  \
+                   \\caption{Numbered}\n\\end{figure}\n";
         assert!(findings(src).is_empty());
     }
 

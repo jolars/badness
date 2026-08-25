@@ -278,6 +278,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn name_group_rejects_parameter_token() {
+        let mut builder = rowan::GreenNodeBuilder::new();
+        builder.start_node(SyntaxKind::NAME_GROUP.into());
+        builder.token(SyntaxKind::L_BRACE.into(), "{");
+        builder.token(SyntaxKind::HASH.into(), "#");
+        builder.token(SyntaxKind::WORD.into(), "1");
+        builder.token(SyntaxKind::R_BRACE.into(), "}");
+        builder.finish_node();
+        let group = NameGroup::cast(SyntaxNode::new_root(builder.finish())).unwrap();
+
+        assert_eq!(group.text(), None);
+        assert_eq!(group.range(), None);
+    }
+
     // --- Wrapper-native tests --------------------------------------------------
 
     #[test]

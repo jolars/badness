@@ -539,13 +539,6 @@ a file and a line, never a coordinate.
   specific node across edits) has no primitive for it, and byte-ranges alone do
   not survive edits.
 
-- [ ] **Collapse the four near-identical token walks in `ast/nodes.rs`**
-  (`Group::inner_text`/`inner`, `NameGroup::text`/`range`): all four walk
-  `children_with_tokens`, skip the delimiters, bail on nested nodes, and
-  accumulate text and/or a range. The drift risk is demonstrated, not
-  hypothetical — the issue-#104 `HASH` rejection made it into two of the
-  four. One shared helper.
-
 - [ ] **Mark the free-function AST shims `#[deprecated]`** (or file the
   removal issue) once the formatter/linter call sites migrate — two parallel
   APIs for the same reads with no forcing function is a standing invitation

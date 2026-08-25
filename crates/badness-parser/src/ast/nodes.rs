@@ -156,20 +156,7 @@ impl Group {
     /// parameter token (`\ref{#1}`, `\eqref{##1}` — a macro-parameter template whose
     /// literal value exists only at expansion time).
     pub fn inner_text(&self) -> Option<SmolStr> {
-        let mut text = SmolStrBuilder::new();
-        for element in self.syntax.children_with_tokens() {
-            match element {
-                NodeOrToken::Token(token) => match token.kind() {
-                    SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
-                    SyntaxKind::HASH => return None,
-                    _ => text.push_str(token.text()),
-                },
-                // A nested node (e.g. a COMMAND) means the argument isn't a flat
-                // literal; treat the whole thing as unresolvable.
-                NodeOrToken::Node(_) => return None,
-            }
-        }
-        Some(text.finish())
+        Some(flat_inner(&self.syntax)?.text)
     }
 
     /// The byte range of the content *inside* this group (the span between the
@@ -184,34 +171,11 @@ impl Group {
     /// be sliced off the range by byte offset (used by the semantic builder to give
     /// each key in a `\cref{a,b}` its own precise span).
     pub fn inner(&self) -> Option<(TextRange, SmolStr)> {
-        let mut text = SmolStrBuilder::new();
-        let mut start: Option<TextSize> = None;
-        let mut end: Option<TextSize> = None;
-        // Fallback anchor for an empty group: the byte just after the opening brace.
-        let mut after_l_brace = self.syntax.text_range().start();
-        for element in self.syntax.children_with_tokens() {
-            match element {
-                NodeOrToken::Token(token) => match token.kind() {
-                    SyntaxKind::L_BRACE => after_l_brace = token.text_range().end(),
-                    SyntaxKind::R_BRACE => {}
-                    SyntaxKind::HASH => return None,
-                    _ => {
-                        let range = token.text_range();
-                        start.get_or_insert(range.start());
-                        end = Some(range.end());
-                        text.push_str(token.text());
-                    }
-                },
-                // A nested node means the argument isn't a flat literal; treat the
-                // whole thing as unresolvable, like `inner_text`.
-                NodeOrToken::Node(_) => return None,
-            }
-        }
-        let range = match (start, end) {
-            (Some(start), Some(end)) => TextRange::new(start, end),
-            _ => TextRange::empty(after_l_brace),
-        };
-        Some((range, text.finish()))
+        let inner = flat_inner(&self.syntax)?;
+        let range = inner
+            .range
+            .unwrap_or_else(|| TextRange::empty(inner.empty_anchor));
+        Some((range, inner.text))
     }
 
     /// The raw inner source of this group with its outer braces dropped, but *all*
@@ -256,43 +220,59 @@ pub(crate) fn inner_source_of(node: &SyntaxNode) -> String {
 
 impl NameGroup {
     /// The environment name — the literal text of this `NAME_GROUP`, braces dropped.
-    /// Returns `None` when it holds non-token content.
+    /// Returns `None` when it holds non-token content or a parameter token.
     pub fn text(&self) -> Option<String> {
-        let mut text = String::new();
-        for element in self.syntax.children_with_tokens() {
-            match element {
-                NodeOrToken::Token(token) => match token.kind() {
-                    SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
-                    _ => text.push_str(token.text()),
-                },
-                NodeOrToken::Node(_) => return None,
-            }
-        }
-        Some(text)
+        Some(flat_inner(&self.syntax)?.text.to_string())
     }
 
     /// The byte range of the name *inside* this `NAME_GROUP` (the span between the
     /// braces) — the location-aware counterpart to [`NameGroup::text`]. Returns
-    /// `None` when it holds a nested node or the name is empty (`\begin{}`, nothing to
-    /// highlight).
+    /// `None` when it holds a nested node or parameter token, or the name is empty
+    /// (`\begin{}`, nothing to highlight).
     pub fn range(&self) -> Option<TextRange> {
-        let mut start: Option<TextSize> = None;
-        let mut end: Option<TextSize> = None;
-        for element in self.syntax.children_with_tokens() {
-            match element {
-                NodeOrToken::Token(token) => match token.kind() {
-                    SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
-                    _ => {
-                        let range = token.text_range();
-                        start.get_or_insert(range.start());
-                        end = Some(range.end());
-                    }
-                },
-                NodeOrToken::Node(_) => return None,
-            }
-        }
-        Some(TextRange::new(start?, end?))
+        flat_inner(&self.syntax)?.range
     }
+}
+
+struct FlatInner {
+    text: SmolStr,
+    range: Option<TextRange>,
+    empty_anchor: TextSize,
+}
+
+/// Reads brace-delimited content only when it is a literal token sequence.
+/// Keeping rejection here ensures that text-only and range-aware accessors cannot
+/// disagree about which source shapes are resolvable.
+fn flat_inner(node: &SyntaxNode) -> Option<FlatInner> {
+    let mut text = SmolStrBuilder::new();
+    let mut start = None;
+    let mut end = None;
+    let mut empty_anchor = node.text_range().start();
+
+    for element in node.children_with_tokens() {
+        match element {
+            NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::L_BRACE => empty_anchor = token.text_range().end(),
+                SyntaxKind::R_BRACE => {}
+                SyntaxKind::HASH => return None,
+                _ => {
+                    let token_range = token.text_range();
+                    start.get_or_insert(token_range.start());
+                    end = Some(token_range.end());
+                    text.push_str(token.text());
+                }
+            },
+            NodeOrToken::Node(_) => return None,
+        }
+    }
+
+    Some(FlatInner {
+        text: text.finish(),
+        range: start
+            .zip(end)
+            .map(|(start, end)| TextRange::new(start, end)),
+        empty_anchor,
+    })
 }
 
 /// The environment an alias-delimiter node names: its bare `CONTROL_WORD` with the

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/jolars/badness/compare/badness-formatter-v0.5.0...badness-formatter-v0.6.0) (2026-08-25)
+
+### Features
+- **formatter:** separate section headings ([`a75a46e`](https://github.com/jolars/badness/commit/a75a46efb9e5affa891f0ca433a44409507b5abf))
+- **formatter:** align row terminators ([`7277610`](https://github.com/jolars/badness/commit/7277610c009de809144ae5fdfbd8b542a1e4823b))
+- **lint:** detect extra alignment tabs ([`1129686`](https://github.com/jolars/badness/commit/11296869acb904d5d00457e74421122bd503feb6))
+
+### Bug Fixes
+- **formatter:** keep scripted colon relations tight ([`77833dc`](https://github.com/jolars/badness/commit/77833dc6b80ec1e4c9f4c209d735388145ff7a90))
+- **formatter:** preserve colon relations ([`dbb64a2`](https://github.com/jolars/badness/commit/dbb64a29d381ce16f9ede755cdbb9b3c6a2d8af1))
+- **lsp:** scope range formatting to selection ([`4439eeb`](https://github.com/jolars/badness/commit/4439eeb417c72403f8df081256ba20988c81b459)), fixes [#149](https://github.com/jolars/badness/issues/149)
+- **formatter:** wrap long citation lists ([`8dbca9e`](https://github.com/jolars/badness/commit/8dbca9e4800b816424eee26c71fa747d475b3c67))
+
+### Dependencies
+- updated crates/badness-parser to v0.5.0
+
 ## [0.5.0](https://github.com/jolars/badness/compare/badness-formatter-v0.4.0...badness-formatter-v0.5.0) (2026-08-24)
 
 ### Features

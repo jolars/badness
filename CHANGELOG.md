@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.19.0](https://github.com/jolars/badness/compare/v0.18.0...v0.19.0) (2026-08-25)
+
+### Features
+- **linter:** check labels before list items ([`779e9cc`](https://github.com/jolars/badness/commit/779e9cc8492c252968c1dfdecc6a7b927a268b71))
+- **lint:** detect invalid macrocode frames ([`9be2612`](https://github.com/jolars/badness/commit/9be26120c82d3f60c9277781b5e4c17c9bbe23a4))
+- **ci:** scan arXiv source projects ([`c5e256b`](https://github.com/jolars/badness/commit/c5e256bc972ab2e340825eb68eccd20946ee3894)), ref [#152](https://github.com/jolars/badness/issues/152)
+- **formatter:** separate section headings ([`a75a46e`](https://github.com/jolars/badness/commit/a75a46efb9e5affa891f0ca433a44409507b5abf))
+- collect labels from environment options ([`df6f1f3`](https://github.com/jolars/badness/commit/df6f1f3eb336f906c0388794c7863f38a1714304))
+- add command declarations ([`c9effb8`](https://github.com/jolars/badness/commit/c9effb8ffa84d52c3043a4e25d5dfe9921194d64))
+- **lsp:** add table column refactor ([`def2998`](https://github.com/jolars/badness/commit/def299846b63117a15006db3e27a5889dc46afb6))
+- **formatter:** align row terminators ([`7277610`](https://github.com/jolars/badness/commit/7277610c009de809144ae5fdfbd8b542a1e4823b))
+- **lint:** detect extra alignment tabs ([`1129686`](https://github.com/jolars/badness/commit/11296869acb904d5d00457e74421122bd503feb6))
+
+### Bug Fixes
+- **formatter:** keep scripted colon relations tight ([`77833dc`](https://github.com/jolars/badness/commit/77833dc6b80ec1e4c9f4c209d735388145ff7a90))
+- **formatter:** preserve colon relations ([`dbb64a2`](https://github.com/jolars/badness/commit/dbb64a29d381ce16f9ede755cdbb9b3c6a2d8af1))
+- **lsp:** refresh cached config ([`27f22d0`](https://github.com/jolars/badness/commit/27f22d0261fcae03aedbae59b78b5cd4392e2960))
+- **parser:** close citation command set ([`e10aa54`](https://github.com/jolars/badness/commit/e10aa540cc1cb281bba6308e54a4847b6e4045a1))
+- **linter:** handle nested subfigure labels ([`bb0fed5`](https://github.com/jolars/badness/commit/bb0fed5552c64661b0d35b7e96afdf8653dbd66b))
+- **lsp:** scope range formatting to selection ([`4439eeb`](https://github.com/jolars/badness/commit/4439eeb417c72403f8df081256ba20988c81b459)), fixes [#149](https://github.com/jolars/badness/issues/149)
+- **formatter:** wrap long citation lists ([`8dbca9e`](https://github.com/jolars/badness/commit/8dbca9e4800b816424eee26c71fa747d475b3c67))
+- honor curated ref/cite families in declarations ([`a3aa4ba`](https://github.com/jolars/badness/commit/a3aa4bab04ebd14960ea8cc18efc67d125513b86))
+
+### Performance Improvements
+- firewall declarations by parse and semantic tier ([`ef61239`](https://github.com/jolars/badness/commit/ef61239fa203af274d8de25479dd2fff72a2e49f))
+
+### Dependencies
+- updated crates/badness-formatter to v0.6.0
+- updated crates/badness-parser to v0.5.0
+
 ## [0.18.0](https://github.com/jolars/badness/compare/v0.17.0...v0.18.0) (2026-08-24)
 
 ### Features

@@ -239,10 +239,6 @@ mod tests {
         assert_eq!(reconstruct(input), input);
     }
 
-    /// The resolved context is the one the *returned* tree was parsed under, which
-    /// for a two-pass file is the scanned one, not the seed. An incremental reparse
-    /// relexes fragments under it, so handing back the seed here would relex a
-    /// `\shellcmd{…}` call site as an ordinary group and disagree with the tree.
     #[test]
     fn the_resolved_context_carries_the_second_pass_scan() {
         let input = "\\newcommand\\shellcmd[1]{\\@makeother\\$#1}\n\\shellcmd{a_$b$}\n";
@@ -254,9 +250,6 @@ mod tests {
             ParseCtx::default(),
             "the scan found a verbatim definition, so the context must not be the seed"
         );
-        // The witness property: relexing the whole input under the resolved context
-        // reproduces the token run the tree holds. Under the seed it would not — the
-        // call site would lex as an ordinary group rather than a `VERB`.
         let relexed: String = lex_with(input, &ctx, LatexFlavor::Document.into())
             .iter()
             .map(|t| t.text.as_str())
@@ -268,9 +261,6 @@ mod tests {
         );
     }
 
-    /// The one-pass case still hands back a usable witness rather than nothing: the
-    /// seed and the scan compared equal, so either is the context the tree was
-    /// parsed under.
     #[test]
     fn the_resolved_context_is_the_seed_when_no_scan_contributes() {
         let input = "\\section{Hi}\n\nplain prose\n";
@@ -295,10 +285,6 @@ mod tests {
         assert!(parse.errors.is_empty());
     }
 
-    /// A named math environment (`equation`, flagged `math` in the built-in DB)
-    /// parses its body in math mode: a `MATH` node whose scripts become `SCRIPTED`,
-    /// exactly as `\[…\]`. Previously the body was a prose `PARAGRAPH` of loose
-    /// tokens.
     #[test]
     fn math_environment_body_is_a_math_node() {
         use crate::syntax::SyntaxKind;
@@ -321,9 +307,6 @@ mod tests {
         assert_eq!(reconstruct(input), input);
     }
 
-    /// An alignment math environment keeps its `&` columns and `\\` rows as
-    /// `AMPERSAND` / `LINE_BREAK` inside the `MATH` node, so the formatter's grid
-    /// builder still sees them.
     #[test]
     fn align_environment_keeps_grid_tokens_inside_math() {
         use crate::syntax::SyntaxKind;
@@ -345,8 +328,6 @@ mod tests {
         assert_eq!(reconstruct(input), input);
     }
 
-    /// A non-math environment (`itemize`, not flagged `math`) is unchanged: its body
-    /// stays a prose block with no `MATH` node.
     #[test]
     fn non_math_environment_body_is_unchanged() {
         use crate::syntax::SyntaxKind;
@@ -359,8 +340,6 @@ mod tests {
         assert_eq!(reconstruct(input), input);
     }
 
-    /// An unclosed math environment recovers at EOF (the `MATH` body ends, the
-    /// `ENVIRONMENT` closes) rather than looping or corrupting; losslessness holds.
     #[test]
     fn unclosed_math_environment_recovers() {
         use crate::syntax::SyntaxKind;

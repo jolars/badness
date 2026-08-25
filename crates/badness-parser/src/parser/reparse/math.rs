@@ -305,8 +305,6 @@ mod tests {
         assert_refuses(text, insert_after(text, "a", "% note"));
         assert_refuses(text, edit(7..8, "")); // opening `$`
 
-        // The inner environment survives this stray closer, but the enclosing
-        // display gate does not. The target must therefore include both.
         let nested = "\\[\n\\begin{matrix}\n0_a\n\\end{matrix}\n\\]\n";
         assert_refuses(nested, insert_after(nested, "a", "}"));
     }

@@ -589,7 +589,6 @@ mod tests {
         let model = model(src);
         let def = &model.labels()[0];
         assert_eq!(def.name, "sec:intro");
-        // The key range covers only the trimmed key, not the braces or padding.
         assert_eq!(&src[def.key_range], "sec:intro");
     }
 
@@ -653,9 +652,6 @@ mod tests {
 
     #[test]
     fn parameter_template_keys_are_skipped() {
-        // A key holding a macro-parameter token exists only at expansion time
-        // (issue #104: `\eqref{##1}` in an expl3 definition body). Skip it like a
-        // nested-macro key, for defs and refs alike.
         let model = model("\\def\\foo#1{\\label{#1}\\eqref{##1}\\cite{#1}}\n");
         assert!(model.labels().is_empty());
         assert!(model.refs().is_empty());
@@ -712,7 +708,6 @@ mod tests {
 
     #[test]
     fn glossary_nested_macro_key_skipped() {
-        // Like `\label{\foo}`: an unresolvable key is skipped, never guessed.
         let model = model("\\newacronym{\\foo}{F}{foo}\n");
         assert!(model.glossary_defs().is_empty());
     }

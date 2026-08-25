@@ -242,7 +242,6 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "\\foo");
         assert_eq!(items[0].code.len(), 1);
-        // The recorded range is the `macrocode` environment.
         let code = &src[items[0].code[0]];
         assert!(code.starts_with("\\begin{macrocode}"));
         assert!(code.contains("\\def\\foo{x}"));
@@ -267,7 +266,6 @@ mod tests {
 
     #[test]
     fn describe_macro_braceless() {
-        // The conventional doctools form takes its argument without braces.
         let items = assoc_of("% \\DescribeMacro\\foo does foo.\n");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "\\foo");
@@ -288,8 +286,6 @@ mod tests {
         let items = assoc_of(src);
         let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, vec!["\\outer", "\\inner"]);
-        // The outer construct's code stops at the nested `macro`: it owns only its
-        // own `macrocode`, not the inner one.
         let outer = &items[0];
         assert_eq!(outer.code.len(), 1);
         assert!(src[outer.code[0]].contains("\\def\\outer{o}"));
@@ -301,8 +297,6 @@ mod tests {
     #[test]
     fn empty_or_nested_macro_name_is_skipped() {
         assert!(assoc_of("% \\begin{macro}{}\n% \\end{macro}\n").is_empty());
-        // `{\foo\bar}` is not a single flat control word; environment name with a
-        // nested macro is likewise skipped.
         assert!(assoc_of("% \\DescribeEnv{\\foo}\n").is_empty());
     }
 

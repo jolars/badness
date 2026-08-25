@@ -1007,7 +1007,6 @@ mod tests {
     use crate::parser::{parse, reconstruct};
 
     fn db_of(src: &str) -> SignatureDb {
-        // New parser-adjacent feature: assert losslessness on every input.
         assert_eq!(reconstruct(src), src, "reconstruct must round-trip");
         scan_definitions(&SyntaxNode::new_root(parse(src).green))
     }
@@ -1053,10 +1052,6 @@ mod tests {
 
     #[test]
     fn secdef_redefinition_keeps_builtin_prose() {
-        // jss.cls does `\renewcommand{\section}{\secdef \jsssimplesec \jsssimplesecnn}`.
-        // The static scanner reads this as arity 0, but `\secdef` consumes the title at
-        // expansion time, so the trust gate must *not* record a 0-arg override — the
-        // curated built-in prose signature has to survive through the overlay.
         let db = db_of("\\renewcommand{\\section}{\\secdef \\a \\b}\n");
         assert!(
             db.command("section").is_none(),
@@ -1074,9 +1069,6 @@ mod tests {
 
     #[test]
     fn genuine_zero_arg_redefinition_downgrades_builtin() {
-        // A self-contained body with no delegation genuinely drops the argument, so the
-        // 0-arg reading is trustworthy and *must* override the built-in — the gate must
-        // not fire here (the failure mode the trust gate is careful to avoid).
         let db = db_of("\\renewcommand{\\section}{\\textbf{Fixed}}\n");
         let sig = db
             .command("section")
@@ -1089,9 +1081,6 @@ mod tests {
 
     #[test]
     fn secdef_redefinition_of_unknown_still_records() {
-        // The gate only protects a *curated built-in*: a delegating redefinition of a
-        // name with no built-in has nothing to preserve, so it records as normal (arity
-        // 0), keeping the name available to completion.
         let db = db_of("\\renewcommand{\\mysec}{\\secdef \\a \\b}\n");
         let sig = db.command("mysec").expect("unknown name is still recorded");
         assert!(sig.args.is_empty());
@@ -1136,8 +1125,6 @@ mod tests {
 
     #[test]
     fn unbraced_newcommand_extracted() {
-        // `\newcommand\foo[2]{…}` parses with `\foo` as a sibling carrying the `[2]`;
-        // the scanner reads the signature off that sibling.
         let db = db_of("\\newcommand\\foo[2]{#1#2}\n");
         let sig = db.command("foo").expect("foo defined");
         assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Brace, ArgKind::Brace]);
@@ -1161,7 +1148,6 @@ mod tests {
 
     #[test]
     fn unbraced_spaced_binds() {
-        // Trivia between the keyword and the name still binds.
         let db = db_of("\\newcommand \\foo[1]{x}\n");
         assert_eq!(db.command("foo").unwrap().args.len(), 1);
     }
@@ -1184,8 +1170,6 @@ mod tests {
 
     #[test]
     fn unbraced_stray_text_not_bound() {
-        // Non-trivia text between the keyword and a later command breaks the bind:
-        // neither name is a definition target.
         let db = db_of("\\newcommand foo \\bar{x}\n");
         assert!(db.command("foo").is_none());
         assert!(db.command("bar").is_none());
@@ -1199,7 +1183,6 @@ mod tests {
 
     #[test]
     fn garbage_definition_degrades_to_no_insert() {
-        // No name group at all: nothing inserted, no panic.
         let db = db_of("\\newcommand\n");
         assert!(db.command("foo").is_none());
     }
@@ -1218,8 +1201,6 @@ mod tests {
 
     #[test]
     fn verbatim_makeother_flagged() {
-        // `\@makeother\$` in the body others `$`, so the argument is verbatim. The
-        // single argument becomes the implicit verbatim one, leaving no leading args.
         let db = db_of("\\newcommand\\shellcmd[1]{\\@makeother\\$#1}\n");
         let sig = db.command("shellcmd").expect("shellcmd defined");
         assert!(sig.verbatim);
@@ -1228,30 +1209,24 @@ mod tests {
 
     #[test]
     fn verbatim_catcode_flagged() {
-        // A `\catcode … 12` ("other") assignment is the same signal.
         let db = db_of("\\newcommand\\shellcmd[1]{\\catcode 36=12 #1}\n");
         assert!(db.command("shellcmd").expect("shellcmd defined").verbatim);
     }
 
     #[test]
     fn unrelated_twelve_does_not_flag_catcode_assignment() {
-        // The category and the unrelated dimension must not combine into a
-        // catcode-othering signal.
         let db = db_of("\\newcommand\\ordinary[1]{\\catcode 36=\\active \\hspace{12pt}#1}\n");
         assert!(!db.command("ordinary").expect("ordinary defined").verbatim);
     }
 
     #[test]
     fn verbatim_dospecials_flagged() {
-        // The classic verbatim setup loop.
         let db = db_of("\\newcommand\\shellcmd[1]{\\let\\do\\@makeother\\dospecials #1}\n");
         assert!(db.command("shellcmd").expect("shellcmd defined").verbatim);
     }
 
     #[test]
     fn verbatim_keeps_leading_args() {
-        // Only the *final* argument is verbatim: a two-arg command keeps its first
-        // (leading) slot and drops the last as the implicit verbatim argument.
         let db = db_of("\\newcommand\\mycode[2]{\\@makeother\\$#1#2}\n");
         let sig = db.command("mycode").expect("mycode defined");
         assert!(sig.verbatim);
@@ -1260,19 +1235,14 @@ mod tests {
 
     #[test]
     fn verbatim_via_chained_helper() {
-        // The catcode signal lives in a helper the command calls, not in its own
-        // body; the chain is followed across scanned definitions.
         let db =
             db_of("\\newcommand\\setup{\\@makeother\\$}\\newcommand\\shellcmd[1]{\\setup#1}\n");
         assert!(db.command("shellcmd").expect("shellcmd defined").verbatim);
-        // The arity-0 helper itself takes no argument, so it is never flagged.
         assert!(!db.command("setup").expect("setup defined").verbatim);
     }
 
     #[test]
     fn verbatim_chain_cycle_terminates() {
-        // Mutually recursive helpers with no signal must terminate (visited guard)
-        // and flag neither command.
         let db = db_of("\\newcommand\\a[1]{\\b#1}\\newcommand\\b[1]{\\a#1}\n");
         assert!(!db.command("a").expect("a defined").verbatim);
         assert!(!db.command("b").expect("b defined").verbatim);
@@ -1286,26 +1256,19 @@ mod tests {
 
     #[test]
     fn verbatim_needs_an_argument() {
-        // An arity-0 command grabs no `{…}` of its own, so a catcode signal in its
-        // body does not make it a verbatim-*argument* command.
         let db = db_of("\\newcommand\\setup{\\@makeother\\$}\n");
         assert!(!db.command("setup").expect("setup defined").verbatim);
     }
 
     #[test]
     fn def_helper_chain_followed() {
-        // The helper is defined with `\def`; its body is now scanned, so the chain from
-        // `\shellcmd` through `\setup` to the catcode signal resolves and flags the caller.
         let db = db_of("\\def\\setup{\\@makeother\\$}\\newcommand\\shellcmd[1]{\\setup#1}\n");
         assert!(db.command("shellcmd").expect("shellcmd defined").verbatim);
-        // The arity-0 helper itself takes no argument, so it is never flagged.
         assert!(!db.command("setup").expect("setup defined").verbatim);
     }
 
     #[test]
     fn def_direct_verbatim_flagged() {
-        // A `\def` command whose own body others a special char is verbatim; its single
-        // parameter becomes the implicit verbatim argument, leaving no leading args.
         let db = db_of("\\def\\shellcmd#1{\\@makeother\\$#1}\n");
         let sig = db.command("shellcmd").expect("shellcmd defined");
         assert!(sig.verbatim);
@@ -1314,7 +1277,6 @@ mod tests {
 
     #[test]
     fn def_zero_params() {
-        // No parameter text: the body attaches as the name command's child group.
         let db = db_of("\\def\\foo{x}\n");
         let sig = db.command("foo").expect("foo defined");
         assert!(sig.args.is_empty());
@@ -1323,7 +1285,6 @@ mod tests {
 
     #[test]
     fn def_counts_params() {
-        // `#1#2` parameter text → arity 2, all mandatory brace slots.
         let db = db_of("\\def\\foo#1#2{#1#2}\n");
         let sig = db.command("foo").expect("foo defined");
         assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Brace, ArgKind::Brace]);
@@ -1331,7 +1292,6 @@ mod tests {
 
     #[test]
     fn def_variants_scanned() {
-        // `\edef`/`\gdef`/`\xdef` share `\def`'s shape and are scanned the same way.
         let db = db_of("\\edef\\a#1{x}\\gdef\\b{y}\\xdef\\c#1{\\@makeother\\$#1}\n");
         assert_eq!(db.command("a").expect("a defined").args.len(), 1);
         assert!(db.command("b").expect("b defined").args.is_empty());
@@ -1342,7 +1302,6 @@ mod tests {
 
     #[test]
     fn def_chain_through_def_helpers() {
-        // A `\def` → `\def` helper chain still reaches the signal and flags the caller.
         let db = db_of(
             "\\def\\inner{\\@makeother\\$}\\def\\outer{\\inner}\\newcommand\\cmd[1]{\\outer#1}\n",
         );
@@ -1359,8 +1318,6 @@ mod tests {
 
     #[test]
     fn env_makeother_flagged() {
-        // `\@makeother\$` in the begin-code others `$`, so the environment body is
-        // verbatim. The environment analog of `verbatim_makeother_flagged`.
         let db = db_of("\\newenvironment{shellenv}{\\@makeother\\$}{}\n");
         let sig = db.environment("shellenv").expect("shellenv defined");
         assert!(sig.verbatim_body);
@@ -1369,18 +1326,14 @@ mod tests {
 
     #[test]
     fn env_catcode_flagged() {
-        // A `\catcode … 12` ("other") assignment in the begin-code is the same signal.
         let db = db_of("\\newenvironment{shellenv}[1]{\\catcode 36=12 }{}\n");
         let sig = db.environment("shellenv").expect("shellenv defined");
         assert!(sig.verbatim_body);
-        // Declared args are kept (they are all leading; the body follows them).
         assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Brace]);
     }
 
     #[test]
     fn env_via_chained_helper() {
-        // The catcode signal lives in a helper the begin-code calls, not in the
-        // begin-code itself; the chain is followed through the command bodies map.
         let db =
             db_of("\\newcommand\\setup{\\@makeother\\$}\\newenvironment{shellenv}{\\setup}{}\n");
         assert!(
@@ -1392,7 +1345,6 @@ mod tests {
 
     #[test]
     fn env_without_signal_not_flagged() {
-        // An ordinary `\newenvironment` with no catcode setup stays reflowable.
         let db = db_of("\\newenvironment{remark}{\\par\\noindent\\textbf{Remark.}}{\\par}\n");
         let sig = db.environment("remark").expect("remark defined");
         assert!(!sig.verbatim_body);
@@ -1401,9 +1353,6 @@ mod tests {
 
     #[test]
     fn lstnewenvironment_flagged_verbatim() {
-        // A `listings` environment's body is verbatim by virtue of the defining
-        // command, with no catcode signal in the begin-code. The `[1][default]`
-        // optionals give it one optional runtime argument (`\begin{demo}[opts]`).
         let db = db_of("\\lstnewenvironment{demo}[1][code]{\\lstset{#1}}{}\n");
         let sig = db.environment("demo").expect("demo defined");
         assert!(sig.verbatim_body);
@@ -1421,7 +1370,6 @@ mod tests {
 
     #[test]
     fn defineverbatimenvironment_flagged_verbatim() {
-        // `fancyvrb`: the environment takes one optional `[key=val]` argument.
         let db = db_of("\\DefineVerbatimEnvironment{code}{Verbatim}{fontsize=\\small}\n");
         let sig = db.environment("code").expect("code defined");
         assert!(sig.verbatim_body);
@@ -1431,7 +1379,6 @@ mod tests {
 
     #[test]
     fn xparse_env_makeother_flagged() {
-        // `\NewDocumentEnvironment`: the begin-code is group 2 (after name and spec).
         let db = db_of("\\NewDocumentEnvironment{shellenv}{O{x}}{\\dospecials}{}\n");
         let sig = db.environment("shellenv").expect("shellenv defined");
         assert!(sig.verbatim_body);
@@ -1507,7 +1454,6 @@ mod tests {
 
     #[test]
     fn def_site_keeps_every_redefinition() {
-        // Unlike `scan_definitions` (last wins), every site is a navigation target.
         let src = "\\newcommand{\\foo}{a}\n\\renewcommand{\\foo}{b}\n";
         let sites = sites_of(src);
         assert_eq!(sites.len(), 2);
@@ -1521,9 +1467,6 @@ mod tests {
         assert!(sites_of("\\newenvironment{}{a}{b}\n").is_empty());
     }
 
-    // --- environment aliases ------------------------------------------------
-
-    /// A `\begin{X}`/`\end{X}` pair defined with `\newcommand`, the issue-#109 shape.
     const EQNARRAY_PAIR: &str =
         "\\newcommand{\\bea}{\\begin{eqnarray}}\n\\newcommand{\\eea}{\\end{eqnarray}}\n";
 
@@ -1532,7 +1475,6 @@ mod tests {
         let db = db_of(EQNARRAY_PAIR);
         assert_eq!(db.env_begin_alias("bea"), Some("eqnarray"));
         assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
-        // The opener side only: the closer is not an environment opener.
         assert_eq!(db.env_begin_alias("eea"), None);
         assert_eq!(db.env_end_alias("bea"), None);
     }
@@ -1556,9 +1498,6 @@ mod tests {
 
     #[test]
     fn env_alias_body_tolerates_trivia() {
-        // The detector reads the CST, so a reformat that re-spaces the body (or an
-        // authored comment) must not change what is detected. This is what keeps
-        // the alias table stable across `fmt`.
         let db = db_of(
             "\\newcommand{\\bea}{ \\begin{eqnarray} }\n\\newcommand{\\eea}{% why\n\\end{eqnarray}}\n",
         );
@@ -1566,11 +1505,6 @@ mod tests {
         assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
     }
 
-    /// Issue #117: one half is enough, because the *literal* delimiter is a
-    /// spelling of the other side. `\bea` expands to `\begin{eqnarray}`, so a
-    /// written-out `\end{eqnarray}` closes it; `\eea` closes a written-out
-    /// `\begin{eqnarray}`. Recording each side alone is what lets the parser
-    /// pair either shape.
     #[test]
     fn a_lone_env_alias_half_is_recorded() {
         let db = db_of("\\newcommand{\\bea}{\\begin{eqnarray}}\n");
@@ -1582,9 +1516,6 @@ mod tests {
         assert_eq!(db.env_begin_alias("eea"), None);
     }
 
-    /// Dropping the both-halves rule must not loosen the *target* rules, which
-    /// are what keep a wrong pairing from rewriting layout. Each is re-checked
-    /// on the lone-half shape the rule used to hide.
     #[test]
     fn a_lone_half_still_obeys_every_target_rule() {
         assert_eq!(
@@ -1617,9 +1548,6 @@ mod tests {
 
     #[test]
     fn env_alias_rejects_verbatim_target() {
-        // `\newcommand{\bv}{\begin{verbatim}}` does not work in TeX at all: the
-        // body is tokenized before the macro expands, so the catcode change never
-        // applies. Pairing it would model a construct that does not exist.
         let db =
             db_of("\\newcommand{\\bv}{\\begin{verbatim}}\n\\newcommand{\\ev}{\\end{verbatim}}\n");
         assert_eq!(db.env_begin_alias("bv"), None);
@@ -1627,8 +1555,6 @@ mod tests {
 
     #[test]
     fn env_alias_rejects_argument_taking_target() {
-        // The alias head consumes no arguments, so `tabular`'s column spec would
-        // land in the body and the grid would render with no alignments.
         let db =
             db_of("\\newcommand{\\bt}{\\begin{tabular}}\n\\newcommand{\\et}{\\end{tabular}}\n");
         assert_eq!(db.env_begin_alias("bt"), None);
@@ -1652,9 +1578,6 @@ mod tests {
 
     #[test]
     fn redefinition_retracts_an_earlier_env_alias() {
-        // Last definition wins, and that has to include *losing* alias-ness —
-        // otherwise a stale entry would keep pairing a command that no longer opens
-        // anything.
         let db = db_of(
             "\\newcommand{\\bea}{\\begin{eqnarray}}\n\
              \\newcommand{\\eea}{\\end{eqnarray}}\n\
@@ -1665,14 +1588,11 @@ mod tests {
 
     #[test]
     fn env_alias_does_not_pollute_the_environment_namespace() {
-        // The alias is a command, not an environment: `\begin{bea}` must not be
-        // offered by completion, and `SignatureDb::environment` must not resolve it.
         let db = db_of(EQNARRAY_PAIR);
         assert!(db.environment("bea").is_none());
         assert!(!db.environment_names().any(|n| n == "bea"));
     }
 
-    /// The `ENVIRONMENT` node in `src`, for the node-keyed signature lookup.
     fn environment_node(src: &str) -> SyntaxNode {
         SyntaxNode::new_root(parse(src).green)
             .descendants()
@@ -1692,15 +1612,11 @@ mod tests {
         let target = builtin().environment("eqnarray").expect("curated target");
         assert_eq!(sig, target);
         assert!(sig.math && sig.align);
-        // The *name*-keyed lookup deliberately does not: `bea` names a command.
         assert!(sigs.environment("bea").is_none());
     }
 
     #[test]
     fn a_literal_begin_does_not_inherit_the_alias_target() {
-        // `\begin{bea}` is an environment that happens to spell the alias's name.
-        // It is not the alias, so it must not pick up `eqnarray`'s behavior — the
-        // reason the lookup is keyed on the node and not on the name.
         use crate::semantic::signature::Signatures;
         let src = format!("{EQNARRAY_PAIR}\\begin{{bea}} a \\end{{bea}}\n");
         let db = db_of(&src);
@@ -1710,8 +1626,6 @@ mod tests {
 
     #[test]
     fn a_real_environment_wins_over_an_alias_of_the_same_name() {
-        // A `\newenvironment{bea}` and an alias `\bea` are different constructs
-        // that collide by name; each node resolves to its own.
         use crate::semantic::signature::Signatures;
         let defs = "\\newcommand{\\bea}{\\begin{eqnarray}}\n\
              \\newcommand{\\eea}{\\end{eqnarray}}\n\

@@ -228,7 +228,6 @@ impl OpenerScan {
 mod tests {
     use super::*;
 
-    /// Classify each name in order, returning the verdicts.
     fn scan(names: &[&str]) -> Vec<Word> {
         let mut s = OpenerScan::new();
         names.iter().map(|n| s.visit(n)).collect()
@@ -248,13 +247,11 @@ mod tests {
 
     #[test]
     fn newif_declares_rather_than_opens() {
-        // `\newif\if@foo`: the `\ifX` is the flag being declared, not an opener.
         assert_eq!(scan(&["newif", "if@foo"]), [Word::Inert, Word::Inert]);
     }
 
     #[test]
     fn ifx_operands_are_inert_even_when_if_named() {
-        // `\ifx\ifpdf\iftrue`: both operands are tokens being compared.
         assert_eq!(
             scan(&["ifx", "ifpdf", "iftrue"]),
             [Word::Opens, Word::Inert, Word::Inert]
@@ -263,7 +260,6 @@ mod tests {
 
     #[test]
     fn let_aliases_two_tokens_without_opening() {
-        // `\let\ifpdf\iftrue`.
         assert_eq!(
             scan(&["let", "ifpdf", "iftrue"]),
             [Word::Inert, Word::Inert, Word::Inert]
@@ -280,8 +276,6 @@ mod tests {
 
     #[test]
     fn a_flow_word_cancels_a_pending_operand_run() {
-        // `\ifx\a\else`: the `\else` is real flow, not `\ifx`'s second operand,
-        // and it must not leave the countdown armed for what follows.
         assert_eq!(
             scan(&["ifx", "ifone", "else", "ifnum"]),
             [

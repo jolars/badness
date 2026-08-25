@@ -490,7 +490,6 @@ mod tests {
                 deprecated: false,
             })
         );
-        // A word after the verb on another axis is reason prose, not a selector.
         assert_eq!(
             parse_directive("% badness-format skip deprecated-command"),
             Some(directive(Axis::Format, Verb::Skip))
@@ -529,8 +528,6 @@ mod tests {
         );
     }
 
-    /// The retired spellings resolve exactly like their replacements, and are
-    /// flagged so the lint rule can offer the rewrite.
     #[test]
     fn retired_ignore_family_still_parses() {
         assert_eq!(
@@ -562,8 +559,6 @@ mod tests {
         );
     }
 
-    /// The retired node form always required a rule. A bare one was inert and
-    /// must not widen to "every rule" on its way through the new grammar.
     #[test]
     fn bare_retired_node_directive_stays_inert() {
         assert_eq!(parse_directive("% badness-ignore"), None);
@@ -594,9 +589,6 @@ mod tests {
         assert!(s.lint_all_ranges().is_empty(), "format axis must not lint");
     }
 
-    /// A region runs from the construct the `off` documents (so the directive
-    /// comment, bound into that construct's `DOC_COMMENT`, rides inside it) to
-    /// the `on`.
     #[test]
     fn region_spans_from_off_to_on() {
         let src = "\\alpha\n% badness-format off\n\\beta\n% badness-format on\n\\gamma\n";
@@ -607,9 +599,6 @@ mod tests {
         );
     }
 
-    /// An ordinary comment above the directive binds into the same
-    /// `DOC_COMMENT`, and the region covers it — the construct is what the
-    /// author pointed at, whatever else got bound in front of it.
     #[test]
     fn region_covers_a_leading_comment_run() {
         let src = "\\alpha\n% a note\n% badness-format off\n\\beta\n% badness-format on\n";
@@ -641,8 +630,6 @@ mod tests {
         );
     }
 
-    /// A narrower `on` must not close a wider `off`: the format directive has
-    /// nothing to say about the lint half of a combined region.
     #[test]
     fn format_on_does_not_close_a_both_region() {
         let src = "% badness off\n\\beta\n% badness-format on\n\\gamma\n";
@@ -653,8 +640,6 @@ mod tests {
         );
     }
 
-    /// The same rule one axis down: a rule-selective `on` does not close an
-    /// every-rule `off`.
     #[test]
     fn rule_selective_on_does_not_close_an_every_rule_region() {
         let src = "% badness-lint off\n\\beta\n% badness-lint on deprecated-command\n\\gamma\n";
@@ -697,8 +682,6 @@ mod tests {
         assert!(suppressions_of(src).is_empty());
     }
 
-    /// A `skip-file` swallows every narrower range on its axis, so a consumer
-    /// never sees the same byte twice.
     #[test]
     fn overlapping_ranges_merge() {
         let src = "% badness-format skip-file: generated\n% badness-format off\n\\b\n";
@@ -706,10 +689,6 @@ mod tests {
         assert_eq!(slices(src, s.format_ranges()), vec![src]);
     }
 
-    /// Two regions closed and reopened in one comment run stay distinct. Both
-    /// directives bind into the same `DOC_COMMENT`, so without the
-    /// previous-directive clamp the reopening `off` would anchor back onto the
-    /// `on` and the two would fuse into one region.
     #[test]
     fn reopened_region_does_not_swallow_its_own_closer() {
         let src = "% badness-format off\n\\a\n% badness-format on\n% badness-format off\n\\b\n% badness-format on\n";
@@ -723,15 +702,8 @@ mod tests {
         );
     }
 
-    /// The retired spellings resolve through the same path as their
-    /// replacements — the deprecation is documentation, never behavior.
-    ///
-    /// Compared by what the range *covers*, not by the text it slices: the two
-    /// directive comments have different lengths and both ride inside the range,
-    /// so the slices can never be equal even when the resolution is identical.
     #[test]
     fn retired_and_current_spellings_resolve_identically() {
-        /// Whether `\bf`, the construct the directive points at, is covered.
         fn covers_target(src: &str, ranges: &[TextRange]) -> bool {
             let at = TextSize::new(src.find("\\bf").expect("has a target") as u32);
             ranges.iter().any(|r| r.contains(at))
@@ -762,7 +734,6 @@ mod tests {
                 );
             }
         }
-        // …and the every-rule file form likewise.
         let old = suppressions_of("% badness-ignore-file: noisy\n\\bf x\n");
         let new = suppressions_of("% badness-lint skip-file: noisy\n\\bf x\n");
         assert_eq!(old.lint_all_ranges().len(), 1);

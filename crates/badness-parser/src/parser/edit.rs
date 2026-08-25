@@ -139,8 +139,6 @@ mod tests {
         }
     }
 
-    /// The property every `diff_edit` case below leans on, stated once: whatever it
-    /// returns must transform `old` into `new`.
     fn assert_recovers(old: &str, new: &str) -> Edit {
         let e = diff_edit(old, new);
         assert!(e.fits(old), "{e:?} does not fit {old:?}");
@@ -166,8 +164,6 @@ mod tests {
         assert_eq!(assert_recovers("axb\n", "ab\n"), edit(1..2, ""));
     }
 
-    /// The span reaches only as far as the shared suffix allows: `\alpha` and
-    /// `\gamma` share a trailing `a`, so the edit stops one char short of the end.
     #[test]
     fn diff_edit_recovers_a_replacement() {
         assert_eq!(
@@ -178,7 +174,6 @@ mod tests {
 
     #[test]
     fn diff_edit_collapses_disjoint_edits_into_one_span() {
-        // Two changes, one span: correct, and deliberately coarse.
         let e = assert_recovers("a x b y c\n", "a X b Y c\n");
         assert_eq!(e, edit(2..7, "X b Y"));
     }
@@ -191,8 +186,6 @@ mod tests {
         assert_recovers("", "");
     }
 
-    /// A prefix that lands mid-`α` would slice a multi-byte char in half. This is
-    /// not hypothetical: `\alpha` beside a literal `α` is ordinary LaTeX.
     #[test]
     fn diff_edit_clamps_to_char_boundaries() {
         let e = assert_recovers("αβ\n", "αγ\n");
@@ -208,7 +201,6 @@ mod tests {
 
     #[test]
     fn apply_edits_chains_left_to_right() {
-        // The second range is expressed against the text the first produced.
         let edits = [edit(0..0, "\\a"), edit(2..2, "{b}")];
         assert_eq!(apply_edits("\n", &edits), "\\a{b}\n");
     }
@@ -218,8 +210,6 @@ mod tests {
         assert_eq!(try_apply_edits("ab", &[edit(9..9, "x")]), None);
     }
 
-    /// An inverted range is the shape a mis-ordered LSP batch produces, and it is
-    /// the one `Range` case that would slice-panic rather than bounds-panic.
     #[test]
     #[allow(
         clippy::reversed_empty_ranges,
@@ -231,14 +221,9 @@ mod tests {
 
     #[test]
     fn try_apply_edits_rejects_an_offset_inside_a_char() {
-        // `α` is two bytes; offset 1 is inside it.
         assert_eq!(try_apply_edits("α", &[edit(1..1, "x")]), None);
     }
 
-    /// A chain can go stale *mid-fold*, so the check has to run against the text
-    /// each predecessor produced rather than the original — in both directions. The
-    /// first chain's second edit fits the original and not the text it lands on; the
-    /// second chain's fits the text it lands on and not the original.
     #[test]
     fn try_apply_edits_validates_each_step_against_its_predecessor() {
         assert_eq!(

@@ -194,7 +194,6 @@ mod tests {
 
     #[test]
     fn nth_group_inner_spans_only_the_key() {
-        // The inner range must cover `sec:intro` exactly, excluding the braces.
         let src = "\\label{sec:intro}\n";
         let cmd = command(src);
         let (range, text) = nth_group_inner(&cmd, 0).expect("an inner span");
@@ -217,8 +216,6 @@ mod tests {
 
     #[test]
     fn nth_group_inner_none_for_parameter_token() {
-        // A macro-parameter template (`\ref{#1}`, doubled `##1` in a definition
-        // body) is not a flat literal — issue #104.
         assert_eq!(nth_group_inner(&command("\\ref{#1}\n"), 0), None);
         assert_eq!(nth_group_inner(&command("\\eqref{##1}\n"), 0), None);
         assert_eq!(nth_group_text(&command("\\input{#1}\n"), 0), None);
@@ -250,8 +247,6 @@ mod tests {
 
     #[test]
     fn group_inner_source_keeps_nested_braces() {
-        // The xparse spec group `{m O{d} m}` parses the `{d}` default as a nested
-        // GROUP; `nth_group_text` would reject it, but the raw source survives.
         let cmd = command("\\NewDocumentCommand{\\foo}{m O{d} m}{x}\n");
         let spec = nth_group(&cmd, 1).map(|g| group_inner_source(&g));
         assert_eq!(spec.as_deref(), Some("m O{d} m"));
@@ -293,8 +288,6 @@ mod tests {
         assert_eq!(group.range(), None);
     }
 
-    // --- Wrapper-native tests --------------------------------------------------
-
     #[test]
     fn cast_is_kind_exact() {
         let cmd = command("\\section{Hi}\n");
@@ -314,7 +307,6 @@ mod tests {
 
     #[test]
     fn optionals_do_not_shift_group_indexing() {
-        // `\cmd[o]{a}` — the GROUP index ignores the OPTIONAL. define.rs relies on it.
         let cmd = Command::cast(command("\\cmd[o]{a}\n")).unwrap();
         assert_eq!(cmd.nth_group_text(0).as_deref(), Some("a"));
         assert_eq!(cmd.optionals().count(), 1);
@@ -322,7 +314,6 @@ mod tests {
 
     #[test]
     fn first_group_range_stops_at_first_group() {
-        // Greedy over-attachment (decision #8): `\label{a}\n{b}` attaches `{b}` too.
         let src = "\\label{a}\n{b}\n";
         let cmd = Command::cast(command(src)).unwrap();
         assert_eq!(&src[cmd.first_group_range()], "\\label{a}");
@@ -331,10 +322,6 @@ mod tests {
 
     #[test]
     fn free_fn_shims_stay_kind_agnostic() {
-        // The shims read whatever child a node has, not gating on the node's own
-        // kind: dtx `\begin{macro}{\foo}` reads the `{\foo}` GROUP off a BEGIN node,
-        // not a COMMAND. The typed `Command::nth_group` would (correctly) not apply
-        // here, but the free-function shim must.
         let begin = node(
             "\\begin{macro}{\\foo}\ncode\n\\end{macro}\n",
             SyntaxKind::BEGIN,
@@ -369,9 +356,6 @@ mod tests {
 
     #[test]
     fn begin_name_falls_back_to_the_head_control_word() {
-        // An environment-alias `BEGIN` (issue #109) is the bare control word with
-        // no `NAME_GROUP`, so the name is read from there instead. Positional and
-        // meaning-free: `Signatures::environment` is what maps it onto behavior.
         let src = "\\newcommand{\\bea}{\\begin{eqnarray}}\n\\newcommand{\\eea}{\\end{eqnarray}}\n\\bea a \\eea\n";
         let begin = node(src, SyntaxKind::BEGIN);
         assert_eq!(environment_name(&begin).as_deref(), Some("bea"));
@@ -379,17 +363,12 @@ mod tests {
             Begin::cast(begin.clone()).unwrap().name().as_deref(),
             Some("bea")
         );
-        // The range stays `None`: that is the contract making every name-rewriting
-        // consumer (rename, change-environment, the obsolete-environment fix)
-        // decline cleanly rather than emit a half-edit.
         assert!(environment_name_range(&begin).is_none());
         assert!(Begin::cast(begin).unwrap().name_range().is_none());
     }
 
     #[test]
     fn alias_end_stays_nameless() {
-        // Only the `BEGIN` side falls back; an alias closer keeps the
-        // `NAME_GROUP`-only reading.
         let src = "\\newcommand{\\bea}{\\begin{eqnarray}}\n\\newcommand{\\eea}{\\end{eqnarray}}\n\\bea a \\eea\n";
         let end = node(src, SyntaxKind::END);
         assert!(environment_name(&end).is_none());
@@ -397,9 +376,6 @@ mod tests {
 
     #[test]
     fn a_real_begin_reads_its_name_group() {
-        // The fallback is guarded on the head not being `\begin`, so a spelled-out
-        // environment is unaffected and a malformed `\begin` still reports `None`
-        // rather than claiming to be named "begin".
         let begin = node("\\begin{center}x\\end{center}", SyntaxKind::BEGIN);
         assert_eq!(environment_name(&begin).as_deref(), Some("center"));
         assert!(environment_name_range(&begin).is_some());

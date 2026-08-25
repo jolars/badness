@@ -1074,8 +1074,6 @@ mod tests {
 
     #[test]
     fn bundled_json_loads() {
-        // Exercises the bundled file through the real loader; a malformed or
-        // unknown-field entry would panic here.
         let db = builtin();
         assert!(db.command("section").is_some());
         assert!(db.environment("tabular").is_some());
@@ -1100,7 +1098,6 @@ mod tests {
 
     #[test]
     fn mixed_argument_order_round_trips() {
-        // `\newcommand{cmd}[nargs]{def}` — mandatory, optional, mandatory.
         let args = &builtin().command("newcommand").unwrap().args;
         let kinds: Vec<_> = args.iter().map(|a| a.kind).collect();
         assert_eq!(
@@ -1124,7 +1121,6 @@ mod tests {
             db.environment("theorem").unwrap().outline,
             Some(OutlineKind::Theorem)
         );
-        // A block layout environment is not outline-worthy.
         assert_eq!(db.environment("center").unwrap().outline, None);
     }
 
@@ -1134,7 +1130,6 @@ mod tests {
         assert_eq!(db.command("part").unwrap().sectioning, Some(0));
         assert_eq!(db.command("section").unwrap().sectioning, Some(2));
         assert_eq!(db.command("subsubsection").unwrap().sectioning, Some(4));
-        // A sectioning command still carries its argument shape.
         assert_eq!(db.command("section").unwrap().args.len(), 2);
         assert!(db.command("textbf").unwrap().sectioning.is_none());
     }
@@ -1146,24 +1141,15 @@ mod tests {
         assert!(db.command("newcommand").unwrap().block);
         assert!(db.command("maketitle").unwrap().block);
         assert!(db.command("title").unwrap().block);
-        // A block command still carries its argument shape (the curated tier
-        // masks CWL wholesale, so dropping the args here would lose them).
         assert_eq!(db.command("usepackage").unwrap().args.len(), 2);
-        // Deliberate exclusions: a glued `\caption{…} \label{…}` pair must stay
-        // untouched, and inline commands are the opposite claim.
         assert!(!db.command("caption").unwrap().block);
         assert!(!db.command("label").unwrap().block);
         assert!(!db.command("textbf").unwrap().block);
-        // Sectioning implies block at the formatter's query; the entries do not
-        // double-flag.
         assert!(!db.command("section").unwrap().block);
     }
 
     #[test]
     fn no_command_is_both_inline_and_block() {
-        // `inline` says a command flows into the fill; `block` says it owns its
-        // line. A curated entry claiming both would leave the formatter's
-        // dispatch order deciding, silently.
         for name in builtin().command_names() {
             let sig = builtin().command(name).unwrap();
             assert!(
@@ -1178,9 +1164,6 @@ mod tests {
         assert!(builtin().command("verb").unwrap().verbatim);
         assert!(builtin().command("lstinline").unwrap().verbatim);
         assert!(!builtin().command("textbf").unwrap().verbatim);
-        // The delimiter form is opt-in: `\lstinline|…|` has it, the braced-only
-        // `\code`/`\path` (jss, url) do not — their names collide with common
-        // user macros (issue #53).
         assert!(builtin().command("lstinline").unwrap().verbatim_delimited);
         assert!(!builtin().command("code").unwrap().verbatim_delimited);
         assert!(!builtin().command("path").unwrap().verbatim_delimited);
@@ -1188,8 +1171,6 @@ mod tests {
 
     #[test]
     fn content_kind_parses_from_both_forms() {
-        // The string shorthand defaults content to `Opaque`; the object form's
-        // `content` discriminant sets it.
         let db = parse(
             r#"{ "commands": {
                 "short": { "args": ["req"] },
@@ -1206,8 +1187,6 @@ mod tests {
         assert_eq!(full[0].content, ContentKind::Opaque); // no `content` → default
         assert_eq!(full[1].kind, ArgKind::Brace);
         assert_eq!(full[1].content, ContentKind::Prose);
-        // Every wire spelling round-trips, `keyval` included — the flag the
-        // optional-argument layout reads to license splitting a glued comma.
         let kv = &db.command("kv").unwrap().args;
         assert_eq!(kv[0].kind, ArgKind::Bracket);
         assert_eq!(kv[0].content, ContentKind::Keyval);
@@ -1343,8 +1322,6 @@ mod tests {
 
     #[test]
     fn bundled_prose_args_flagged() {
-        // Prose content is also a positive text-domain claim, while a name-bearing
-        // command leaves every slot opaque and unknown.
         for name in builtin().command_names() {
             for argument in builtin().command(name).unwrap().args.iter() {
                 if argument.content == ContentKind::Prose {
@@ -1400,31 +1377,24 @@ mod tests {
         let equation = db.environment("equation").unwrap();
         assert!(equation.math);
         assert!(!equation.reflow());
-        // `equation` is math but not an alignment environment (no `&` columns).
         assert!(!equation.align);
-        // An alignment environment carries the `align` flag (and is also math).
         let align = db.environment("align").unwrap();
         assert!(align.math);
         assert!(align.align);
         let pmatrix = db.environment("pmatrix").unwrap();
         assert!(pmatrix.math);
         assert!(pmatrix.align);
-        // `tabular` is an alignment environment (its `&` columns grid-align) but,
-        // unlike the math families, it is not math.
         let tabular = db.environment("tabular").unwrap();
         assert!(!tabular.verbatim_body);
         assert!(!tabular.math);
         assert!(tabular.align);
         assert!(!tabular.list);
-        // List environments carry the `list` flag (and still reflow their bodies).
         for name in ["itemize", "enumerate", "description"] {
             let env = db.environment(name).unwrap();
             assert!(env.list, "{name} should be a list environment");
             assert!(env.reflow());
             assert!(!env.math);
         }
-        // jss/Sweave verbatim environments are curated built-ins: their bodies are
-        // opaque (preserved verbatim, never reflowed).
         for name in [
             "Code",
             "CodeInput",
@@ -1439,11 +1409,6 @@ mod tests {
         }
     }
 
-    /// Verbatim bodies whose defining code no in-file scan can reach: the kernel's
-    /// `filecontents` (it `\@makeother`s `\dospecials`, `%` included, so the body is
-    /// written out byte-for-byte) and ltxdockit's listings-based `ltxcode`/
-    /// `ltxexample`, defined in an external class. Curation is the only place these
-    /// facts can live. Smoke-test issue #98 (`plk/biblatex`).
     #[test]
     fn externally_defined_verbatim_environments() {
         let db = builtin();
@@ -1451,8 +1416,6 @@ mod tests {
             let env = db.environment(name).unwrap();
             assert!(env.verbatim_body, "{name} body is written verbatim");
             assert!(!env.reflow());
-            // `\begin{filecontents}[force]{\jobname.bib}`: the two leading args are
-            // structured; everything after them is the opaque body.
             assert_eq!(env.args.len(), 2, "{name} arity");
             assert_eq!(env.args[0].kind, ArgKind::Bracket);
             assert_eq!(env.args[1].kind, ArgKind::Brace);
@@ -1461,7 +1424,6 @@ mod tests {
             let env = db.environment(name).unwrap();
             assert!(env.verbatim_body, "{name} body is opaque");
             assert!(!env.reflow());
-            // `\lstnewenvironment{…}[1][]` — one optional `\lstset` argument.
             assert_eq!(env.args.len(), 1, "{name} arity");
             assert_eq!(env.args[0].kind, ArgKind::Bracket);
         }
@@ -1470,23 +1432,18 @@ mod tests {
     #[test]
     fn block_flag_is_explicit_or_derived() {
         let db = builtin();
-        // Explicitly flagged display environments.
         assert!(db.environment("figure").unwrap().block());
         assert!(db.environment("center").unwrap().block());
         assert!(db.environment("verbatim").unwrap().block());
-        // Derived from `math`, `list`, and `no_indent` respectively.
         assert!(db.environment("equation").unwrap().block());
         assert!(db.environment("itemize").unwrap().block());
         assert!(db.environment("document").unwrap().block());
-        // The new explicit flag leaves `reflow` derivation untouched: `center`
-        // is a block env but still reflows its prose body.
         assert!(db.environment("center").unwrap().reflow());
     }
 
     #[test]
     fn doc_ltxdoc_signatures() {
         let db = builtin();
-        // doc/ltxdoc driver commands each take one mandatory argument.
         for name in ["DocInput", "DescribeMacro", "DescribeEnv", "StopEventually"] {
             let cmd = db
                 .command(name)
@@ -1494,8 +1451,6 @@ mod tests {
             assert_eq!(cmd.args.len(), 1, "{name} arity");
             assert!(cmd.args[0].required, "{name} arg is mandatory");
         }
-        // The `macro`/`environment` doc envs document one item and are block
-        // containers, but their body is ordinary prose (it still reflows).
         for name in ["macro", "environment"] {
             let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
             assert_eq!(env.args.len(), 1, "{name} arity");
@@ -1503,9 +1458,6 @@ mod tests {
             assert!(env.reflow(), "{name} body reflows as prose");
             assert!(!env.code, "{name} is not a code env");
         }
-        // `macrocode`/`macrocode*` are code-not-prose: real parsed code (not an
-        // opaque verbatim blob), so `code` is set, `reflow` is off, and
-        // `verbatim_body` stays off (otherwise the lexer would swallow the body).
         for name in ["macrocode", "macrocode*"] {
             let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
             assert!(env.code, "{name} is code");
@@ -1517,8 +1469,6 @@ mod tests {
 
     #[test]
     fn code_flag_parses_and_drives_reflow() {
-        // The `code` flag defaults false and, when set, suppresses reflow without
-        // making the body verbatim.
         let db = parse(
             r#"{ "environments": {
                 "plain": {},
@@ -1537,10 +1487,6 @@ mod tests {
 
     #[test]
     fn statement_body_flag_parses_and_drives_reflow() {
-        // Like `code`, `statementBody` defaults false and suppresses reflow
-        // without making the body verbatim — but it is a distinct flag, because
-        // `code` is the `.dtx` "re-lexed under the package regime" fact and this
-        // one is about layout only.
         let db = parse(
             r#"{ "environments": {
                 "plain": {},
@@ -1577,9 +1523,6 @@ mod tests {
         assert!(!builtin().environment("tikzpicture").unwrap().label_key);
     }
 
-    /// The curated TikZ/pgf picture family: bodies of `;`-terminated path
-    /// statements, which the formatter lays out one statement per authored line
-    /// rather than filling as prose (issue #114).
     #[test]
     fn picture_environments_are_statement_bodies() {
         let db = builtin();
@@ -1603,8 +1546,6 @@ mod tests {
             assert!(!env.verbatim_body, "{name} body is parsed, not verbatim");
             assert!(env.block(), "{name} is a block env");
         }
-        // The curated tier masks the CWL entry wholesale, so the option bracket
-        // these carry there has to be restated by hand or it is lost.
         for name in [
             "tikzpicture",
             "scope",
@@ -1621,7 +1562,6 @@ mod tests {
             assert!(!env.args[0].required, "{name} option is optional");
             assert_eq!(env.args[0].content, ContentKind::Keyval, "{name} keyval");
         }
-        // `\begin{pgfonlayer}{background}` names its layer; `pgfpicture` is bare.
         assert_eq!(db.environment("pgfonlayer").unwrap().args.len(), 1);
         assert!(db.environment("pgfonlayer").unwrap().args[0].required);
         assert!(db.environment("pgfpicture").unwrap().args.is_empty());
@@ -1636,7 +1576,6 @@ mod tests {
 
     #[test]
     fn rejects_unknown_fields() {
-        // A typo'd field must fail loudly rather than be silently ignored.
         let err = parse(r#"{ "commands": { "x": { "sektioning": 2 } } }"#);
         assert!(err.is_err());
     }
@@ -1649,9 +1588,6 @@ mod tests {
 
     #[test]
     fn cwl_tier_loads_and_covers_long_tail() {
-        // Exercises the gzipped bundle through the real decompress+parse path, and
-        // confirms the curated package subset reached the tier (a command unlikely
-        // to be in the hand-curated built-in DB).
         let db = cwl();
         assert!(db.command("siunitx").is_some() || db.command("SI").is_some());
         assert!(
@@ -1662,16 +1598,10 @@ mod tests {
 
     #[test]
     fn cwl_entries_carry_only_arity_no_behavior_flags() {
-        // The converter guard: every CWL command/environment is names, arity, and the
-        // mechanical `%keyvals` argument mark only, so none of its low-confidence
-        // *behaviour* data can flip a formatter/lexer/outline decision.
         let db = cwl();
         for sig in db.command_sigs() {
             assert!(sig.sectioning.is_none());
             assert!(!sig.verbatim && !sig.rule && !sig.inline && !sig.block);
-            // `Keyval` is the one content kind the tier may carry, and only on an
-            // optional: `%keyvals` on a mandatory group is real but unconsumed, so
-            // the converter drops it rather than record an unvalidated claim.
             assert!(sig.args.iter().all(|a| match a.content {
                 ContentKind::Opaque => true,
                 ContentKind::Keyval => !a.required,
@@ -1692,9 +1622,6 @@ mod tests {
 
     #[test]
     fn curated_builtin_wins_over_cwl_tier() {
-        // `Signatures` resolves a name present in both tiers to the curated entry,
-        // never the bulk CWL one — proven via a curated-only flag (`\section` is a
-        // sectioning command in the built-in DB; the CWL tier never sets that).
         let empty = SignatureDb::default();
         let sigs = Signatures::new(&empty);
         assert!(
@@ -1706,8 +1633,6 @@ mod tests {
 
     #[test]
     fn cwl_only_name_resolves_through_signatures() {
-        // A name only the CWL tier knows still resolves (arity coverage win), with
-        // all behavior flags at their conservative defaults.
         let empty = SignatureDb::default();
         let sigs = Signatures::new(&empty);
         let Some(name) = cwl()
@@ -1720,7 +1645,6 @@ mod tests {
         assert!(sig.sectioning.is_none() && !sig.inline && !sig.verbatim && !sig.block);
     }
 
-    /// A minimal one-command DB for the origin-merge tests.
     fn db_with_command(name: &str) -> SignatureDb {
         let mut db = SignatureDb::default();
         db.insert_command(name, CommandSig::default());
@@ -1737,8 +1661,6 @@ mod tests {
 
     #[test]
     fn plain_merge_clears_origin_on_shadow() {
-        // The document overlay: its scanned defs carry no origins, so merging
-        // them last strips the package provenance of a shadowed name.
         let mut scope = SignatureDb::default();
         scope.merge_from(&db_with_command("dup"), Some("mypkg"));
         scope.merge_from(&db_with_command("dup"), None);
@@ -1764,8 +1686,6 @@ mod tests {
 
     #[test]
     fn merge_propagates_existing_origins() {
-        // Merging a scope that itself carries origins (a package's own scope
-        // pulled a dependency) keeps them.
         let mut inner = SignatureDb::default();
         inner.merge_from(&db_with_command("dep"), Some("deppkg"));
         let mut scope = SignatureDb::default();

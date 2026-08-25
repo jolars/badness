@@ -99,7 +99,6 @@ mod tests {
     use super::*;
     use crate::bib::parse;
 
-    /// The first node of `kind` in a freshly parsed `src`.
     fn node(src: &str, kind: SyntaxKind) -> SyntaxNode {
         parse(src)
             .syntax()
@@ -143,14 +142,11 @@ mod tests {
 
     #[test]
     fn value_macro_uses_finds_word_not_number() {
-        // `t = pub # {x} # 2020`: only `pub` is a macro use; `2020` is a number.
         let field = node("@misc{k, t = pub # {x} # 2020}\n", SyntaxKind::FIELD);
         let value = field_value(&field).expect("a value");
         let uses: Vec<_> = value_macro_uses(&value).map(|(n, _)| n).collect();
         assert_eq!(uses, vec!["pub"]);
     }
-
-    // --- Wrapper-native tests --------------------------------------------------
 
     #[test]
     fn cast_is_kind_exact() {

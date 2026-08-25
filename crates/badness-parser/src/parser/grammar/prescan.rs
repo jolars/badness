@@ -232,8 +232,6 @@ mod tests {
     use super::*;
     use crate::parser::lexer::{LexConfig, lex_with};
 
-    /// Pre-scan `src` with no alias context — the shape every file gets before
-    /// the second pass discovers any.
     fn scan(src: &str) -> (Vec<Token>, PreScan) {
         let ctx = ParseCtx::default();
         let tokens = lex_with(src, &ctx, LexConfig::default());
@@ -241,10 +239,6 @@ mod tests {
         (tokens, pre)
     }
 
-    /// Pre-scan `src` with `bea`/`eea` already registered as an `eqnarray`
-    /// alias pair — the state the second pass hands in. Registering the pair
-    /// directly rather than parsing for it keeps these tests about the *filter*
-    /// (whose job this module owns) and not about the definition scan.
     fn scan_aliased(src: &str) -> (Vec<Token>, PreScan) {
         let mut ctx = ParseCtx::default();
         ctx.insert_begin_alias(SmolStr::new("bea"), SmolStr::new("eqnarray"));
@@ -263,8 +257,6 @@ mod tests {
         v
     }
 
-    /// Pre-scan `src` in the `.dtx` lexer mode — the only one that emits
-    /// `DOC_MARGIN`.
     fn scan_dtx(src: &str) -> (Vec<Token>, PreScan) {
         let ctx = ParseCtx::default();
         let cfg = LexConfig {
@@ -276,9 +268,6 @@ mod tests {
         (tokens, pre)
     }
 
-    /// The predicate `doc_margin_lines` replaced: scan back from `idx` to the
-    /// previous `NEWLINE` looking for a `DOC_MARGIN`. Kept here as the reference
-    /// the memo is checked against.
     fn walked_back(tokens: &[Token], idx: usize) -> bool {
         tokens[..idx]
             .iter()
@@ -294,9 +283,6 @@ mod tests {
 
     #[test]
     fn doc_margin_lines_answer_exactly_what_the_backward_scan_did() {
-        // Doc lines, a macrocode chunk whose code lines carry no margin, a
-        // margin-only line, and an unterminated final doc line — every shape the
-        // memo has to reproduce, checked at every token index.
         let src = "% \\begin{macro}{\\foo}\n\
                    %    \\begin{macrocode}\n\
                    \\def\\foo{\\begin{list}}\n\
@@ -321,9 +307,6 @@ mod tests {
 
     #[test]
     fn doc_margin_lines_is_empty_outside_dtx() {
-        // `DOC_MARGIN` is a `.dtx`-only token kind, so every other file pays
-        // nothing for the memo — no allocation, and the predicate short-circuits
-        // on the empty slice.
         let (_, pre) = scan("% a comment\n\\begin{itemize}\n\\end{itemize}\n");
         assert!(pre.doc_margin_lines.is_empty());
     }
@@ -351,7 +334,6 @@ mod tests {
         let src = "] } $ \\] \\) \\right \\fi ] x";
         let (tokens, pre) = scan(src);
         let text = |i: Option<usize>| i.map(|i| tokens[i].text.to_string());
-        // The *last* `]`, not the first.
         assert_eq!(text(pre.last_r_bracket), Some("]".into()));
         assert!(pre.last_r_bracket.unwrap() > 0);
         assert_eq!(text(pre.last_r_brace), Some("}".into()));
@@ -374,14 +356,10 @@ mod tests {
         assert_eq!(pre.last_fi, None);
     }
 
-    /// The `\fi` bound deliberately skips the expl3 filter the gate applies: an
-    /// upper bound may over-approximate but must never fall below the last index
-    /// the gate could recognize.
     #[test]
     fn the_fi_bound_ignores_expl3_regions() {
         let (_, pre) = scan("\\ExplSyntaxOn \\fi \\ExplSyntaxOff");
         assert!(pre.last_fi.is_some());
-        // ... while the opener set does not.
         let (_, pre) = scan("\\ExplSyntaxOn \\iftrue \\ExplSyntaxOff");
         assert!(pre.conditional_openers.is_empty());
     }
@@ -394,8 +372,6 @@ mod tests {
         assert_eq!(tokens[i].text, "\\iftrue");
     }
 
-    /// `\newif`'s operand is a name being declared, not a live opener — the
-    /// running state `OpenerScan` carries and a per-token test could not.
     #[test]
     fn a_newif_operand_is_not_an_opener() {
         let (_, pre) = scan("\\newif\\ifdraft");
@@ -432,43 +408,30 @@ mod tests {
         );
     }
 
-    /// The definee filter is load-bearing, not defensive: `\def\bea{…}` leaves
-    /// `\bea` at brace depth 0 with `in_def_body` unset, so unfiltered the two
-    /// *definition lines* would pair with each other and swallow the prose
-    /// between them.
     #[test]
     fn a_definition_line_definee_is_not_an_opener() {
         let (_, pre) = scan_aliased("\\def\\bea{\\begin{eqnarray}}\n");
         assert!(pre.alias_openers.is_empty());
     }
 
-    /// `\let\oldbea\bea` binds *two* names, so the countdown must span both. Left
-    /// live, the source operand is a mention that pairs with the next stray
-    /// closer and swallows the prose in between.
     #[test]
     fn a_let_consumes_two_name_slots() {
         let (_, pre) = scan_aliased("\\let\\oldbea\\bea\n");
         assert!(pre.alias_openers.is_empty());
-        // One slot short, the source operand would have been indexed.
         let (_, pre) = scan_aliased("\\let\\oldbea\\bea \\eea\n");
         assert!(pre.alias_openers.is_empty());
         assert_eq!(pre.alias_closers.len(), 1);
     }
 
-    /// A keyword sitting *in* a slot is the operand it looks like and does not
-    /// arm a fresh countdown.
     #[test]
     fn a_definition_keyword_in_an_operand_slot_does_not_rearm() {
         let (tokens, pre) = scan_aliased("\\let\\a\\def\\bea x \\eea\n");
-        // `\let\a\def` consumes both its slots. Had `\def` re-armed from the
-        // operand slot, the following `\bea` would have read as a definee.
         assert_eq!(
             names_at(&tokens, &pre.alias_openers),
             vec![("\\bea".to_string(), "eqnarray".to_string())]
         );
     }
 
-    /// Trivia between the keyword and the name must carry the countdown across.
     #[test]
     fn trivia_carries_the_name_countdown() {
         for src in [
@@ -482,7 +445,6 @@ mod tests {
         }
     }
 
-    /// ... and anything that is not trivia clears it.
     #[test]
     fn a_non_trivia_token_clears_the_name_countdown() {
         let (_, pre) = scan_aliased("\\def x \\bea\n");
@@ -493,7 +455,6 @@ mod tests {
     fn an_alias_inside_an_expl3_region_is_excluded() {
         let (_, pre) = scan_aliased("\\ExplSyntaxOn\n\\bea\n\\ExplSyntaxOff\n\\eea\n");
         assert!(pre.alias_openers.is_empty());
-        // The closer after the region is not.
         assert_eq!(pre.alias_closers.len(), 1);
     }
 

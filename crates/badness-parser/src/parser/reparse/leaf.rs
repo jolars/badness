@@ -278,53 +278,20 @@ mod tests {
 
     use super::text_reads_are_inert;
 
-    /// The surroundings a text guard is asked about when the position bans have
-    /// already passed. Spelled out rather than `use`d, because [`Verdict::Context`]
-    /// below would shadow the type.
     fn ctx() -> super::Context {
         super::Context { in_math: false }
     }
 
-    /// Why a text-reading site in the grammar cannot see a leaf a tier splices.
-    ///
-    /// The verdicts are the point of the survey below: a bare list of matched lines
-    /// would prove the scan still runs, but not that anyone read what it found.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Verdict {
-        /// Kind-gated to `CONTROL_WORD`/`CONTROL_SYMBOL`. No tier splices those
-        /// kinds, so the read cannot see a spliced leaf at all.
-        ///
-        /// Every `strip_prefix('\\')` in the grammar sits behind such a gate, which
-        /// is load-bearing now that the protected-body tier splices a `VERB`: a
-        /// standalone `\verb|…|` *does* start with a backslash, so "no spliceable
-        /// leaf survives the strip" would no longer be a reason.
         ControlSequence,
-        /// The definition of a text accessor, not a decision that branches on one.
         Accessor,
-        /// Reads a length to advance an offset; the *content* reaches no decision.
         Offsets,
-        /// A real read of a spliceable leaf's text, neutralized by a named guard in
-        /// [`text_reads_are_inert`]. A guard that is itself a kind gate says so:
-        /// `WORD`-only reads are out of the protected-body tier's reach.
         Guarded(&'static str),
-        /// A real read, neutralized by a named ban in [`context_admits`] — the leaf
-        /// can never be in a position where the read happens.
         Context(&'static str),
     }
     use Verdict::*;
 
-    /// Every place the grammar branches on a token's text, and why each is safe.
-    ///
-    /// `the_text_read_survey_is_complete` scans the grammar sources and asserts the
-    /// set of matched lines is exactly the set of keys here. A new text read is
-    /// therefore a *failing test* naming the line nobody classified, rather than a
-    /// silent hole in a tier's soundness argument.
-    ///
-    /// A verdict has to hold for **every** kind some tier splices: the trivia kinds
-    /// and `WORD` (the token tier), and the raw captures `VERB` and `VERBATIM_BODY`
-    /// (the protected-body tier). Where a verdict rests on a kind gate rather than
-    /// on the guard's text test, it names the gate — those are the entries a future
-    /// tier admitting a new kind has to re-read.
     const TEXT_READS: &[(&str, Verdict)] = &[
         (
             "&& P::MATH_ANCHOR.anchors(t.text.as_str()) =>",
@@ -482,8 +449,6 @@ mod tests {
         ),
     ];
 
-    /// The grammar sources the survey reads. Compiled in, so the scan cannot go
-    /// looking at a stale checkout or silently find no files.
     const GRAMMAR_SOURCES: &[(&str, &str)] = &[
         ("grammar.rs", include_str!("../grammar.rs")),
         ("grammar/prescan.rs", include_str!("../grammar/prescan.rs")),
@@ -493,15 +458,7 @@ mod tests {
         ("conditional.rs", include_str!("../conditional.rs")),
     ];
 
-    /// Every line of `src` that reads a token's text.
-    ///
-    /// Deliberately crude: `.text` not followed by an identifier character, which
-    /// catches `.text()`, `.text.as_str()`, and `.text.len()` while skipping
-    /// `.text_range()` (an offset API) and identifiers that merely contain the word.
-    /// Over-matching costs a line in the table; under-matching costs the guarantee,
-    /// so the bias is deliberate.
     fn text_reads(src: &str) -> Vec<&str> {
-        // The `#[cfg(test)]` tail is test code, which decides nothing at parse time.
         let body = src.split("\n#[cfg(test)]").next().unwrap_or(src);
         body.lines()
             .map(str::trim)
@@ -517,11 +474,6 @@ mod tests {
             .collect()
     }
 
-    /// Every tier's soundness rests on [`TEXT_READS`] being the *whole* set of
-    /// places the grammar branches on a token's text. Nothing but this test keeps
-    /// that true: the guards have no compile-time link to the sites they neutralize,
-    /// so a new comparison would otherwise land silently and the oracle would only
-    /// catch it if a fuzz seed happened to spell it.
     #[test]
     fn the_text_read_survey_is_complete() {
         let mut found: Vec<&str> = GRAMMAR_SOURCES
@@ -558,9 +510,6 @@ mod tests {
         );
     }
 
-    /// The scanner must be able to find something, or the test above passes by
-    /// looking at nothing — panache lost two thirds of its fuzz coverage exactly
-    /// that way, with every assertion still green.
     #[test]
     fn the_text_read_scanner_finds_the_sites_it_claims_to() {
         for (name, src) in GRAMMAR_SOURCES {
@@ -577,19 +526,12 @@ mod tests {
             found >= 40,
             "the scanner found only {found} text reads; it has stopped matching",
         );
-        // And it must not match things that are not reads.
         assert!(text_reads("let x = node.text_range().start();").is_empty());
         assert!(text_reads("self.text_bracket_batch.clear();").is_empty());
         assert!(text_reads("// t.text == BEGIN_CMD").is_empty());
         assert_eq!(text_reads("if t.text == BEGIN_CMD {").len(), 1);
     }
 
-    /// A kind nobody has classified must be refused, not waved through.
-    ///
-    /// The dispatch is exactly where a future tier widens, and a `_ => true` arm
-    /// there would hand it the trivia argument for a kind the trivia argument does
-    /// not cover — which is the mistake the `VERB`/`VERBATIM_BODY` admission had to
-    /// undo.
     #[test]
     fn an_unclassified_kind_is_refused() {
         let ctx = ctx();
@@ -602,9 +544,6 @@ mod tests {
         assert!(!text_reads_are_inert(SyntaxKind::L_BRACE, "{", "{", ctx));
     }
 
-    /// The one grammar read a raw capture can reach: `attach_arguments`
-    /// distinguishes a standalone `\verb|…|` from a `\lstinline`'s bare `|…|` by the
-    /// leading backslash, so a splice may not move a token across that line.
     #[test]
     fn a_raw_capture_may_not_gain_or_lose_its_leading_backslash() {
         let ctx = ctx();
@@ -616,9 +555,6 @@ mod tests {
         }
     }
 
-    /// The `WORD` guards are not the raw-capture guards, and admitting the second
-    /// must not have loosened the first. A `;` and a lone `*` still stop a `WORD`
-    /// and are irrelevant to a body that is opaque to the grammar.
     #[test]
     fn the_word_guards_did_not_follow_the_raw_captures() {
         let ctx = ctx();

@@ -35,17 +35,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `precede` into the event layer as a real rust-analyzer `Marker` with a
   `DropBomb`, which is a mechanical diff across every `open`/`close` site.
 
-- [ ] **Comment consolidation (consolidate, never purge).** Comment density
-  in the parser crate is 30–39% per file and overwhelmingly the house-style
-  constraint-and-provenance kind — keep that. The cuttable part is
-  *restatement*: the lexer states the short-verb semantics in four places
-  and the macrocode-frame rules twice; call sites restate 25-line helper
-  docs. Cut each fact to one canonical location (the helper's doc) with
-  one-line call-site pointers — roughly a third of the comment mass, zero
-  information loss. `catcode_signal` (`semantic/define.rs`) is the cautionary
-  tale for why this matters: the real hazard at this density is a comment
-  asserting something the code stopped doing.
-
 ## Formatter
 
 - [ ] **Widen mandatory-keyval admission (follow-up to the `{…}` segmentation).**

@@ -356,7 +356,6 @@ mod tests {
 
     #[test]
     fn nested_macro_name_is_skipped() {
-        // A non-literal name group yields `None`, conservative like `\label{\foo}`.
         let cmd = command_named(
             "\\ProvidesPackage{\\jobname}[2024/01/01]\n",
             "ProvidesPackage",

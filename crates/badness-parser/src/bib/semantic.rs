@@ -123,7 +123,6 @@ mod tests {
 
     #[test]
     fn keyless_entry_skipped() {
-        // Recovery case: nothing after the brace, no key to record.
         let model = model_of("@misc{");
         assert_eq!(model.entries().len(), 0);
     }
@@ -132,7 +131,6 @@ mod tests {
     fn duplicate_keys_flagged_case_insensitively() {
         let model = model_of("@misc{Key, t = {a}}\n@book{key, t = {b}}\n@misc{other, t = {c}}\n");
         assert_eq!(model.entries().len(), 3);
-        // First `Key` clean, second `key` duplicate, `other` clean.
         assert!(!model.entries()[0].duplicate);
         assert!(model.entries()[1].duplicate);
         assert!(!model.entries()[2].duplicate);
@@ -195,7 +193,6 @@ mod tests {
 
     #[test]
     fn string_use_in_concatenation() {
-        // `pub` is a macro use; `{Press}` and the quoted piece are not.
         let model = model_of("@book{k, publisher = pub # { Press}}\n@string{pub = {Foo}}\n");
         let uses: Vec<_> = model
             .string_uses()

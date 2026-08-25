@@ -185,8 +185,6 @@ mod tests {
     use crate::parser::parse;
     use crate::syntax::SyntaxNode;
 
-    /// The statement's element stream, with each glued gap rendered as `·`
-    /// and each neutral gap as `|` — a direct projection of the verdicts.
     fn units(picture_body: &str) -> String {
         let input = format!("\\begin{{tikzpicture}}\n{picture_body}\n\\end{{tikzpicture}}\n");
         let parsed = parse(&input);
@@ -264,7 +262,6 @@ mod tests {
 
     #[test]
     fn a_comment_suppresses_glue_on_both_sides() {
-        // A comment must end its line, so no unit may claim to span one.
         assert_eq!(
             units("\\draw (0,0) -- % note\n(1,1);"),
             r"\draw|(0,0)|--|% note|(1,1);"
@@ -273,8 +270,6 @@ mod tests {
 
     #[test]
     fn unrecognized_vocabulary_stays_neutral() {
-        // An axis-body statement with prose-ish words: no rule fires except
-        // the curated `and`, and a wrong guess is only a bigger atom.
         assert_eq!(
             units(r"\legend{a} extra words here;"),
             r"\legend{a}|extra|words|here;"
@@ -283,8 +278,6 @@ mod tests {
 
     #[test]
     fn an_options_bracket_run_is_one_unit() {
-        // `[loop above]` is an options list: a break inside it splits an
-        // option mid-phrase (vassar.tex's automaton `edge [loop above]`).
         assert_eq!(
             units(r"\path (A) edge [loop above, red] node {x} (B);"),
             r"\path|(A)·edge·[loop·above,|red]|node·{x}|(B);"
@@ -293,9 +286,6 @@ mod tests {
 
     #[test]
     fn a_multi_token_coordinate_tail_still_binds_its_operation() {
-        // `(\point)` lexes as three tokens; the closing `)` word is the
-        // coordinate's tail, and `circle` still belongs to it (Euclid's
-        // `\fill [black] (\point) circle [radius=2pt];`).
         assert_eq!(
             units(r"\fill (\point) circle [radius=2pt];"),
             r"\fill|(\point)·circle·[radius=2pt];"
@@ -304,7 +294,6 @@ mod tests {
 
     #[test]
     fn a_source_glued_pair_needs_no_verdict() {
-        // `(0,0)--(1,1)` lexes as one WORD: no gap, nothing to decide.
         assert_eq!(units(r"\draw (0,0)--(1,1);"), r"\draw|(0,0)--(1,1);");
     }
 }

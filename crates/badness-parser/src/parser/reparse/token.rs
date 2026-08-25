@@ -445,8 +445,6 @@ mod tests {
         panic!("fixture no longer trips the expected guard: {e:?}");
     }
 
-    /// Splices, with the tier they must reach. The oracle inside `finish` is what
-    /// checks the *result*; these pin that the guards let the case through at all.
     #[track_caller]
     fn assert_splices(text: &str, e: Edit) {
         with_base(text, |base| {
@@ -478,8 +476,6 @@ mod tests {
         assert_splices("a   b\n", edit(2..2, " "));
     }
 
-    /// Math's `WORD` slicing never runs in prose, so hyphenated words retain the
-    /// ordinary token-tier fast path.
     #[test]
     fn splices_a_hyphenated_word_outside_math() {
         assert_splices("a well-known result\n", edit(6..6, "l"));
@@ -491,10 +487,6 @@ mod tests {
         assert_refuses("Some ordinary prose.\n", edit(5..5, "\r\n"));
     }
 
-    /// The environment name decides routing, verbatim capture, and pairing. A relex
-    /// to the same kind proves nothing about any of it, so the position is banned
-    /// outright — including for the `\begin` a shape gate demoted to a plain
-    /// command, where the name sits in a `GROUP` rather than a `NAME_GROUP`.
     #[test]
     fn refuses_an_environment_name() {
         assert_refuses(
@@ -506,13 +498,10 @@ mod tests {
 
     #[test]
     fn refuses_a_definition_body_and_a_document_class() {
-        // The definition scan builds the `ParseCtx` the splice reuses.
         assert_refuses("\\newcommand{\\bea}{\\begin{align}}\n", edit(26..26, "z"));
-        // The lexer reads this name to decide whether `|` is a short verb.
         assert_refuses("\\documentclass{ltxdoc}\n", edit(16..16, "z"));
     }
 
-    /// Math words use the specialized coalesced-word and partition proof.
     #[test]
     fn splices_partition_preserving_math_words() {
         assert_splices("$ab$\n", edit(2..2, "c"));
@@ -522,8 +511,6 @@ mod tests {
         assert_splices("$abc_i$\n", edit(3..4, "α"));
         assert_splices("$x^23_i$\n", edit(3..4, "α"));
 
-        // Positional math arguments have no delimiter-bearing ancestor for the
-        // fragment tier, so their partition-preserving fast path matters too.
         let text = "\\frac{abc_i}{n}\n";
         assert_splices(text, edit_at(text, "abc", 1, "z"));
     }
@@ -538,38 +525,25 @@ mod tests {
             assert_eq!(out.tier, ReparseTier::Math);
         });
 
-        // A positional math argument cannot yet prove a self-contained math
-        // fragment, so a boundary move safely falls through to a full parse.
         let text = "\\frac{x^23_i}{n}\n";
         assert_refuses(text, edit_at(text, "3", 1, "z"));
 
-        // Introducing the first script changes the isolated relex from one WORD
-        // to multiple token kinds, so the ordinary proof declines too.
         let text = "\\frac{abc}{n}\n";
         assert_refuses(text, edit_at(text, "b", 1, "_"));
     }
 
-    /// A `;` ends a picture-body statement, so gaining or losing one restructures
-    /// the tree even though the token's kind is unchanged.
     #[test]
     fn refuses_a_word_that_gains_a_statement_terminator() {
         let text = "\\begin{tikzpicture}\n  \\draw (0,0) -- (1,1);\n\\end{tikzpicture}\n";
-        // The end of `(0,0)`, which carries no `;` yet.
         let at = text.find("(0,0)").expect("fixture") + 5;
         assert_refuses(text, edit(at..at, ";"));
     }
 
-    /// The backward join probe. `\foo` and `1ab` are two tokens only because the
-    /// word starts with a non-letter; editing it to `aab` would merge the pair into
-    /// a single control word, which is a change to the token *kind* sequence.
     #[test]
     fn refuses_an_edit_that_would_merge_with_the_previous_token() {
         assert_refuses("\\foo1ab\n", edit(4..5, "a"));
     }
 
-    /// Phase 6.5's `.dtx` argument, stated as a guard enumeration instead of as
-    /// "the sweep found nothing": each lexer state bit that differs from a
-    /// fragment-at-offset-0 relex has a counterexample and the guard that refuses it.
     #[test]
     fn dtx_state_bit_survey_is_complete_for_the_token_tier() {
         use DtxLeafRefusal::{LeafKindAllowlist, RelexNotSingleOrSameKind};
@@ -585,22 +559,18 @@ mod tests {
             Case {
                 state_bit: "at_line_start",
                 text: "% alpha\n",
-                // A `%` at fragment column 0 lexes as DOC_MARGIN, not WORD.
                 edit: edit_at("% alpha\n", "alpha", 0, "%"),
                 expected: RelexNotSingleOrSameKind,
             },
             Case {
                 state_bit: "in_doc_line",
                 text: "% alpha\n",
-                // `^^A` in a doc line is a comment in-file, but a fragment has no
-                // doc-line context and does not relex to one WORD token.
                 edit: edit_at("% alpha\n", "alpha", 0, "^^A"),
                 expected: RelexNotSingleOrSameKind,
             },
             Case {
                 state_bit: "at_letter",
                 text: "%    \\begin{macrocode}\n\\foo@bar\n%    \\end{macrocode}\n",
-                // `@`-bearing command names are CONTROL_WORDs in macrocode.
                 edit: edit_at(
                     "%    \\begin{macrocode}\n\\foo@bar\n%    \\end{macrocode}\n",
                     "foo@bar",
@@ -612,7 +582,6 @@ mod tests {
             Case {
                 state_bit: "expl_syntax",
                 text: "%    \\begin{macrocode}\n\\ExplSyntaxOn\n\\foo_bar:n\n%    \\end{macrocode}\n",
-                // Colon/underscore expl3 names are CONTROL_WORDs under ExplSyntaxOn.
                 edit: edit_at(
                     "%    \\begin{macrocode}\n\\ExplSyntaxOn\n\\foo_bar:n\n%    \\end{macrocode}\n",
                     "foo_bar:n",
@@ -624,7 +593,6 @@ mod tests {
             Case {
                 state_bit: "macrocode",
                 text: "%    \\begin{macrocode}\n% comment\n%    \\end{macrocode}\n",
-                // In macrocode, line-leading `%` is COMMENT, not DOC_MARGIN.
                 edit: edit_at(
                     "%    \\begin{macrocode}\n% comment\n%    \\end{macrocode}\n",
                     "comment",
@@ -636,8 +604,6 @@ mod tests {
             Case {
                 state_bit: "implicit_expl",
                 text: "%<@@=demo>\n%    \\begin{macrocode}\n\\foo_bar:n\n%    \\end{macrocode}\n",
-                // `%<@@=...>` turns on implicit expl3 in macrocode; affected names
-                // are CONTROL_WORDs and therefore outside the leaf allowlist.
                 edit: edit_at(
                     "%<@@=demo>\n%    \\begin{macrocode}\n\\foo_bar:n\n%    \\end{macrocode}\n",
                     "foo_bar:n",
@@ -649,7 +615,6 @@ mod tests {
             Case {
                 state_bit: "short_verbs",
                 text: "% alpha\n",
-                // `.dtx` docs start with `|` as a short-verb delimiter.
                 edit: replace_needle("% alpha\n", "alpha", "|a|"),
                 expected: RelexNotSingleOrSameKind,
             },
@@ -670,7 +635,6 @@ mod tests {
         }
     }
 
-    /// `.dtx` is no longer refused wholesale: ordinary doc-line words can splice.
     #[test]
     fn splices_a_doc_line_word_in_a_dtx_parse() {
         let text = "% alpha beta\n";
@@ -681,15 +645,11 @@ mod tests {
         });
     }
 
-    /// Deleting a leaf outright removes a token, which this tier does not model.
     #[test]
     fn refuses_an_edit_that_empties_the_leaf() {
         assert_refuses("a bb c\n", edit(2..4, ""));
     }
 
-    /// A diagnostic that *touches* the leaf may change its message or extent, and
-    /// neither is derivable from a relex of one token. One that sits after it just
-    /// shifts.
     #[test]
     fn shifts_errors_after_the_leaf_and_refuses_ones_that_touch_it() {
         let text = "word\n\n\\begin{itemize}\n";
@@ -705,15 +665,9 @@ mod tests {
         });
     }
 
-    /// The neighbour cap keeps the join probe from making the tier `O(file)`.
-    ///
-    /// Paired with the same edit beside a short neighbour, because a refusal on its
-    /// own proves nothing about *which* guard refused — the first draft of this
-    /// test was tripping the `\\end` scan instead and looked just as green.
     #[test]
     fn refuses_a_leaf_beside_an_oversized_neighbour() {
         let long = "a".repeat(MAX_PROBE_BYTES + 10);
-        // The leaf is the space; its previous token is the word beside it.
         assert_refuses(&format!("{long} b\n"), edit(long.len()..long.len(), " "));
 
         let short = "a".repeat(8);

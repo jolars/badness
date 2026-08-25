@@ -310,7 +310,6 @@ mod tests {
     use super::*;
     use crate::parser::lexer::LatexFlavor;
 
-    /// Build a base by fully parsing `text`, the way the host does.
     fn base_of(text: &str) -> (Parse, ParseCtx, ResolvedDeclarations) {
         let declared = ResolvedDeclarations::default();
         let (parse, ctx) = parse_with_declarations_resolved(text, LatexFlavor::Document, &declared);
@@ -336,28 +335,20 @@ mod tests {
         }
     }
 
-    /// An edit that lands on no spliceable leaf falls back. The ladder is
-    /// refusal-first, so "no tier claimed it" is the ordinary outcome and has to
-    /// stay cheap and silent rather than becoming an error.
     #[test]
     fn an_edit_outside_a_plain_leaf_falls_back() {
         with_base("\\section{Hi}\n\nbody text\n", |base| {
-            // On the `{`: a structural token, not a leaf this tier relexes.
             let e = edit(8..8, "x");
             assert!(reparse(base, &e, &e.apply(base.text)).is_none());
-            // Straddling two tokens: the covering element is a node.
             let e = edit(7..10, "zz");
             assert!(reparse(base, &e, &e.apply(base.text)).is_none());
         });
     }
 
-    /// An edit that does not fit the base is refused before anything slices it. A
-    /// language server can stage a chain against a buffer that has since moved.
     #[test]
     fn an_edit_that_does_not_fit_the_base_is_refused() {
         with_base("abc\n", |base| {
             assert!(reparse(base, &edit(90..99, "x"), "abc\n").is_none());
-            // Offset 1 is inside a two-byte char.
             assert!(reparse(base, &edit(1..1, "x"), "abc\n").is_none());
         });
         with_base("α\n", |base| {
@@ -372,8 +363,6 @@ mod tests {
         });
     }
 
-    /// A chain that applies cleanly but composes to some *other* text is stale, and
-    /// answering for it would answer for the wrong buffer.
     #[test]
     fn a_chain_that_lands_elsewhere_is_refused() {
         with_base("abc\n", |base| {
@@ -390,9 +379,6 @@ mod tests {
         });
     }
 
-    /// The release-build backstop: `finish` refuses a tree that does not span its
-    /// text rather than handing back a splice with bad offsets. It must *bail*, not
-    /// panic — the contract is refusal-first even for a bug.
     #[test]
     fn finish_refuses_a_tree_that_does_not_span_its_text() {
         with_base("\\section{Hi}\n", |base| {
@@ -401,16 +387,12 @@ mod tests {
                 base.errors.to_vec(),
                 ReparseTier::Token,
                 base,
-                // One byte longer than the tree.
                 "\\section{Hi}\n\n",
             );
             assert!(out.is_none());
         });
     }
 
-    /// The happy path through the single exit, so the length check and the oracle
-    /// are both exercised on a result that should pass. An identity splice is the
-    /// only result Phase 1 can construct honestly.
     #[test]
     fn finish_accepts_an_identity_splice() {
         with_base("\\section{Hi}\n\nbody\n", |base| {
@@ -448,15 +430,6 @@ mod tests {
         assert_eq!(fingerprint(&a.syntax()), fingerprint(&b.syntax()));
     }
 
-    /// # Oracle self-tests
-    ///
-    /// The oracle is the whole safety story, so it has to be shown capable of
-    /// failing. Without these, Phase 1 ships a net with no proof it catches
-    /// anything — and it would keep passing if `assert_matches_full_parse` were
-    /// accidentally compiled out.
-    ///
-    /// `debug_assertions`-gated because that is what the assert itself is gated on;
-    /// under `--release` there is deliberately nothing here to trip.
     #[cfg(debug_assertions)]
     mod oracle_self_tests {
         use super::*;
@@ -465,8 +438,6 @@ mod tests {
         #[should_panic(expected = "different tree")]
         fn the_oracle_rejects_a_wrong_tree() {
             with_base("\\section{Hi}\n", |base| {
-                // A tree of the right *width* but the wrong content: the length
-                // backstop cannot see this one, which is exactly why the oracle exists.
                 let wrong = crate::parser::parse("\\section{Ho}\n");
                 let _ = finish(
                     wrong.green,
@@ -498,8 +469,6 @@ mod tests {
             });
         }
 
-        /// The error check is not satisfied by a mere count match — a diagnostic
-        /// that moved is as wrong as one that appeared.
         #[test]
         #[should_panic(expected = "different errors")]
         fn the_oracle_rejects_an_error_that_moved() {

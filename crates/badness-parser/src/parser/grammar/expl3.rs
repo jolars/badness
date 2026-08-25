@@ -598,9 +598,6 @@ mod tests {
     use super::*;
     use crate::parser::lexer::{ParseCtx, lex};
 
-    /// Lex `input` (which must open a region so `:`/`_` are letters), park the
-    /// parser on the token whose text is `head`, and scan its unit. Renders
-    /// each resolved argument as `kind:text` for compact assertions.
     fn scan(input: &str, head: &str) -> Option<(Vec<String>, bool)> {
         let tokens = lex(input);
         let ctx = ParseCtx::default();
@@ -644,7 +641,6 @@ mod tests {
 
     #[test]
     fn relation_word_satisfies_a_single_token_slot() {
-        // Issue #106: TeX grabs one character for an undelimited argument.
         let (args, _) = scan(
             &format!("{ON}\\int_compare:nNnTF {{ a }} = {{ 1 }} {{ T }} {{ F }}\n"),
             "\\int_compare:nNnTF",
@@ -664,7 +660,6 @@ mod tests {
 
     #[test]
     fn multi_character_word_aborts_the_slot() {
-        // A longer run would take material TeX leaves for the next slot.
         assert!(
             scan(
                 &format!("{ON}\\int_compare:nNnTF {{ a }} == {{ 1 }} {{ T }} {{ F }}\n"),
@@ -686,9 +681,6 @@ mod tests {
 
     #[test]
     fn delimiting_control_word_is_parameter_text() {
-        // `#1 \q_stop {body}`: the delimiter is consumed as a bare command and
-        // the terminating group is left for the `n` slot — the same extent the
-        // semantic peel-back produces.
         let (args, _) = scan(
             &format!("{ON}\\cs_new:Npn \\foo:w #1 \\q_stop {{ body }}\n"),
             "\\cs_new:Npn",
@@ -719,9 +711,6 @@ mod tests {
 
     #[test]
     fn blank_line_at_paragraph_level_aborts() {
-        // A paragraph separator ends the walk's element stream, which the
-        // semantic scan reads as running out of stream — the head stays
-        // greedy, exactly as `attach_arguments` stops at a paragraph break.
         assert!(
             scan(
                 &format!("{ON}\\tl_set:Nn \\l_tmpa_tl\n\n{{ x }}\n"),
@@ -733,11 +722,6 @@ mod tests {
 
     #[test]
     fn blank_line_in_a_group_body_commits_the_prefix() {
-        // Inside a brace group the element loop runs to the `}` regardless of
-        // blank lines, so the stream continues and the unit commits what it
-        // consumed (the sanctioned partial commit). The scan is parked
-        // mid-walk, so the enclosing-group context is simulated the way the
-        // walk would carry it.
         let input = format!("{ON}{{ \\tl_set:Nn \\l_tmpa_tl\n\n{{ x }} }}\n");
         let tokens = lex(&input);
         let ctx = ParseCtx::default();
@@ -755,10 +739,6 @@ mod tests {
 
     #[test]
     fn braced_candidate_past_an_own_line_comment_is_consumed() {
-        // Greedy attachment crosses an own-line comment to a following `{…}`
-        // (a comment is content that resets the newline run), so the glued
-        // group is consumable — the comment rides the unit, exactly as it
-        // rode the attached sibling before the migration.
         let (args, complete) = scan(
             &format!("{ON}\\tl_set:Nn \\l_tmpa_tl\n% doc\n{{ x }}\n"),
             "\\tl_set:Nn",
@@ -770,8 +750,6 @@ mod tests {
 
     #[test]
     fn non_braced_candidate_past_an_own_line_comment_ends_the_unit() {
-        // Anything greedy would not have glued keeps the own-line-comment
-        // rule: the unit ends at the gap with its consumed prefix.
         let (args, complete) = scan(
             &format!("{ON}\\cs_new:Npn \\module_foo:n\n% doc\n#1 {{ x }}\n"),
             "\\cs_new:Npn",
@@ -794,8 +772,6 @@ mod tests {
 
     #[test]
     fn binding_comment_run_aborts_the_unit() {
-        // An own-line comment run before a control word becomes that word's
-        // `DOC_COMMENT` (AGENTS.md #9) — a node the unit must not swallow.
         assert!(
             scan(
                 &format!("{ON}\\tl_set:Nn\n% doc\n\\l_tmpa_tl {{ x }}\n"),
@@ -851,9 +827,6 @@ mod tests {
 
     #[test]
     fn expansion_drivers_are_excluded() {
-        // `\::n` parses a real spec (`expl3_slots("::n")` is `Some`), but its
-        // runtime protocol is nothing like a call site — excluded by the
-        // empty-base-name check, staying greedy.
         assert!(scan(&format!("{ON}\\::n {{ x }}\n"), "\\::n").is_none());
     }
 
@@ -865,14 +838,11 @@ mod tests {
 
     #[test]
     fn line_break_control_symbol_aborts_a_single_token_slot() {
-        // `\\` always forms a `LINE_BREAK` node in the walk.
         assert!(scan(&format!("{ON}\\tl_set:Nn \\\\ {{ x }}\n"), "\\tl_set:Nn").is_none());
     }
 
     #[test]
     fn plain_control_symbol_satisfies_a_single_token_slot() {
-        // An orphan `\)` is data in macro code (issue #60) — a bare token the
-        // slot consumes, the def-prefix definee treatment.
         let (args, _) =
             scan(&format!("{ON}\\tl_set:Nn \\) {{ x }}\n"), "\\tl_set:Nn").expect("recognized");
         assert_eq!(args, ["tok:\\)", "group:{ x }"]);

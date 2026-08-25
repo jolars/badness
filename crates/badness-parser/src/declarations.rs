@@ -660,8 +660,6 @@ mod tests {
         assert_eq!(entry.end, vec![CommandName::new("eea")]);
     }
 
-    /// The `\startmyenv … \endmyenv` shape from the issue: an environment with no
-    /// built-in counterpart, reached only through commands. One entry covers it.
     #[test]
     fn an_entry_may_declare_both() {
         let decls = from_json(
@@ -676,9 +674,6 @@ mod tests {
         assert_eq!(entry.begin, vec![CommandName::new("startmyenv")]);
     }
 
-    /// TOML users write `'\bea'`; a leading backslash is optional and both
-    /// spellings must reach the same key, since a control word can never
-    /// contain one.
     #[test]
     fn a_leading_backslash_is_optional_and_normalized_away() {
         assert_eq!(CommandName::new("\\bea"), CommandName::new("bea"));
@@ -690,14 +685,11 @@ mod tests {
         );
     }
 
-    /// Only *one* backslash is stripped, so a control symbol keeps its shape and
-    /// resolution can reject it by name rather than silently seeing a word.
     #[test]
     fn only_one_backslash_is_stripped() {
         assert_eq!(CommandName::new("\\\\").as_str(), "\\");
     }
 
-    /// A diagnostic should spell the name back the way the user wrote it.
     #[test]
     fn display_restores_the_backslash() {
         assert_eq!(CommandName::new("bea").to_string(), "\\bea");
@@ -721,8 +713,6 @@ mod tests {
         assert!(err.to_string().contains("liek"), "{err}");
     }
 
-    /// The wire spellings are public API (module docs), so a field rename must
-    /// fail a test rather than silently break every user's config.
     #[test]
     fn wire_spellings_are_pinned() {
         let decls = from_json(
@@ -737,16 +727,12 @@ mod tests {
         assert_eq!(entry["end"][0], "e");
     }
 
-    /// Deterministic iteration: resolution reports errors in the order the user
-    /// reads them, and the value lands on a salsa input.
     #[test]
     fn environments_iterate_in_name_order() {
         let decls = from_json(r#"{"environments": {"zed": {}, "alpha": {}, "mid": {}}}"#);
         let names: Vec<&str> = decls.environments.keys().map(SmolStr::as_str).collect();
         assert_eq!(names, ["alpha", "mid", "zed"]);
     }
-
-    // --- resolution
 
     fn resolve(json: &str) -> SignatureDb {
         from_json(json).resolve().expect("resolves").as_db().clone()
@@ -788,10 +774,6 @@ mod tests {
         );
     }
 
-    /// Most of the ref/cite families have no `signatures.json` entry, so a `like`
-    /// target must be checked against the family tables and nothing else. A
-    /// wrapper around `\cpageref` — the only list-valued page reference, and the
-    /// one shape `\pageref` cannot stand in for — has no other target to name.
     #[test]
     fn like_may_name_a_family_command_absent_from_the_signature_database() {
         for target in ["cpageref", "supercite", "Textcite", "fnotecite"] {
@@ -805,9 +787,6 @@ mod tests {
         }
     }
 
-    /// The reclassification gate has to consult the same tables: `\cpageref`
-    /// splits its key list and `\ref` does not, so accepting this entry would turn
-    /// every `\cpageref{a,b}` in the project into one undefined key `a,b`.
     #[test]
     fn a_family_command_absent_from_the_signature_database_may_not_be_redeclared() {
         for name in ["cpageref", "supercite", "Textcite", "fnotecite"] {
@@ -821,8 +800,6 @@ mod tests {
         }
     }
 
-    /// The halves partition the block, which is what lets an incremental front
-    /// end depend on one without depending on the other.
     #[test]
     fn the_two_tiers_partition_the_block() {
         let declared = from_json(
@@ -842,8 +819,6 @@ mod tests {
         assert_eq!(semantic.as_db(), &SignatureDb::default());
         assert_eq!(semantic.command_like("myref"), Some("cref"));
 
-        // Neither half alone is the block, and an edit confined to one leaves the
-        // other's half untouched — the property the firewall rests on.
         assert!(!parse.is_empty() && !semantic.is_empty());
         let recommanded = from_json(
             r#"{
@@ -894,8 +869,6 @@ mod tests {
         );
     }
 
-    /// `like` copies the curated entry wholesale, so every behavior flag —
-    /// including ones added later — comes along without being named in config.
     #[test]
     fn like_copies_the_builtin_entry() {
         let db = resolve(r#"{"environments": {"myenv": {"like": "align"}}}"#);
@@ -904,16 +877,12 @@ mod tests {
         assert!(sig.math && sig.align);
     }
 
-    /// The parked `codeexample` knob: naming a verbatim environment is exactly
-    /// what an entry with no delimiters is for.
     #[test]
     fn like_may_name_a_verbatim_environment() {
         let db = resolve(r#"{"environments": {"mycode": {"like": "lstlisting"}}}"#);
         assert!(db.environment("mycode").expect("declared").verbatim_body);
     }
 
-    /// An argument-taking target is fine too, as long as no command has to stand
-    /// in for the delimiters: `\begin{mytab}{ll}` carries its own arguments.
     #[test]
     fn like_may_name_an_argument_taking_environment() {
         let db = resolve(r#"{"environments": {"mytab": {"like": "tabular"}}}"#);
@@ -931,9 +900,6 @@ mod tests {
         assert!(err.to_string().contains("algin"), "{err}");
     }
 
-    /// `like` resolves against the curated tier alone. The CWL tier carries
-    /// names and arity with every behavior flag left at its default, so copying
-    /// from it would hand back a signature that says nothing.
     #[test]
     fn like_does_not_resolve_against_the_cwl_tier() {
         let cwl_only = crate::semantic::signature::cwl()
@@ -950,20 +916,15 @@ mod tests {
         ));
     }
 
-    /// The issue's own case: spellings for an environment badness already knows,
-    /// needing no `like` at all.
     #[test]
     fn delimiters_for_a_builtin_environment_need_no_like() {
         let db =
             resolve(r#"{"environments": {"eqnarray": {"begin": ["\\bea"], "end": ["\\eea"]}}}"#);
         assert_eq!(db.env_begin_alias("bea"), Some("eqnarray"));
         assert_eq!(db.env_end_alias("eea"), Some("eqnarray"));
-        // Behavior still comes from the built-in entry, so nothing is cloned in
-        // under the environment's own name.
         assert!(db.environment("eqnarray").is_none());
     }
 
-    /// The `\startmyenv … \endmyenv` shape: behavior *and* spellings, one entry.
     #[test]
     fn delimiters_and_like_resolve_together() {
         let db = resolve(
@@ -977,8 +938,6 @@ mod tests {
         assert!(db.environment("mytheorem").is_some());
     }
 
-    /// Several spellings may open the same environment; pairing is by kind, not
-    /// by index, so the lists need not be the same length.
     #[test]
     fn an_environment_may_have_several_spellings_per_side() {
         let db = resolve(
@@ -990,9 +949,6 @@ mod tests {
         assert_eq!(db.env_begin_alias("beqa"), Some("eqnarray"));
     }
 
-    /// Issue #117: one side alone resolves, because the literal delimiter is a
-    /// spelling of the other side. Both directions, since the two used to be
-    /// symmetric errors.
     #[test]
     fn one_side_alone_resolves() {
         let db = resolve(r#"{"environments": {"eqnarray": {"begin": ["\\bea"]}}}"#);
@@ -1004,8 +960,6 @@ mod tests {
         assert_eq!(db.env_begin_alias("eea"), None);
     }
 
-    /// The target rules are what bound a wrong declaration, so each is
-    /// re-checked on the one-sided shape the old requirement hid.
     #[test]
     fn one_side_alone_still_obeys_every_target_rule() {
         for json in [
@@ -1024,15 +978,12 @@ mod tests {
         );
     }
 
-    /// TeX truth, not conservatism: the closer alias is never expanded, because
-    /// the verbatim scanner has already swallowed it.
     #[test]
     fn delimiters_for_a_verbatim_environment_are_rejected() {
         let err =
             resolve_err(r#"{"environments": {"verbatim": {"begin": ["\\bv"], "end": ["\\ev"]}}}"#);
         assert_eq!(err.kind, DeclarationErrorKind::VerbatimTarget);
 
-        // Reached through `like` as well as by name.
         let err = resolve_err(
             r#"{"environments": {"mycode": {
                  "like": "lstlisting", "begin": ["\\bc"], "end": ["\\ec"]
@@ -1055,9 +1006,6 @@ mod tests {
         assert!(err.to_string().contains("like"), "{err}");
     }
 
-    /// The one shape that says too little. A header with nothing under it
-    /// parses, breaks no rule, and does nothing — the outcome every other rule
-    /// here exists to prevent.
     #[test]
     fn an_entry_that_declares_nothing_is_an_error() {
         let err = resolve_err(r#"{"environments": {"myenv": {}}}"#);
@@ -1066,8 +1014,6 @@ mod tests {
         assert!(err.to_string().contains("like"), "{err}");
     }
 
-    /// A spelling badness already knows as a command would *take effect* rather
-    /// than do nothing, on a command the project never meant to touch.
     #[test]
     fn a_spelling_that_is_already_a_builtin_command_is_rejected() {
         let err =
@@ -1080,10 +1026,6 @@ mod tests {
         assert!(err.to_string().contains("emph"), "{err}");
     }
 
-    /// The check reads the curated tier alone, so a name only the bulk CWL tier
-    /// carries is still a project's to spell — the same scoping `like` has, and
-    /// for the same reason: CWL knows every package, including ones the project
-    /// never loads.
     #[test]
     fn a_cwl_only_command_name_is_still_available_as_a_spelling() {
         let cwl_only = crate::semantic::signature::cwl()
@@ -1099,8 +1041,6 @@ mod tests {
         assert_eq!(db.env_begin_alias(&cwl_only), Some("center"));
     }
 
-    /// The error key is a dotted key the user can paste back, so a name that is
-    /// not a bare TOML key is quoted the way they had to write it.
     #[test]
     fn the_error_key_quotes_a_name_that_is_not_a_bare_key() {
         let err = resolve_err(r#"{"environments": {"my.env": {}}}"#);
@@ -1109,7 +1049,6 @@ mod tests {
         assert_eq!(err.key, r#"environments."my env".like"#);
     }
 
-    /// Two entries claiming one spelling would otherwise resolve by map order.
     #[test]
     fn a_spelling_may_not_be_claimed_twice() {
         let err = resolve_err(
@@ -1127,9 +1066,6 @@ mod tests {
         );
     }
 
-    /// Including across the two sides, where the two maps would each claim it —
-    /// reported as the *repeat* it is, since naming the owning entry would just
-    /// name the entry the error is already keyed to.
     #[test]
     fn a_spelling_may_not_be_both_opener_and_closer() {
         let err = resolve_err(r#"{"environments": {"align": {"begin": ["\\x"], "end": ["\\x"]}}}"#);
@@ -1142,10 +1078,6 @@ mod tests {
         );
     }
 
-    /// The exact key the issue-#117 reporter wrote. It is not a control word,
-    /// so the general rule already caught it — but only to say "a delimiter must
-    /// be a name of letters", which does not tell them that what they were
-    /// reaching for is now the default and the key should simply go.
     #[test]
     fn the_written_out_delimiter_is_rejected_with_its_own_advice() {
         let err = resolve_err(
@@ -1163,8 +1095,6 @@ mod tests {
         assert!(rendered.contains("\\end{split}"), "{rendered}");
         assert!(rendered.contains("removed"), "{rendered}");
 
-        // The opening side, and a name badness does not curate: the shape is the
-        // mistake, so neither changes which rule fires.
         for json in [
             r#"{"environments": {"split": {"begin": ["\\begin{split}"]}}}"#,
             r#"{"environments": {"split": {"end": ["\\end{myenv}"]}}}"#,
@@ -1178,14 +1108,10 @@ mod tests {
             );
         }
 
-        // A command that merely *starts* with those letters is an ordinary
-        // spelling, not the delimiter.
         let db = resolve(r#"{"environments": {"center": {"begin": ["\\beginning"]}}}"#);
         assert_eq!(db.env_begin_alias("beginning"), Some("center"));
     }
 
-    /// A spelling the lexer would split into two tokens can never match, so
-    /// accepting it would be a silent no-op.
     #[test]
     fn a_spelling_that_could_never_lex_as_one_control_word_is_rejected() {
         for bad in ["b ea", "bea2", "", "b-ea"] {
@@ -1200,8 +1126,6 @@ mod tests {
         }
     }
 
-    /// `@` and expl3's `_`/`:` are letters in the regimes a `.sty` is read
-    /// under, and a declaration does not say which file it will apply to.
     #[test]
     fn a_spelling_may_use_letters_of_any_catcode_regime() {
         let db =
@@ -1210,9 +1134,6 @@ mod tests {
         assert_eq!(db.env_end_alias("my_e:n"), Some("align"));
     }
 
-    /// The resolved tier is a `SignatureDb`, so it folds into a document's scope
-    /// with the merge the scanned tier already uses — which is what step 5 of
-    /// the plan needs and why the return type is not bespoke.
     #[test]
     fn the_resolved_tier_merges_like_any_other() {
         let declared = resolve(
@@ -1226,17 +1147,10 @@ mod tests {
         assert_eq!(scope.env_begin_alias("bea"), Some("eqnarray"));
     }
 
-    // --- resolution reaching the semantic layer
-
-    /// Parse `src` under `json`'s declarations and resolve the signature
-    /// governing its first `ENVIRONMENT` node, through the scope a document
-    /// would build: scanned definitions first, declarations overlaid on top.
     fn environment_sig_at(src: &str, json: &str) -> Option<EnvironmentSig> {
         scope_and_sig_at(src, json).1
     }
 
-    /// [`environment_sig_at`], also returning the name-keyed answer for the
-    /// alias's target, so a test can show the two lookups diverge.
     fn scope_and_sig_at(src: &str, json: &str) -> (Option<EnvironmentSig>, Option<EnvironmentSig>) {
         use crate::parser::{LatexFlavor, parse_with_declarations};
         use crate::semantic::define::scan_definitions;
@@ -1259,9 +1173,6 @@ mod tests {
         )
     }
 
-    /// The sharp edge: an alias whose target is *itself* declared. Resolving the
-    /// target against `builtin()` alone would find nothing, so `\startmyenv`
-    /// would pair and then inherit no behavior at all.
     #[test]
     fn a_declared_alias_resolves_to_a_declared_target() {
         let sig = environment_sig_at(
@@ -1274,9 +1185,6 @@ mod tests {
         assert_eq!(&sig, builtin().environment("align").expect("curated"));
     }
 
-    /// And the rule that edge must not break: a *scanned* definition still lends
-    /// an alias nothing. Here `eqnarray` is redefined in the file, but the alias
-    /// resolves to the curated entry, because only curated data may reach it.
     #[test]
     fn a_scanned_definition_still_lends_an_alias_nothing() {
         let (scanned, sig) = scope_and_sig_at(
@@ -1285,9 +1193,6 @@ mod tests {
         );
         let sig = sig.expect("the alias resolves");
         assert_eq!(&sig, builtin().environment("eqnarray").expect("curated"));
-        // The scan really did land a shadowing entry, and the *name*-keyed
-        // lookup sees it — so the two answers genuinely diverge here, and the
-        // alias took the curated one.
         let scanned = scanned.expect("the scan records the redefinition");
         assert!(!scanned.math, "the scanned redefinition is not math");
         assert!(sig.math, "the alias resolves to the curated entry");

@@ -226,7 +226,6 @@ mod tests {
 
     #[test]
     fn optional_with_default_consumes_group() {
-        // The `{0}` default must not be read as another argument.
         assert_eq!(
             kinds("O{0} m"),
             vec![(false, ArgKind::Bracket), (true, ArgKind::Brace)]
@@ -236,7 +235,6 @@ mod tests {
     #[test]
     fn star_and_token_yield_no_slot() {
         assert_eq!(kinds("s m"), vec![(true, ArgKind::Brace)]);
-        // `t` consumes its test token (`*`), leaving just the `m`.
         assert_eq!(kinds("t* m"), vec![(true, ArgKind::Brace)]);
     }
 
@@ -247,25 +245,19 @@ mod tests {
 
     #[test]
     fn bracket_delimited_maps_to_bracket() {
-        // `d[]` and `r[]` are `[…]`-delimited, so they yield a bracket slot.
         assert_eq!(kinds("d[]"), vec![(false, ArgKind::Bracket)]);
         assert_eq!(kinds("r[]"), vec![(true, ArgKind::Bracket)]);
     }
 
     #[test]
     fn paren_delimited_yields_no_slot() {
-        // `()`-delimited args produce no CST node, so no slot — but the two
-        // delimiter tokens are still consumed, so a trailing `m` is found.
         assert_eq!(kinds("d() m"), vec![(true, ArgKind::Brace)]);
         assert_eq!(kinds("r<> m"), vec![(true, ArgKind::Brace)]);
     }
 
     #[test]
     fn required_delimited_with_default_consumes_group() {
-        // `R(){default}`: two delimiter tokens then a default group, then `m`.
         assert_eq!(kinds("R(){x} m"), vec![(true, ArgKind::Brace)]);
-        // `D[]{default}`: bracket-delimited optional with a default → one bracket
-        // slot, then `m`.
         assert_eq!(
             kinds("D[]{x} m"),
             vec![(false, ArgKind::Bracket), (true, ArgKind::Brace)]
@@ -274,8 +266,6 @@ mod tests {
 
     #[test]
     fn embellishments_consume_their_groups() {
-        // `e{^_}` consumes one group; `E{^_}{\d\d}` consumes two. Neither yields a
-        // slot, so only the `m` remains.
         assert_eq!(kinds("e{^_} m"), vec![(true, ArgKind::Brace)]);
         assert_eq!(kinds("E{^_}{00} m"), vec![(true, ArgKind::Brace)]);
     }
@@ -299,14 +289,11 @@ mod tests {
 
     #[test]
     fn unknown_letter_stops_scan() {
-        // A garbage letter halts parsing; the `m` before it is kept, the rest dropped.
         assert_eq!(kinds("m z m"), vec![(true, ArgKind::Brace)]);
     }
 
     #[test]
     fn control_sequence_delimiters_consumed() {
-        // `d\langle\rangle`: control-word delimiter tokens, non-bracket → no slot,
-        // but both are consumed so the `m` is reached.
         assert_eq!(kinds("d\\langle\\rangle m"), vec![(true, ArgKind::Brace)]);
     }
 }

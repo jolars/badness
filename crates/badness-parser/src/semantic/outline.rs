@@ -400,8 +400,6 @@ mod tests {
         outline(&SyntaxNode::new_root(parse(src).green))
     }
 
-    /// Parse in `.dtx` (docstrip) mode so the leading-`%` ltxdoc lines become real
-    /// `macro`/`environment`/`\DescribeMacro` constructs, then build the outline.
     fn outline_of_dtx(src: &str) -> Vec<OutlineItem> {
         let config = LexConfig {
             flavor: LatexFlavor::Document,
@@ -486,8 +484,6 @@ mod tests {
         let items =
             outline_of("\\section{A}\n\\begin{itemize}\n\\item \\label{x}\n\\end{itemize}\n");
         assert_eq!(items.len(), 1);
-        // `itemize` is transparent — the label surfaces under the section, not
-        // under an itemize node.
         assert_eq!(items[0].children.len(), 1);
         assert_eq!(items[0].children[0].name, "x");
     }
@@ -507,7 +503,6 @@ mod tests {
         assert_eq!(items[0].name, "\\textsc{Intro}");
     }
 
-    /// Classify the label at the offset of `\label` in `src`.
     fn context_of(src: &str) -> Option<LabelContext> {
         let offset = src.find("\\label").expect("marker") + "\\label{".len();
         let root = SyntaxNode::new_root(parse(src).green);
@@ -588,7 +583,6 @@ mod tests {
 
     #[test]
     fn item_label_inside_figure_stays_item() {
-        // Innermost classifying ancestor wins.
         let ctx = context_of(
             "\\begin{figure}\n\\begin{itemize}\n\\item \\label{it:x}\n\\end{itemize}\n\\end{figure}\n",
         );

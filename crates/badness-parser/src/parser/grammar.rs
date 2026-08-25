@@ -111,54 +111,20 @@ fn builtin_command_args(head: &str) -> Option<&'static [ArgSpec]> {
         .map(|sig| sig.args.as_ref())
 }
 
-/// The walk state a gate batch's scan reads, and therefore the key its
-/// verdicts stay valid under ([`Parser::walk_key`]). Everything else a scan
-/// consults is pre-scanned token state, a pure function of the text.
-///
-/// `plain_braces` rides a version counter rather than the set itself: it is
-/// saved and restored in lockstep with `macrocode_end` per chunk
-/// ([`Parser::macrocode_body`]), so pinning the frame already pins it, but a
-/// counter makes that a fact instead of an argument — and a version can only
-/// ever invalidate a batch the frame index would have kept.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct WalkKey {
     macrocode_end: Option<usize>,
     in_def_body: bool,
     in_group: bool,
     plain_braces: u32,
-    /// The innermost enclosing math's flavor ([`Parser::math_dollar`]), read by
-    /// [`MathBracketGate`] alone: inside `$…$` a `$` is that math's own closer
-    /// and refutes, while inside `\[…\]` it opens a *transparent* nested inline
-    /// region ([`DollarAnchor`]). Nothing else in this key moves when the flavor
-    /// does — entering a `$` inside `\[…\]` changes no brace, group, or frame
-    /// state — so without it a batch harvested under one flavor would answer for
-    /// the other.
     enclosing_math_is_dollar: bool,
 }
 
-/// One batched run of a shape gate's scan ([`Parser::gate_batch`]): the
-/// per-opener verdicts it harvested, valid under the walk state in `key`.
 struct GateBatch {
     key: WalkKey,
-    /// Opener index → the verdict that opener's own scan would have computed
-    /// under `key`, for every same-frame opener the scan passed. Openers
-    /// absent from the map sat behind a brace during the batch and re-batch
-    /// when queried.
     verdicts: std::collections::HashMap<usize, Option<usize>>,
 }
 
-/// Where a batch deposits the verdicts it settles ([`Parser::gate_batch`]).
-///
-/// The driver has one loop and one set of `insert` calls; what varies is who
-/// keeps the results. A memoized gate keeps all of them, since the whole point
-/// is answering the openers ahead of the seed from one scan. A **single-entry**
-/// gate ([`Parser::gate_verdict`]) opens no nested entry, so the seed is the
-/// only opener its batch can ever settle — and building a `HashMap` to hold one
-/// verdict costs an allocation per `$` and `\[` in the document.
-///
-/// Discarding the non-seed verdicts is safe for *any* gate, not just a
-/// single-entry one: the driver's decisions never read back what it inserted.
-/// It is only worth doing where there is nothing else to keep.
 trait VerdictSink {
     fn insert(&mut self, opener: usize, verdict: Option<usize>);
 }
@@ -169,12 +135,8 @@ impl VerdictSink for std::collections::HashMap<usize, Option<usize>> {
     }
 }
 
-/// The allocation-free [`VerdictSink`] for a single-entry gate: one slot for
-/// the seed, and everything else dropped on the floor.
 struct SeedVerdict {
     seed: usize,
-    /// `None` until the batch settles the seed; the driver guarantees it does
-    /// (`debug_assert` in [`Parser::gate_verdict`]).
     verdict: Option<Option<usize>>,
 }
 
@@ -186,62 +148,21 @@ impl VerdictSink for SeedVerdict {
     }
 }
 
-/// What a `}` at a gate's own brace level means to that gate. The scan reached
-/// it without having opened the group, so the brace closes a group opened
-/// *before* the entries — or no group at all, when the walk itself is at the
-/// outer level.
-///
-/// The token event is the same for every gate — braces are catcode structure
-/// while the gated delimiters are only macros, so the `}` always wins — but the
-/// *verdict* it implies differs on two axes: the positive gate/demotion gate
-/// line, and whether a brace with no group behind it means anything. Both are
-/// policy, not bookkeeping.
 #[derive(PartialEq, Eq)]
 enum StrayBrace {
-    /// Refutes every live entry, but only when the walk sits inside a group
-    /// (the walk is inside a group): a conditional or an alias cannot pair across the
-    /// `}` that ends the group its opener sits in, while at the outer level a
-    /// stray `}` is somebody else's business and the scan carries on.
     RefutesInGroup,
-    /// It *is* the closer, on the same condition:
-    /// [`Parser::environment_escapes_group`] asks whether the `\begin` escapes
-    /// its group, and this brace is the escape.
     ClosesInGroup,
-    /// Refutes every live entry unconditionally. The math gates mirror
-    /// [`Parser::dollar_math`] and [`Parser::delim_math`], which bail at *any*
-    /// unbalanced `}` — for them the brace is a recovery anchor of the parse
-    /// itself, not merely a group boundary — and a gate must mirror the parse
-    /// it guards. [`LeftRightGate`] joins them: [`Parser::left_right`] bails at
-    /// any unbalanced `}` too.
     RefutesAlways,
 }
 
-/// Which math delimiters anchor a gate's scan at the entries' own level.
-///
-/// Which side anchors follows from where the gated construct *lives*. A
-/// conditional or an alias lives in text, so what defeats it is math
-/// **starting**: the scan does not model the `$`/`\[`/`\(` shape gates, and a
-/// closer behind a delimiter that opens math may well be swallowed by it. A
-/// `\left…\right` pair already lives *inside* math, so what defeats it is the
-/// enclosing math **ending** — exactly [`Parser::left_right`]'s own recovery
-/// anchors. A `$` is both, and anchors either way.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MathAnchor {
-    /// Nothing anchors: a foreign delimiter is ordinary content. The demotion
-    /// gate reads it this way because refusing there would *keep* a construct
-    /// the scan cannot vouch for, and for the math gates the delimiter is the
-    /// closer itself.
     None,
-    /// `$`, `\[`, `\(` — math starting.
     Opening,
-    /// `$`, `\]`, `\)` — math ending.
     Closing,
 }
 
 impl MathAnchor {
-    /// Whether the control symbol `text` anchors under this policy. `$` is
-    /// handled by the driver's own [`SyntaxKind::DOLLAR`] arm, since it is both
-    /// an opener and a closer ([`DollarAnchor`]).
     fn anchors(self, text: &str) -> bool {
         match self {
             MathAnchor::None => false,
@@ -251,208 +172,55 @@ impl MathAnchor {
     }
 }
 
-/// What a `$` at the entries' own brace level means — the one axis a gate reads
-/// at *runtime* rather than from a const, because [`MathBracketGate`] decides it
-/// from the enclosing math's flavor.
-///
-/// It is separate from [`MathAnchor`] because a `$` is both sides of the
-/// delimited pair at once, so the two-sided question that enum answers does not
-/// apply to it, and because it has a third reading no delimiter has.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DollarAnchor {
-    /// Ordinary content: the math gates, whose own closer it is.
     Content,
-    /// Refutes every live entry, the reading of every gate that anchors on math
-    /// at all — a `$` opens math for a text-dwelling gate and ends it for a
-    /// math-dwelling one.
     Refutes,
-    /// Toggles a **transparent** nested inline region: the entries' own openers
-    /// and closers stop counting until the matching `$`, and everything else
-    /// (braces, the paragraph run, the delimiter and environment anchors) reads
-    /// on unchanged. [`MathBracketGate`] inside `\[…\]`/`\(…\)` or a math
-    /// environment, where a `$` really does open a nested inline region, so a
-    /// balanced `$…$` inside the bracket is content rather than a boundary
-    /// (`\[ \inferrule*[right=$\Pi$-eq]{A}{B} \]`). An unbalanced `$` leaves the
-    /// region open, so no `]` is ever accepted and the scan runs to its bound.
     Transparent,
 }
 
-/// Whether a blank line refutes an entry, and at what brace level.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ParagraphAnchor {
-    /// Never. An alias body legitimately spans blank lines, and an environment's
-    /// escaping `}` may sit paragraphs away.
     None,
-    /// At an entry's *own* level (`depth == 0 && envs == envs_at_push`) only.
-    /// Deeper than that a break is ordinary body trivia, and a gate stricter
-    /// than the parse it guards drops the node: a display equation built out of
-    /// `tikzpicture` cells (issue #70) lost its math node this way.
     OwnLevel,
-    /// At any depth, refuting every live entry outright. The bracket family:
-    /// [`Parser::optional`] bails at a paragraph break wherever the cursor
-    /// stands, since an unclosed `[` must never swallow the document, so its
-    /// gates mirror that.
     AnyDepth,
 }
 
-/// What a `\begin`/`\end` pair between an entry and the token at hand means.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EnvAnchor {
-    /// Counted, so a closer inside an environment the construct opened is known
-    /// to be out of the walk's reach (`envs`/`envs_at_push`). Every gate whose
-    /// construct may legitimately span one.
     Counts,
-    /// Refutes every live entry outright, in *both* halves. The bracket family:
-    /// [`Parser::optional`] bails at a `\begin` as readily as at an `\end`
-    /// (either means a runaway `[`), so there is no shape in which an optional
-    /// spans an environment and nothing to count.
     Refutes,
 }
 
-/// How a gate's nested entries relate to the `\begin`-opened environments
-/// between them — the shape of the model its per-opener scan used, which the
-/// batch must reproduce exactly.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Nesting {
-    /// Two independent counters. A nested opener is counted *by name* and never
-    /// un-counted, environments are counted separately, and an anchor settles
-    /// every entry standing at its own environment level. This is what the
-    /// pairing gates' per-opener scans did: they never modelled the order in
-    /// which a nested opener and an environment were opened, only how many of
-    /// each stood between an entry and the token at hand.
     Counted,
-    /// One LIFO stack, entries and environments interleaved.
-    /// [`Parser::left_right_closes`] tracks its nesting this way because
-    /// [`Parser::left_right`] does: a pair is closed by *count* wherever it
-    /// sits, so its scan pushes a frame per `\left`, per `\begin`, and per `{`
-    /// alike, and any frame **mismatch** — an `\end` or a `\right` reaching a
-    /// frame of the wrong kind — refuses outright.
-    ///
-    /// Two consequences the driver must honor, both following from *whose*
-    /// frame is innermost. A mismatch is seen by every outer entry too, since
-    /// the innermost frame is common to all of them, so it refutes the whole
-    /// scan rather than one level of it. An *absence* of frames, on the other
-    /// hand — the blank-line anchor's `stack.is_empty()` — is seen only by the
-    /// entry that owns the innermost frame, so a nested entry **shields** the
-    /// entries below it from a paragraph break.
     Interleaved,
 }
 
-/// The per-gate half of [`Parser::gate_batch`]: how far this gate's scan can
-/// reach, which tokens open and close its construct, and whether a blank line
-/// anchors it.
-///
-/// The driver owns the bookkeeping every gate shares — the bound, brace depth
-/// under [`Parser::plain_braces`], environment counting, the `macrocode`
-/// frame, the entry stack, the metering, and the trivia model (a `.dtx` margin
-/// floats, a docstrip guard breaks the newline run without being one: the
-/// [`TriviaScan::saw_blank_line_outside_guards`] reading of issue #71) — and
-/// **never averages the policies**: where two gates diverge, the divergence is
-/// a method here, spelled out and documented, not a compromise inside the loop
-/// (`TODO.md`, container stack C2).
-///
-/// Hooks arrive with the client that needs them, so the driver stays
-/// *extracted* from C1's working batch rather than authored to a lowest common
-/// denominator. Delimiters are asked for at any token kind at the entries' own
-/// brace level, since the math gates close on a `DOLLAR` and a `CONTROL_SYMBOL`
-/// — every policy tests the kind inside its own predicate anyway.
 trait GatePolicy {
-    /// Whether a blank line refutes an entry, and at what level. `OwnLevel` for
-    /// conditionals, which mirror a parse that stops at a `\par`; `None` for
-    /// aliases, whose body legitimately spans blank lines. See
-    /// [`ParagraphAnchor`].
     const PARAGRAPH_ANCHOR: ParagraphAnchor;
 
-    /// What a `}` at the entries' own brace level means. Defaults to the
-    /// *positive* gates' reading; see [`StrayBrace`].
     const STRAY_BRACE: StrayBrace = StrayBrace::RefutesInGroup;
 
-    /// Which math delimiters at the entries' own level refute them, if any.
-    ///
-    /// Defaults to the text-dwelling positive gates' reading — math *starting*
-    /// refutes, the conservative direction for a construct that only pairs when
-    /// positively located. See [`MathAnchor`] for the other two.
     const MATH_ANCHOR: MathAnchor = MathAnchor::Opening;
 
-    /// How this gate's nested entries interleave with the environments between
-    /// them. See [`Nesting`]; the pairing and math gates all count, only
-    /// [`LeftRightGate`] stacks.
     const NESTING: Nesting = Nesting::Counted;
 
-    /// Whether this gate's openers are themselves `\begin`s, so the driver must
-    /// count one in `envs` *before* pushing its entry. The entry's own
-    /// environment is therefore *in* its `envs_at_push`, which is what makes the
-    /// relative count `envs - envs_at_push` start at zero — matching its
-    /// per-opener scan, which starts one token past the `\begin` and never saw
-    /// that environment either.
     const OPENER_IS_ENV_BEGIN: bool = false;
 
-    /// Whether an environment closer unwinds nested gate entries by name.
-    /// Only [`EnvGate`] needs this: parser mismatch recovery unwinds nested
-    /// environments until the named opener, so its scan must do the same.
     const ENV_END_UNWINDS_OPENERS: bool = false;
 
-    /// Whether the `\begin`/`\end` and math-*delimiter* anchors apply at any
-    /// brace depth, rather than only at the entries' own. (A `$` is read at the
-    /// entries' own level whatever this says — every gate's pre-batch scan did,
-    /// and for [`MathBracketGate`] a `$` inside a group is not the boundary its
-    /// depth-0 twin is. The paragraph anchor has its own knob for the same
-    /// reason, [`ParagraphAnchor`].)
-    ///
-    /// False for the gates whose entries pair at their own brace level: an
-    /// environment opened inside a `{…}` group is closed inside it too, so
-    /// counting it would say nothing about what stands between an entry and its
-    /// closer. The math gates set it true, as their pre-batch scans did: a math
-    /// body descends into a group ([`Parser::math_group`]) and keeps parsing
-    /// environments there, so `envs` tracks the whole body rather than one
-    /// brace level of it. The bracket gates set it true because
-    /// [`Parser::optional`]'s bail is depth-blind: a `\begin` inside a group is
-    /// still a runaway `[`.
     const ANCHORS_AT_ANY_DEPTH: bool = false;
 
-    /// What a `\begin`/`\end` between an entry and the token at hand means. See
-    /// [`EnvAnchor`]; only the bracket family refuses rather than counts.
     const ENV_ANCHOR: EnvAnchor = EnvAnchor::Counts;
 
-    /// Whether that anchor also fires *inside macro code*, where `\begin`/`\end`
-    /// are plain commands that need not pair (issues #45/#60) and every other
-    /// gate therefore ignores them.
-    ///
-    /// True for [`MathBracketGate`] alone, whose pre-batch scan carried no such
-    /// filter — so it is stricter than the [`Parser::optional`] bail it mirrors,
-    /// which does carry one. Preserved, not chosen: the divergence only ever
-    /// refuses a bracket, the conservative direction (`TODO.md`, container stack
-    /// C2.5).
     const ENV_ANCHOR_IN_MACRO_CODE: bool = false;
 
-    /// Whether a closer only settles an entry when no `\begin`-opened
-    /// environment stands in the way (`envs == envs_at_push`).
-    ///
-    /// True for the gates whose closer is a *command*: one inside an environment
-    /// the construct opened is consumed by that environment's body, so the walk
-    /// never reaches it. The math gates set it false — their closer is a
-    /// delimiter, and `$\begin{matrix} … $` really does end at the `$`, the
-    /// environment's own recovery notwithstanding.
     const CLOSER_NEEDS_ENV_BALANCE: bool = true;
 
-    /// Whether a `macrocode` chunk boundary refutes every live entry.
-    ///
-    /// True for the pairing gates: docstrip is line-oriented, so the code layer
-    /// and the documentation layer around it are different files as far as TeX
-    /// is concerned, and a construct that pairs across one runs over every chunk
-    /// between (`ltboxes.dtx`). The math gates set it false, preserving their
-    /// pre-batch scans, which counted `\begin{macrocode}` as an ordinary
-    /// environment. Nothing is known to depend on the difference; it is kept
-    /// because C2 migrates verdicts unchanged, not because it is the better
-    /// reading.
     const MACROCODE_FRAME_ANCHORS: bool = true;
 
-    /// What a `$` at the entries' own brace level means. Defaults to the
-    /// two-sided reading of [`Self::MATH_ANCHOR`]: a `$` is an opening *and* a
-    /// closing delimiter, so a gate that anchors on either side anchors on it,
-    /// and only a gate for which math delimiters are content reads it as
-    /// content too. [`MathBracketGate`] overrides it — the one gate that needs
-    /// the enclosing math's flavor, which is walk state and cannot ride a const.
     fn dollar_anchor(&self) -> DollarAnchor {
         if Self::MATH_ANCHOR == MathAnchor::None {
             DollarAnchor::Content
@@ -461,28 +229,18 @@ trait GatePolicy {
         }
     }
 
-    /// The last index in the file that could ever settle an entry with a
-    /// closer — the C0 bound. `None` refuses the whole gate without scanning.
     fn last_closer(&self, p: &Parser<'_>) -> Option<usize>;
 
-    /// Whether the control word at `i` opens a nested entry.
     fn opens_at(&self, p: &Parser<'_>, i: usize) -> bool;
 
-    /// Whether the control word at `i` closes the innermost live entry.
     fn closes_at(&self, p: &Parser<'_>, i: usize) -> bool;
 
-    /// Whether the closer at `closer` really pairs with the entry opened at
-    /// `opener`, for gates whose two halves carry a name to match. A `false`
-    /// settles that entry as unpaired and consumes the closer either way, so
-    /// an outer entry never inherits it.
     fn pairs(&self, p: &Parser<'_>, opener: usize, closer: usize) -> bool {
         let _ = (p, opener, closer);
         true
     }
 }
 
-/// [`Parser::conditional_closer`]'s policy: `\if…`-family openers pairing with
-/// the next `\fi` at their own level.
 struct ConditionalGate;
 
 impl GatePolicy for ConditionalGate {
@@ -501,29 +259,6 @@ impl GatePolicy for ConditionalGate {
     }
 }
 
-/// [`Parser::alias_closer`]'s policy: environment-alias openers pairing with a
-/// closer alias for the *same* target environment (issue #109).
-///
-/// Two divergences from [`ConditionalGate`], both deliberate:
-///
-/// - **No paragraph anchor.** An alias for `itemize` legitimately spans blank
-///   lines, and the body is parsed with [`Parser::parse_block`], which builds
-///   `PARAGRAPH`s inside it. Reading a blank line here would also key layout on
-///   a trivia predicate the formatter does not preserve.
-/// - **Names must match** ([`GatePolicy::pairs`]). Nesting counts *any* alias
-///   opener and *any* alias closer, so `\bea \bce \ece \eea` pairs while the
-///   crossing `\bea \bce \eea \ece` refuses outright instead of letting an
-///   inner walk run past the outer bound.
-///
-/// A closer is either spelling ([`Parser::closer_target`], issue #117): the
-/// alias command, or the literal `\end{X}` the alias's own expansion pairs with.
-/// The literal arm is what takes it *out* of the driver's `\end` anchor branch —
-/// a matching `\end{X}` is this entry's closer, and only a non-matching one is
-/// still the level anchor it was.
-///
-/// Every half is recognized only outside macro code, where `\begin`/`\end`
-/// are plain commands that need not pair (issues #45/#60) — the same filter the
-/// driver applies to its own `\begin`/`\end` counting.
 struct AliasGate;
 
 impl GatePolicy for AliasGate {
@@ -546,29 +281,6 @@ impl GatePolicy for AliasGate {
     }
 }
 
-/// [`Parser::environment_escapes_group`]'s policy, and the driver's first
-/// *demotion* gate: it asks whether a `\begin` is cut short by the closing brace
-/// of a group it sits inside, so a located "closer" is the escaping `}` and the
-/// verdict reads inverted — `Some` demotes the environment, `None` keeps it.
-///
-/// Three divergences from the positive gates, all following from that
-/// inversion:
-///
-/// - **The stray `}` closes rather than refutes** ([`StrayBrace::ClosesInGroup`]).
-///   Same token event, opposite verdict.
-/// - **Math does not refuse** ([`MathAnchor::None`]). For a positive
-///   gate, declining behind a math delimiter is the conservative direction; for
-///   this one it would *keep* an environment the scan cannot vouch for. The
-///   pre-batch scan had no math anchor, and this preserves that.
-/// - **Openers are `\begin`s** ([`GatePolicy::OPENER_IS_ENV_BEGIN`]), so the
-///   driver counts one in `envs` before pushing its entry.
-///
-/// `\end` is deliberately *not* a closer here: it is the level anchor the
-/// driver already applies (an `\end` not owed to an intervening `\begin` means
-/// this environment ends before any group boundary, so it does not escape),
-/// which leaves the mismatch recovery in [`Parser::finish_environment`]
-/// untouched. Running out of file is likewise not an escape — that is what
-/// keeps the unclosed-environment diagnostic firing on a forgotten `\end`.
 struct EnvGate;
 
 impl GatePolicy for EnvGate {
@@ -591,40 +303,7 @@ impl GatePolicy for EnvGate {
     }
 }
 
-/// [`Parser::delim_math_closes`]'s policy: `\[`/`\(` paired with its own
-/// `\]`/`\)` — and, with [`DollarGate`], one of the two **math** gates, which
-/// decide whether a delimiter opens math at all. What follows is what the two
-/// share; [`DollarGate`] adds its own wrinkle.
-///
-/// Both are **single-entry**: [`GatePolicy::opens_at`] is always false, so a
-/// batch settles its seed and nothing else. Their openers do not nest the way a
-/// conditional does — the parse they guard consumes the whole body, so an opener
-/// inside a math body is never re-gated, and an opener that is *not* inside one
-/// is answered by the first closer at its own level whatever came before it.
-/// With no LIFO to model there is no closer scope to hook, and the driver runs
-/// them for its bookkeeping alone.
-///
-/// Four divergences from the pairing gates, each stated as a policy rather than
-/// averaged into the loop:
-///
-/// - **A `}` refutes unconditionally** ([`StrayBrace::RefutesAlways`]): the
-///   guarded parses bail at any unbalanced `}`, group behind it or not.
-/// - **Math is not an anchor** ([`MathAnchor::None`]) — a foreign
-///   delimiter is ordinary content here, and for [`DollarGate`] the delimiter
-///   *is* the closer.
-/// - **Environments count at any depth** ([`GatePolicy::ANCHORS_AT_ANY_DEPTH`]).
-/// - **The closer needs no environment balance**
-///   ([`GatePolicy::CLOSER_NEEDS_ENV_BALANCE`]).
-///
-/// Both also read a `macrocode` frame as an ordinary environment
-/// ([`GatePolicy::MACROCODE_FRAME_ANCHORS`]), as their pre-batch scans did.
-///
-/// The paragraph anchor stays on, and the driver applies it at the entry's own
-/// level — `depth == 0 && envs == envs_at_push`, which for a lone seed is the
-/// old `depth == 0 && envs == 0` of the pre-batch scans exactly.
 struct DelimMathGate {
-    /// The closer this opener wants, `\]` or `\)`. The gate is per-flavor: a
-    /// `\)` never settles a `\[`, so each carries its own last-closer bound.
     closer: &'static str,
 }
 
@@ -654,20 +333,7 @@ impl GatePolicy for DelimMathGate {
     }
 }
 
-/// [`Parser::dollar_closes`]'s policy: `$`/`$$` paired with the next `$`/`$$` at
-/// its own level. The math gates' shared policy is documented on
-/// [`DelimMathGate`].
-///
-/// The one wrinkle beyond those: a display opener is two tokens, so the caller
-/// seeds the driver at the *second* `$` (the driver scans from `seed + 1`)
-/// rather than the driver growing a hook for it. That is also why the gate is
-/// unmemoized ([`Parser::gate_verdict`]) — a demoted `$$` re-enters
-/// [`Parser::element`] on its second `$`, which asks a *different* question
-/// (`display: false`) about the very index the display query seeded.
 struct DollarGate {
-    /// Whether the opener is `$$`, in which case only a `$` whose successor is
-    /// also a `$` closes it. A lone `$` inside display math is malformed but
-    /// consumed, exactly as [`Parser::dollar_math`] consumes it.
     display: bool,
 }
 
@@ -679,10 +345,6 @@ impl GatePolicy for DollarGate {
     const CLOSER_NEEDS_ENV_BALANCE: bool = false;
     const MACROCODE_FRAME_ANCHORS: bool = false;
 
-    /// The last `$` in the file. Vacuous as a bound in the shape that motivated
-    /// it — a file of `$` openers ends at one — but the driver's contract is
-    /// that a gate names the last index that could ever settle an entry, and
-    /// this gate's closer is a `DOLLAR` like any other.
     fn last_closer(&self, p: &Parser<'_>) -> Option<usize> {
         p.last_dollar
     }
@@ -697,38 +359,6 @@ impl GatePolicy for DollarGate {
     }
 }
 
-/// [`Parser::left_right_closes`]'s policy: a `\left` paired with the `\right`
-/// that [`Parser::left_right`] would reach. The gate that lives *inside* math,
-/// and the only one whose entries stack rather than count
-/// ([`Nesting::Interleaved`]) — `\left`/`\right` pair by count wherever they
-/// sit, so its scan reads one frame stack of `{`, `\begin`, and `\left` alike,
-/// and any mismatch refuses.
-///
-/// The other three divergences follow from the same two facts:
-///
-/// - **Math *ending* anchors** ([`MathAnchor::Closing`]). A `\left` sits inside
-///   a math body already, so `$`, `\]`, `\)` are the tokens that end it —
-///   [`Parser::left_right`]'s own recovery anchors — while a `\[` in the way is
-///   ordinary content.
-/// - **A `}` refutes unconditionally** ([`StrayBrace::RefutesAlways`]), for the
-///   same reason as the math gates: the parse it guards bails at any unbalanced
-///   `}`, group behind it or not.
-/// - **A `macrocode` frame is not an anchor**
-///   ([`GatePolicy::MACROCODE_FRAME_ANCHORS`]), preserved from the pre-batch
-///   scan, which counted `\begin{macrocode}` as an ordinary environment — the
-///   reading the math gates keep too.
-///
-/// And the one thing this migration exists to consolidate: **`\left`/`\right`
-/// recognition ignores `in_macro_code` on purpose** where the driver's own
-/// `\begin`/`\end` counting does not. They are catcode-neutral math structure
-/// that pairs by count no matter what, and [`Parser::left_right`] consumes them
-/// unconditionally, so a definition body or a `macrocode` chunk — exactly where
-/// package math like `$\left#2\right#4$` (delarray.dtx) or `$\left(…\right)$`
-/// (ltmath.dtx's `\bordermatrix`) lives — must still be scanned for them.
-/// Gating them out left the `\right` invisible, so the pair never opened and the
-/// closer reported a spurious "`\right` without matching `\left`" that blocked
-/// the whole file for the formatter (issue #95). As a policy that is two
-/// predicates; as a hand-written scan it was a comment nothing enforced.
 struct LeftRightGate;
 
 impl GatePolicy for LeftRightGate {
@@ -738,11 +368,6 @@ impl GatePolicy for LeftRightGate {
     const NESTING: Nesting = Nesting::Interleaved;
     const MACROCODE_FRAME_ANCHORS: bool = false;
 
-    /// The last `\right` in the file. The recording ignores brace nesting, which
-    /// only ever places the bound *past* the last viable closer. Without it a
-    /// math body of `\left` openers with no `\right` kept the frame stack
-    /// non-empty — so the blank-line anchor never fired — and scanned each opener
-    /// to the math's end.
     fn last_closer(&self, p: &Parser<'_>) -> Option<usize> {
         p.last_right
     }
@@ -758,37 +383,6 @@ impl GatePolicy for LeftRightGate {
     }
 }
 
-/// What the three **bracket** gates share (`TODO.md`, container stack C2.5).
-/// Each asks whether the `]` closing a `[` is reachable before the token that
-/// would make [`Parser::optional`] bail, in the mode the bracket sits in — text,
-/// math, or a `macrocode` chunk.
-///
-/// Their nesting is what the migration turned out to be about. A per-opener
-/// bracket scan counts the `]`s *owed* to the command-abutting `[`s it passes:
-/// such a `[` is itself argument-shaped (or a `\left`/`\Big` delimiter) and will
-/// claim the next `]` when parsed, so that `]` cannot also satisfy the outer one
-/// (`\P[\gamma[0, \infty) \cap A = \emptyset]`, issue #55). That claim countdown
-/// **is** the driver's nested-opener stack once an opener is defined as a
-/// command-abutting `[` — closer matching is pure LIFO either way — so the
-/// family needed no new nesting model, only the two anchors it reads
-/// differently:
-///
-/// - **A `\begin`/`\end` refutes rather than counts** ([`EnvAnchor::Refutes`]),
-///   in both halves: an optional never legitimately spans an environment, so
-///   either half means a runaway `[`.
-/// - **Both that anchor and the paragraph break are depth-blind**
-///   ([`GatePolicy::ANCHORS_AT_ANY_DEPTH`], [`ParagraphAnchor::AnyDepth`]),
-///   because `optional`'s own bail is: it bails wherever the cursor stands, and
-///   a gate stricter *or* looser than the parse it guards is a bug.
-///
-/// A structural `}` refutes unconditionally ([`StrayBrace::RefutesAlways`]) for
-/// the reason the math gates give: `optional` bails at any unbalanced `}`, group
-/// behind it or not. A chunk-unmatched macrocode brace is a plain token instead.
-///
-/// [`Parser::bracket_closes_in_text`]'s own policy is this and nothing else — it
-/// is the text-mode gate, and macro code's freely-passed lone brackets
-/// (`\@ifnextchar [\@xmpar\@ympar`, issue #60) are exactly what it exists to
-/// leave alone.
 struct TextBracketGate;
 
 impl GatePolicy for TextBracketGate {
@@ -811,38 +405,7 @@ impl GatePolicy for TextBracketGate {
     }
 }
 
-/// [`Parser::bracket_closes_before_math_end`]'s policy: the bracket gate that
-/// runs lexically inside math. The family's policy is documented on
-/// [`TextBracketGate`]; three things are this gate's own, and all three are
-/// **preserved** from its pre-batch scan rather than chosen (`TODO.md`,
-/// container stack C2.5).
-///
-/// - **A `$` depends on the enclosing math's flavor**
-///   ([`GatePolicy::dollar_anchor`]). Inside `\[…\]` it opens a genuine nested
-///   inline region, so a balanced `$…$` in the bracket is
-///   [`DollarAnchor::Transparent`]; inside `$…$` TeX cannot nest one, so the
-///   first depth-0 `$` is *this* math's closer and refutes — without which a
-///   missing `]` in dollar math (`$\mathcal{N}[\mathcal{S}$`, issue #99) scanned
-///   into the following math and attached an optional that swallowed the closing
-///   `$`. That flavor is walk state, so it rides [`WalkKey`].
-/// - **`\]`/`\)` refute** ([`MathAnchor::Closing`]): inside math they mean the
-///   bracket is not an argument at all, e.g. the open-interval `$]0;\num{0.5}[$`.
-/// - **The `\begin`/`\end` anchor fires inside macro code too**
-///   ([`GatePolicy::ENV_ANCHOR_IN_MACRO_CODE`]). This makes it stricter than the
-///   [`Parser::optional`] bail it mirrors, in the direction that only ever
-///   declines to attach.
-///
-/// This is also the one gate whose `macrocode` bound is not the C0 argument.
-/// Every other gate's pre-batch scan already stopped at [`Parser::macrocode_end`];
-/// this one ran to EOF, so the driver's frame bound is new to it, and "past the
-/// last closer only refusals remain" is not why it is verdict-preserving. The
-/// reason is the bullet above: the `\begin`/`\end` anchor here carries no
-/// `in_macro_code` filter, and the token at `macrocode_end` is the frame's own
-/// `\end{macrocode}`, which the anchor refuses at — so the pre-batch scan
-/// stopped at exactly the index the bound now stops before.
 struct MathBracketGate {
-    /// Whether the innermost enclosing math is `$…$`/`$$…$$`
-    /// ([`Parser::math_dollar`]).
     enclosing_is_dollar: bool,
 }
 
@@ -874,24 +437,6 @@ impl GatePolicy for MathBracketGate {
     }
 }
 
-/// [`Parser::bracket_closes_before_macrocode_end`]'s policy: inside a `macrocode`
-/// chunk a `[` is an argument only when its `]` closes *within* the chunk, whose
-/// frame is an absolute terminator. One divergence from its two siblings,
-/// preserved from its pre-batch scan: **it is single-entry**
-/// ([`GatePolicy::opens_at`] always false), since the scan ran no claim
-/// countdown, so the first `]` at brace level settles the seed. That is also why
-/// it is the one bracket gate the batch cannot make linear — there is no
-/// neighbor to settle — and it runs unmemoized like the math gates.
-///
-/// Its guard-breaking paragraph run used to be a second divergence
-/// (`DOC_TRIVIA_FLOATS`); the driver now reads guards that way for every gate,
-/// this one's being the considered reading (issue #71).
-///
-/// Its [`EnvAnchor`] can never fire: a chunk body sets `in_def_body`
-/// ([`Parser::macrocode_body`]), so `in_macro_code` holds at every index the
-/// scan can reach and the driver's filter takes the arm out — which is the
-/// pre-batch scan's silence about `\begin`/`\end` restated as the reason for it,
-/// rather than as an omission.
 struct MacrocodeBracketGate;
 
 impl GatePolicy for MacrocodeBracketGate {
@@ -4084,16 +3629,11 @@ mod tests {
     use super::*;
     use crate::parser::lexer::lex;
 
-    /// The stuck-loop guard aborts once `PARSER_STEP_LIMIT` peeks accrue with no
-    /// cursor advance, turning a hypothetical non-advancing loop into a loud
-    /// panic instead of a hang.
     #[test]
     fn step_guard_trips_when_wedged() {
         let tokens = lex("x");
         let ctx = ParseCtx::default();
         let p = Parser::new(&tokens, &ctx);
-        // Park one tick short of the ceiling with the cursor pinned, so no reset
-        // fires on the next peeks.
         p.last_step_pos.set(p.pos);
         p.steps.set(PARSER_STEP_LIMIT - 1);
         p.step(); // reaches the ceiling exactly — still allowed
@@ -4101,8 +3641,6 @@ mod tests {
         assert!(wedged.is_err(), "the guard must abort a non-advancing loop");
     }
 
-    /// A real cursor advance resets the budget, so an arbitrarily long *advancing*
-    /// parse never trips the guard.
     #[test]
     fn step_budget_resets_on_cursor_progress() {
         let tokens = lex("xx");
@@ -4110,14 +3648,11 @@ mod tests {
         let mut p = Parser::new(&tokens, &ctx);
         p.last_step_pos.set(p.pos);
         p.steps.set(PARSER_STEP_LIMIT - 1);
-        // Advance the cursor as a real consume would; the next peek must reset.
         p.pos += 1;
         p.step();
         assert_eq!(p.steps.get(), 1, "progress should reset the peek budget");
     }
 
-    /// Drive a full parse and return how many tokens the shape-gate scans
-    /// visited ([`Parser::scan_work`]).
     fn scan_work(input: &str) -> usize {
         let tokens = lex(input);
         let ctx = ParseCtx::default();
@@ -4126,10 +3661,6 @@ mod tests {
         p.scan_work.get()
     }
 
-    /// Doubling the input must not blow the gate-scan work up quadratically:
-    /// `3·work(N)` leaves room for per-parse constants while a quadratic gate
-    /// (ratio 4 per doubling) still fails loudly. The slack constant absorbs
-    /// shapes whose bounded work is near zero.
     #[track_caller]
     fn assert_scan_work_linear(small: &str, doubled: &str) {
         let (w1, w2) = (scan_work(small), scan_work(doubled));
@@ -4139,31 +3670,18 @@ mod tests {
         );
     }
 
-    /// The adversarial no-closer shapes (`TODO.md`, container stack C0): a file
-    /// of openers whose gate can never succeed must refuse via its absent
-    /// last-closer bound instead of scanning forward per opener.
     #[test]
     fn gate_scans_stay_linear_without_closers() {
-        // `conditional_closer`: `\if`-prefixed openers, no `\fi` anywhere.
         let shape = "\\ifabc x\n";
         assert_scan_work_linear(&shape.repeat(200), &shape.repeat(400));
-        // `bracket_closes_in_text`: command-abutting `[`s, no `]` anywhere.
         let shape = "\\cmd[x\n";
         assert_scan_work_linear(&shape.repeat(200), &shape.repeat(400));
-        // `delim_math_closes`: display-math openers, no `\]` anywhere.
         let shape = "\\[ x\n";
         assert_scan_work_linear(&shape.repeat(200), &shape.repeat(400));
     }
 
-    /// The arity-directed expl3 scan (`grammar::expl3`) is bounded per head by
-    /// the unit it resolves or the abort that refuses it, so a run of heads
-    /// stays linear — including the adversarial shape where every head scans
-    /// its whole unit and then aborts on the last slot, leaving the span to be
-    /// re-parsed greedily: one bounded scan per head, never a restart from an
-    /// earlier position.
     #[test]
     fn expl3_arity_scan_stays_linear() {
-        // Recognized units: scan + replay per head.
         let body = |n: usize| {
             format!(
                 "\\ExplSyntaxOn\n{}",
@@ -4171,8 +3689,6 @@ mod tests {
             )
         };
         assert_scan_work_linear(&body(200), &body(400));
-        // Aborting units: the final branch slot faces a bare word, so every
-        // head's scanned span falls back to greed after the scan.
         let body = |n: usize| {
             format!(
                 "\\ExplSyntaxOn\n{}",
@@ -4182,14 +3698,8 @@ mod tests {
         assert_scan_work_linear(&body(200), &body(400));
     }
 
-    /// *Nested* recognized heads are the adversarial shape for the arity scan:
-    /// every level's group slot has to find its matching `}`, and a per-slot
-    /// rescan makes that O(depth) each. The shared matching-brace table
-    /// ([`Parser::matching_brace`]) is what keeps it one pass for the whole
-    /// nest.
     #[test]
     fn expl3_arity_nested_scans_stay_linear() {
-        // Group slots nested to the input's full depth.
         let body = |n: usize| {
             format!(
                 "\\ExplSyntaxOn\n{}x{}\n",
@@ -4198,9 +3708,6 @@ mod tests {
             )
         };
         assert_scan_work_linear(&body(100), &body(200));
-        // The same nest under an aborting outer head: the outer unit scans its
-        // whole span before refusing, and every inner head is then asked in
-        // turn over the span it already covered.
         let body = |n: usize| {
             format!(
                 "\\ExplSyntaxOn\n\\prop_get:NnNTF \\p {{ k }} \\l {}x{} y\n",
@@ -4211,20 +3718,12 @@ mod tests {
         assert_scan_work_linear(&body(100), &body(200));
     }
 
-    /// The batched conditional gate (`TODO.md`, container stack C1): a run of
-    /// same-frame openers whose lone `\fi` sits at EOF defeats the C0
-    /// last-closer bound (the bound spans the whole file), so only the batch —
-    /// one shared scan settling every opener it passes — keeps it linear.
     #[test]
     fn conditional_batch_keeps_shared_frame_openers_linear() {
         let body = |n: usize| format!("{}\\fi\n", "\\ifabc x\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
     }
 
-    /// The alias twin of `conditional_batch_keeps_shared_frame_openers_linear`
-    /// (`TODO.md`, container stack C2.1): a run of same-frame alias openers
-    /// whose lone closer sits at EOF spans the whole file, so the C0
-    /// last-closer bound cuts nothing and only the batch keeps it linear.
     #[test]
     fn alias_batch_keeps_shared_frame_openers_linear() {
         let scan_work = |input: &str| {
@@ -4244,87 +3743,42 @@ mod tests {
         );
     }
 
-    /// The `\begin` gate's own shape (`TODO.md`, container stack C2.2): openers
-    /// inside a group with no `}` of their own. Its C0 bound is the last `}` in
-    /// the file, which every `\begin{…}` name group pushes toward EOF, so the
-    /// bound cuts nothing here and only the batch keeps it linear.
     #[test]
     fn env_batch_keeps_shared_frame_openers_linear() {
         let body = |n: usize| format!("{{\n{}", "\\begin{itemize}\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
     }
 
-    /// The `\left` gate's own one-closer-at-EOF shape (`TODO.md`, container
-    /// stack C2.4): a run of same-frame openers inside one math body, closed by
-    /// a single `\right` at the end. The C0 bound spans the whole run, and every
-    /// opener but the last is demoted and re-queried as the walk passes it, so
-    /// only the batch — one scan settling all of them — keeps it linear.
     #[test]
     fn left_right_batch_keeps_shared_frame_openers_linear() {
         let body = |n: usize| format!("$ {}\\right)$\n", "\\left( x ".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
     }
 
-    /// The bracket family's one-closer-at-EOF shapes (`TODO.md`, container
-    /// stack C2.5). A `[` the gate refuses stays an ordinary token the walk
-    /// steps over, so the next command-abutting `[` is asked in turn and a run
-    /// of them re-scanned per opener; the C0 last-`]` bound spans the whole run
-    /// here, so only the batch — one scan whose nested-opener stack *is* the old
-    /// claim countdown — keeps it linear.
-    ///
-    /// [`MacrocodeBracketGate`] has no such shape to pin: it is single-entry by
-    /// policy (its pre-batch scan ran no countdown), so a chunk of `\cmd[`
-    /// openers whose only `]` sits past the frame still scans to the frame per
-    /// opener. Recorded rather than pinned, like the `${` ratchet above.
     #[test]
     fn bracket_batch_keeps_shared_frame_openers_linear() {
-        // `bracket_closes_in_text`: command-abutting `[`s, one `]` at EOF.
         let body = |n: usize| format!("{}]\n", "\\cmd[x\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
-        // `bracket_closes_before_math_end`: the same run inside one `$…$`.
         let body = |n: usize| format!("$ {}]$\n", "\\cmd[x ".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
     }
 
-    /// The in-math no-closer shapes: the enclosing math's own gate passes (its
-    /// closer is reachable), and every opener inside it must still refuse
-    /// without a per-opener scan to the math's end.
     #[test]
     fn math_gate_scans_stay_linear_without_closers() {
-        // `bracket_closes_before_math_end`: `\cmd[` atoms in dollar math, no
-        // `]` anywhere.
         let body = |n: usize| format!("$ {}$", "\\cmd[x ".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
-        // `left_right_closes`: `\left` openers in display math, no `\right`
-        // anywhere — the pair stack stays non-empty, so the blank-line anchor
-        // alone never cuts the scan.
         let body = |n: usize| format!("\\[\n{}\\]\n", "\\left( x\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
     }
 
-    /// The math gates' one-closer-at-EOF shapes (`TODO.md`, container stack
-    /// C2.3). These stay linear for a reason the batch does not supply: the
-    /// gates are single-entry, and the first opener whose closer is reachable
-    /// *swallows* every opener after it, so there is no second query to make.
-    /// The pin is on the shape, not on the mechanism — a future gate that
-    /// re-gated openers inside a math body would fail here.
-    ///
-    /// The one shape that stays quadratic is deliberate and recorded: a `${`
-    /// per line ratchets the brace depth upward and never returns to 0, so no
-    /// later opener sits at the seed's level and every one re-scans. Only a
-    /// precomputed per-frame map could reach it; a batch cannot, and this test
-    /// does not pretend otherwise.
     #[test]
     fn math_batch_stays_linear_with_one_closer_at_eof() {
-        // `delim_math_closes`, both flavors.
         let body = |n: usize| format!("{}\\]\n", "\\[ x\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
         let body = |n: usize| format!("{}\\)\n", "\\( x\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
-        // `dollar_closes`: a run of `$` openers, each paired by the next.
         let body = |n: usize| format!("{}$\n", "$ x\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
-        // The display twin, whose seed sits one token past the opener.
         let body = |n: usize| format!("{}$$\n", "$$ x\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
     }

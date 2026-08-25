@@ -322,14 +322,11 @@ mod tests {
         }
     }
 
-    /// An edit at the byte after the first occurrence of `needle`.
     fn after(text: &str, needle: &str, insert: &str) -> Edit {
         let at = text.find(needle).expect("fixture") + needle.len();
         edit(at..at, insert)
     }
 
-    /// The oracle inside `finish` checks the *result*; these pin that the guards let
-    /// the case through at all, and on this tier rather than the token one.
     #[track_caller]
     fn assert_splices(text: &str, e: Edit) {
         with_base(text, |base| {
@@ -357,9 +354,6 @@ mod tests {
         );
     }
 
-    /// The environment's own arguments are inside the fragment, so they have to relex
-    /// too: an `lstlisting`'s leading optional and a `minted`'s leading required
-    /// group are both lexed before the body begins.
     #[test]
     fn splices_a_body_behind_environment_arguments() {
         let text = "\\begin{lstlisting}[language=C]\nint main() { return 0; }\n\\end{lstlisting}\n";
@@ -369,7 +363,6 @@ mod tests {
         assert_splices(text, after(text, "if x", ":"));
     }
 
-    /// The workload the tier exists for, and the one the token tier bans outright.
     #[test]
     fn splices_a_newline_typed_into_a_body() {
         let text = "\\begin{lstlisting}\nint main() {}\n\\end{lstlisting}\n";
@@ -377,8 +370,6 @@ mod tests {
         assert_splices(text, after(text, "int main() {", "\r\n"));
     }
 
-    /// The three `VERB` shapes: self-delimited (its own fragment), delimited after a
-    /// command, and braced after a command.
     #[test]
     fn splices_inside_each_verb_shape() {
         assert_splices(
@@ -399,16 +390,12 @@ mod tests {
         );
     }
 
-    /// Leg 4. Typing the closer into the body ends the environment early, which is a
-    /// change to the token sequence the fragment relex sees.
     #[test]
     fn refuses_a_body_that_gains_its_own_closer() {
         let text = "\\begin{verbatim}\n  raw\n\\end{verbatim}\n";
         assert_refuses(text, after(text, "  raw", "\n\\end{verbatim}\n"));
     }
 
-    /// Leg 4 again, from the other side: a brace that unbalances a `\url` dissolves
-    /// the capture, and the braces become structure the rest of the file can see.
     #[test]
     fn refuses_a_braced_verb_that_loses_its_balance() {
         assert_refuses("See \\url{a_b} now.\n", after("See \\url{a", "a", "{"));
@@ -422,26 +409,18 @@ mod tests {
         );
     }
 
-    /// Leg 3. An unterminated body runs to EOF, so its extent is fixed by the end of
-    /// the file rather than by anything inside the fragment.
     #[test]
     fn refuses_an_unterminated_verbatim_body() {
         let text = "\\begin{verbatim}\n  raw text\n";
         assert_refuses(text, after(text, "  raw", "x"));
     }
 
-    /// Leg 1. A short-verb span is a `VERB` only because `\MakeShortVerb` armed the
-    /// character earlier in the file; isolated, `short_verbs` is empty. It also sits
-    /// loose in a `PARAGRAPH`, so the fragment check declines first — both are
-    /// refusals, and the tier must not splice it either way.
     #[test]
     fn refuses_a_short_verb_span() {
         let text = "\\MakeShortVerb{\\|}\nnow |raw| is verbatim\n";
         assert_refuses(text, after(text, "|raw", "x"));
     }
 
-    /// `.dtx` is no longer refused wholesale on this tier when the implicit-expl
-    /// signal is stable.
     #[test]
     fn splices_a_protected_body_edit_in_a_dtx_parse_when_signal_is_stable() {
         let text = "% \\begin{macro}{\\foo}\n%    \\begin{macrocode}\n\\url{a_b}\n";
@@ -453,13 +432,9 @@ mod tests {
         });
     }
 
-    /// A `.dtx` edit that flips `%<@@=...>` / `\ProvidesExpl*` signal state is
-    /// refused: the base's carried implicit-expl regime is stale by construction.
     #[test]
     fn refuses_a_dtx_protected_edit_that_changes_implicit_expl_signal_state() {
         let text = "% \\begin{macro}{\\foo}\n%    \\begin{macrocode}\n\\url{a_b}\n";
-        // The scanner is intentionally coarse and sees signal spellings anywhere in
-        // the file, including inside raw captures.
         let e = after(text, "a_b", "\\ProvidesExplFile");
         with_dtx_base(text, |base| {
             assert!(reparse(base, &e, &e.apply(text)).is_none());
@@ -469,14 +444,11 @@ mod tests {
     #[test]
     fn refuses_an_edit_that_empties_the_body() {
         let text = "\\begin{verbatim}\nx\n\\end{verbatim}\n";
-        // The whole body, `\nx\n`, from the `}` of the opener to the `\end`.
         let from = text.find('\n').expect("fixture");
         let to = text.find("\\end").expect("fixture");
         assert_refuses(text, edit(from..to, ""));
     }
 
-    /// An edit reaching out of the leaf and into a delimiter is not this tier's
-    /// question: the covering element is then the node, not the token.
     #[test]
     fn refuses_an_edit_that_spans_out_of_the_leaf() {
         let text = "\\begin{verbatim}\n  raw\n\\end{verbatim}\n";
@@ -484,8 +456,6 @@ mod tests {
         assert_refuses(text, edit(at - 1..at + 2, "zz"));
     }
 
-    /// A diagnostic that *touches* the leaf may change its message or extent; one
-    /// after it just shifts.
     #[test]
     fn shifts_errors_after_the_body() {
         let text = "\\begin{verbatim}\n  raw\n\\end{verbatim}\n\n\\begin{itemize}\n";
@@ -501,19 +471,12 @@ mod tests {
         });
     }
 
-    /// A bound `DOC_COMMENT` run lands *inside* the construct it binds to
-    /// (decision #9), so it is part of the fragment and has to relex with it. Worth
-    /// a case of its own: it is the one way a fragment does not begin with its own
-    /// opener.
     #[test]
     fn splices_behind_a_bound_doc_comment() {
         let text = "% a note\n% a second line\n\\begin{verbatim}\n  raw\n\\end{verbatim}\n";
         assert_splices(text, after(text, "  raw", "x"));
     }
 
-    /// Leg 3's other half, as a property of the lexer rather than of this tier: a
-    /// `VERB` never exists without its closer, which is why only the body needs the
-    /// termination check.
     #[test]
     fn an_unterminated_verb_is_never_a_verb_token() {
         for text in [

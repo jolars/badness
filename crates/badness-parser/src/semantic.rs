@@ -260,7 +260,6 @@ mod tests {
         let names: Vec<_> = model.refs().iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
         assert!(model.refs().iter().all(|r| r.command == RefCommand::Cref));
-        // All split keys share the single command range.
         let range = model.refs()[0].range;
         assert!(model.refs().iter().all(|r| r.range == range));
     }
@@ -319,9 +318,6 @@ mod tests {
         assert!(model.has_wildcard_nocite());
     }
 
-    /// The name-based gate the linter uses. It must answer for an alias whose key
-    /// never became a `LabelRef` — a nested-macro key is skipped by the collector,
-    /// but the argument is a key argument all the same.
     #[test]
     fn a_declared_alias_is_a_key_argument_command_by_name() {
         let model = declared_model(

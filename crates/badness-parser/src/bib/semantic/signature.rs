@@ -227,15 +227,12 @@ mod tests {
 
     #[test]
     fn bundled_json_parses() {
-        // `builtin()` would panic on malformed/incomplete JSON.
         let db = builtin();
         assert!(db.entry_names().count() > 10);
     }
 
     #[test]
     fn covers_the_full_biblatex_data_model() {
-        // Entry types and fields are taken verbatim from blx-dm.def. Spot-check
-        // types and fields that the original hand-curated table lacked.
         let db = builtin();
         for ty in [
             "software",
@@ -246,14 +243,12 @@ mod tests {
         ] {
             assert!(db.entry(ty).is_some(), "missing entry type `{ty}`");
         }
-        // `software` requires `title` (data model mandatory constraint).
         assert!(
             db.entry("software")
                 .unwrap()
                 .required
                 .contains(&RequiredField::One(SmolStr::new("title")))
         );
-        // Standard fields absent from the original table, now globally known.
         for f in [
             "langid",
             "shortjournal",
@@ -269,8 +264,6 @@ mod tests {
 
     #[test]
     fn new_data_model_types_use_oneof_date_constraints() {
-        // A type added from the data model carries the `date`-or-`year` alternation
-        // from its `\constraintfieldsxor`.
         let suppbook = builtin().entry("suppbook").expect("suppbook entry");
         assert!(suppbook.required.iter().any(|r| matches!(
             r,
@@ -283,11 +276,8 @@ mod tests {
         let db = builtin();
         let one = |s: &str| RequiredField::One(SmolStr::new(s));
 
-        // `book` requires `author` specifically, not author-or-editor (edited
-        // volumes are `@collection`).
         assert!(db.entry("book").unwrap().required.contains(&one("author")));
 
-        // `incollection` and `periodical` mandate `editor` per the data model.
         assert!(
             db.entry("incollection")
                 .unwrap()
@@ -301,7 +291,6 @@ mod tests {
                 .contains(&one("editor"))
         );
 
-        // `online` mandates url OR doi OR eprint (a `\constraintfieldsor`).
         assert!(
             db.entry("online")
                 .unwrap()
@@ -314,12 +303,10 @@ mod tests {
                 ))
         );
 
-        // `misc` is in the data model's date-mandatory constraint list.
         assert!(db.entry("misc").unwrap().required.iter().any(|r| matches!(
             r, RequiredField::OneOf(alts) if alts.iter().any(|a| a == "date")
         )));
 
-        // Classic-BibTeX-only types are absent from the model and keep `school`.
         assert!(
             db.entry("mastersthesis")
                 .unwrap()
@@ -341,7 +328,6 @@ mod tests {
                 .required
                 .contains(&RequiredField::One(SmolStr::new("title")))
         );
-        // `date` OR `year` is an alternation, not a single required field.
         assert!(article.required.iter().any(|r| matches!(
             r,
             RequiredField::OneOf(alts) if alts.iter().any(|a| a == "date")
@@ -351,12 +337,10 @@ mod tests {
     #[test]
     fn resolves_classic_bibtex_field_aliases() {
         let db = builtin();
-        // Alias -> canonical, case-insensitively.
         assert_eq!(db.canonical("journal"), SmolStr::new("journaltitle"));
         assert_eq!(db.canonical("Journal"), SmolStr::new("journaltitle"));
         assert_eq!(db.canonical("address"), SmolStr::new("location"));
         assert_eq!(db.canonical("school"), SmolStr::new("institution"));
-        // A canonical/unknown field resolves to itself (lowercased).
         assert_eq!(db.canonical("journaltitle"), SmolStr::new("journaltitle"));
         assert_eq!(db.canonical("Title"), SmolStr::new("title"));
     }
@@ -375,7 +359,6 @@ mod tests {
         assert_eq!(db.category("year"), FieldCategory::Date);
         assert_eq!(db.category("url"), FieldCategory::Verbatim);
         assert_eq!(db.category("doi"), FieldCategory::Verbatim);
-        // Unlisted field falls back to Literal.
         assert_eq!(db.category("title"), FieldCategory::Literal);
         assert_eq!(db.category("totallyunknownfield"), FieldCategory::Literal);
     }

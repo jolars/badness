@@ -158,6 +158,9 @@ comparison, not a byte target.
   predicates are blank-line presence, comment presence or own-line status, and
   `.dtx` margin/guard structure.
 - Use normalized `Gap` APIs for width paths.
+- Keep colon-prefixed relations indivisible in math lowering, including when a
+  script makes the equals sign a separate structural atom; coalesce only across
+  a trivia-free boundary.
 - Intentional newline-shape reads are Tier 2 and require an explicit fixed-point
   argument and tests.
 - Keep paragraph-level sectioning commands paragraph-separated in

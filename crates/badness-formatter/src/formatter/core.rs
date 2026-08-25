@@ -8548,6 +8548,7 @@ enum MathSpacing {
 struct MathPiece {
     ir: Ir,
     role: MathRole,
+    colon_relation_prefix: bool,
     spaced_slash: bool,
     slash: bool,
     /// Whether authored whitespace preceded this atom. Drives operand-operand
@@ -8566,6 +8567,7 @@ struct MathSurfaceAtom {
     class: MathClass,
     delimiter: Option<DelimiterRole>,
     colon_relation_prefix: bool,
+    starts_equals_relation: bool,
     spaced_slash: bool,
     slash: bool,
     control_word_operator: bool,
@@ -8587,6 +8589,7 @@ fn lower_math_atoms(
     let SyntaxElement::Token(token) = &el else {
         let starts_control_word_letter = element_starts_control_word_letter(&el);
         let ends_control_word = element_ends_control_word(&el);
+        let starts_with_equals = element_starts_with_token_text(&el, "=");
         let atom = atoms
             .into_iter()
             .next()
@@ -8598,6 +8601,7 @@ fn lower_math_atoms(
             class: atom.class,
             delimiter: atom.delimiter,
             colon_relation_prefix: false,
+            starts_equals_relation: atom.class == MathClass::Rel && starts_with_equals,
             spaced_slash: false,
             slash: false,
             control_word_operator,
@@ -8623,6 +8627,7 @@ fn lower_math_atoms(
             class: atom.class,
             delimiter: atom.delimiter,
             colon_relation_prefix: false,
+            starts_equals_relation: false,
             spaced_slash: false,
             slash: false,
             control_word_operator,
@@ -8659,6 +8664,7 @@ fn lower_math_atoms(
             class: atom.class,
             delimiter: atom.delimiter,
             colon_relation_prefix: atom.class == MathClass::Punct && text == ":",
+            starts_equals_relation: false,
             spaced_slash: atom.class == MathClass::Ord
                 && text == "/"
                 && (start == 0
@@ -8715,6 +8721,17 @@ fn element_starts_control_word_letter(element: &SyntaxElement) -> bool {
         .as_ref()
         .and_then(|token| token.text().chars().next())
         .is_some_and(is_control_word_letter)
+}
+
+fn element_starts_with_token_text(element: &SyntaxElement, expected: &str) -> bool {
+    match element {
+        SyntaxElement::Node(node) => node
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| !is_collapsible_trivia(token.kind())),
+        SyntaxElement::Token(token) => Some(token.clone()),
+    }
+    .is_some_and(|token| token.text() == expected)
 }
 
 fn element_ends_control_word(element: &SyntaxElement) -> bool {
@@ -8777,6 +8794,25 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
             other => {
                 for atom in lower_math_atoms(other, cx, MathSpacing::Normal) {
                     let role = math_atom_role(atom.class, prev_role, prev_opener);
+                    let completes_colon_relation = !pending_space
+                        && pieces
+                            .last()
+                            .is_some_and(|piece| piece.colon_relation_prefix)
+                        && atom.starts_equals_relation;
+                    if completes_colon_relation {
+                        let previous = pieces.last_mut().expect("checked above");
+                        previous.ir = Ir::concat([previous.ir.clone(), atom.ir]);
+                        previous.role = MathRole::Relation;
+                        previous.colon_relation_prefix = false;
+                        previous.bracket_delta += match atom.delimiter {
+                            Some(DelimiterRole::Open) => 1,
+                            Some(DelimiterRole::Close) => -1,
+                            Some(DelimiterRole::Fence) | None => 0,
+                        };
+                        prev_role = MathRole::Relation;
+                        prev_opener = atom.delimiter == Some(DelimiterRole::Open);
+                        continue;
+                    }
                     prev_role = role;
                     prev_opener = atom.delimiter == Some(DelimiterRole::Open);
                     let bracket_delta = match atom.delimiter {
@@ -8787,6 +8823,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
                     pieces.push(MathPiece {
                         ir: atom.ir,
                         role,
+                        colon_relation_prefix: atom.colon_relation_prefix,
                         spaced_slash: atom.spaced_slash,
                         slash: atom.slash,
                         space_before: pending_space,
@@ -9018,6 +9055,9 @@ fn lower_math_seq(
     let mut prev_spaced_slash = false;
     let mut prev_control_word_operator = false;
     let mut prev_ends_control_word = false;
+    let mut prev_colon_relation_prefix = false;
+    let mut prev_colon_needs_left_space = false;
+    let mut prev_atom_ir_index = 0;
     let mut pending_space = false; // authored whitespace since the last atom
     let mut pending_break = false; // a comment forced a hard line break
     let mut pending_newline = false; // a preserved authored line break
@@ -9062,6 +9102,15 @@ fn lower_math_seq(
                     SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK
                 );
                 for atom in lower_math_atoms(other, cx, spacing) {
+                    let completes_colon_relation = prev_colon_relation_prefix
+                        && atom.starts_equals_relation
+                        && !pending_space
+                        && !pending_break
+                        && !pending_newline;
+                    if completes_colon_relation && prev_colon_needs_left_space {
+                        out[prev_atom_ir_index] =
+                            Ir::concat([Ir::verbatim(" "), out[prev_atom_ir_index].clone()]);
+                    }
                     let role = math_atom_role(atom.class, prev_role, prev_opener);
                     let spaced_slash = atom.spaced_slash
                         || atom.slash
@@ -9083,10 +9132,14 @@ fn lower_math_seq(
                         && (role != MathRole::Operand
                             || prev_role != MathRole::Operand
                             || pending_space);
+                    let separator_start = out.len();
                     if !started {
                         // no separator before the first atom
                     } else if pending_break || pending_newline {
                         out.push(Ir::hard_line());
+                    } else if completes_colon_relation {
+                        // The preceding colon and this scripted equals form one
+                        // relation atom, so their boundary stays tight.
                     } else if prev_ends_control_word && atom.starts_control_word_letter {
                         // Tight script spacing must not merge `\in A` into the
                         // distinct control word `\inA`.
@@ -9106,6 +9159,12 @@ fn lower_math_seq(
                     prev_spaced_slash = spaced_slash;
                     prev_control_word_operator = atom.control_word_operator;
                     prev_ends_control_word = atom.ends_control_word;
+                    prev_colon_relation_prefix = atom.colon_relation_prefix;
+                    prev_colon_needs_left_space = atom.colon_relation_prefix
+                        && spacing == MathSpacing::Normal
+                        && started
+                        && separator_start == out.len();
+                    prev_atom_ir_index = out.len();
                     out.push(atom.ir);
                     started = true;
                     pending_space = false;

@@ -353,33 +353,34 @@ pub(crate) const fn arg(required: bool, kind: ArgKind, content: ContentKind) -> 
     }
 }
 
-/// A command signature over a `'static` argument slice (the codegen path).
-pub(crate) const fn command(
+/// Named inputs for a generated command signature.
+pub(crate) struct GeneratedCommand {
     args: &'static [ArgSpec],
     sectioning: Option<u8>,
     verbatim: bool,
     rule: bool,
     inline: bool,
-) -> CommandSig {
+}
+
+/// A command signature over a `'static` argument slice (the codegen path).
+pub(crate) const fn command(generated: GeneratedCommand) -> CommandSig {
     CommandSig {
-        args: Cow::Borrowed(args),
-        sectioning,
-        verbatim,
+        args: Cow::Borrowed(generated.args),
+        sectioning: generated.sectioning,
+        verbatim: generated.verbatim,
         // The codegen (CWL) tier is arity-only, so the delimiter facet — like
         // every behavior flag — never comes from it.
         verbatim_delimited: false,
-        rule,
-        inline,
+        rule: generated.rule,
+        inline: generated.inline,
         // Curated-only facet, like the delimiter one: block-ness never comes
         // from the codegen (CWL) tier.
         block: false,
     }
 }
 
-/// An environment signature over a `'static` argument slice (the codegen path),
-/// storing the explicit source facts from the generated data.
-#[allow(clippy::too_many_arguments)]
-pub(crate) const fn environment(
+/// Named inputs for a generated environment signature.
+pub(crate) struct GeneratedEnvironment {
     args: &'static [ArgSpec],
     verbatim_body: bool,
     math: bool,
@@ -389,26 +390,30 @@ pub(crate) const fn environment(
     list: bool,
     block_explicit: bool,
     outline: Option<OutlineKind>,
-) -> EnvironmentSig {
+}
+
+/// An environment signature over a `'static` argument slice (the codegen path),
+/// storing the explicit source facts from the generated data.
+pub(crate) const fn environment(generated: GeneratedEnvironment) -> EnvironmentSig {
     EnvironmentSig {
-        args: Cow::Borrowed(args),
-        verbatim_body,
+        args: Cow::Borrowed(generated.args),
+        verbatim_body: generated.verbatim_body,
         // The codegen (CWL) tier is arity-only, so the verbatim-argument facet —
         // like every behavior flag — never comes from it.
         verbatim_arg: false,
-        math,
-        code,
+        math: generated.math,
+        code: generated.code,
         // Curated-only facet, like the verbatim-argument one: a statement body is
         // package grammar the mechanical tier cannot see.
         statement_body: false,
         // A key named `label` is not enough to prove `\label` semantics, so the
         // mechanical CWL tier can never grant this fact.
         label_key: false,
-        align,
-        no_indent,
-        list,
-        block_explicit,
-        outline,
+        align: generated.align,
+        no_indent: generated.no_indent,
+        list: generated.list,
+        block_explicit: generated.block_explicit,
+        outline: generated.outline,
     }
 }
 

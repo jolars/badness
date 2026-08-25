@@ -194,14 +194,15 @@ struct RawCommand {
 }
 
 impl RawCommand {
-    /// `command(&[…], sectioning, verbatim, rule, inline)`.
+    /// A named `GeneratedCommand` constructor, so generated source cannot
+    /// silently exchange same-typed fields.
     fn render(&self) -> String {
         let sectioning = match self.sectioning {
             Some(n) => format!("Some({n}u8)"),
             None => "None".to_string(),
         };
         format!(
-            "command({}, {}, {}, {}, {})",
+            "command(GeneratedCommand {{ args: {}, sectioning: {}, verbatim: {}, rule: {}, inline: {} }})",
             render_args(&self.args),
             sectioning,
             self.verbatim,
@@ -242,8 +243,8 @@ struct RawEnvironment {
 }
 
 impl RawEnvironment {
-    /// `environment(&[…], verbatim_body, math, code, align, no_indent, list,
-    /// block_explicit, outline)` — the explicit source facts stored by the const fn.
+    /// A named `GeneratedEnvironment` constructor containing the explicit
+    /// source facts stored by the const fn.
     fn render(&self) -> String {
         let outline = match self.outline {
             Some(RawOutlineKind::Float) => "Some(OutlineKind::Float)",
@@ -251,7 +252,7 @@ impl RawEnvironment {
             None => "None",
         };
         format!(
-            "environment({}, {}, {}, {}, {}, {}, {}, {}, {})",
+            "environment(GeneratedEnvironment {{ args: {}, verbatim_body: {}, math: {}, code: {}, align: {}, no_indent: {}, list: {}, block_explicit: {}, outline: {} }})",
             render_args(&self.args),
             self.verbatim_body,
             self.math,

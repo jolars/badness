@@ -320,13 +320,6 @@ sources below are missing.
   lines and 233 tests; separate math, verbatim, comments, conditionals, and
   aliases into focused integration-test targets.
 
-- [ ] **`crates/badness-parser/build.rs` renders positional same-typed bool
-  lists** in the generated constructor calls (`command(&[…], None, false, false,
-  false)`; nine positional args for environments), so a swapped
-  `verbatim`/`rule` compiles silently. Named-struct constructors, or
-  `/*verbatim*/`-style inline comments in the rendered source, make the
-  generated code self-checking.
-
 - [ ] **Mine the `latexindent` corpus for construct coverage** (human-in-the-loop,
   ongoing). Skill: `.agents/skills/formatter-fixture/`. The corpus is read as a
   coverage map — which constructs occur and in what shapes — and **latexindent

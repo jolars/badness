@@ -4,7 +4,7 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `label-before-caption`
 
-Flag a `\label` placed before the `\caption` inside a float (`figure`, `table`, and their starred forms). `\label` records `\@currentlabel`, which inside a float is set by `\caption`; a label above the caption therefore captures whatever the last `\refstepcounter` left behind — usually the enclosing section number — so `\ref` silently prints a number unrelated to the float. LaTeX gives no warning. Scoped to statement-level labels, so the recommended `\caption{Text\label{x}}` idiom and a `\subcaptionbox{A\label{x}}{…}` subfigure label are never touched. Captions that provably step a nested sub-counter do not hide a later outer label, while dynamic counter names, unknown scopes, starred captions, and `\stepcounter` remain conservative cutoffs. The fix moves the label to just after the first statement-level caption proven to step the outer counter, and is Unsafe because it changes what `\ref` prints (by design) from an inferred intent.
+Flag a `\label` placed before the statement that establishes its intended counter: the outer `\caption` in a curated float (`figure`, `table`, and their starred forms), or the first `\item` in the standard numbered `enumerate` list. In either position, `\label` captures the previous `\@currentlabel`—usually an enclosing section number—so `\ref` silently prints an unrelated number. LaTeX gives no warning. The list case is limited to statement-level labels before the first item; labels after an item may belong to it, while `itemize` and `description` items do not step a reference counter. Attached custom item labels and complete Beamer overlay markers remain intact. The float case likewise skips labels nested in command arguments, and classifies nested counter steps conservatively. The fix moves the label just after the proven caption or item marker, and is Unsafe because it intentionally changes what `\ref` prints from an inferred intent.
 
 A `\label` above its `\caption` picks up the section counter, not the figure number:
 
@@ -22,4 +22,21 @@ warning: label-before-caption
   |
 3 |   \label{fig:plot}
   |   ^^^^^^^^^^^^^^^^ `\label` before the outer `\caption` in this `figure` does not capture the float number
+```
+
+A `\label` before the first `\item` has not seen the item counter step:
+
+```tex
+\begin{enumerate}
+  \label{item:first}
+  \item First
+\end{enumerate}
+```
+
+```text
+warning: label-before-caption
+ --> example.tex:2:3
+  |
+2 |   \label{item:first}
+  |   ^^^^^^^^^^^^^^^^^^ `\label` before the first `\item` in this `enumerate` does not capture the item number
 ```

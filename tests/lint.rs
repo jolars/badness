@@ -1177,12 +1177,16 @@ fn unclosed_math_delimiter_flags_prose_but_not_macro_code() {
 
 #[test]
 fn label_before_caption_is_reported_end_to_end() {
-    let src = "\\begin{figure}\n  \\includegraphics{a}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n";
-    assert!(
-        lint(src)
-            .iter()
-            .any(|(r, s)| *r == "label-before-caption" && *s == Severity::Warning)
-    );
+    for src in [
+        "\\begin{figure}\n  \\includegraphics{a}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n",
+        "\\begin{enumerate}\n  \\label{item:first}\n  \\item First\n\\end{enumerate}\n",
+    ] {
+        assert!(
+            lint(src)
+                .iter()
+                .any(|(r, s)| *r == "label-before-caption" && *s == Severity::Warning)
+        );
+    }
 }
 
 #[test]
@@ -1212,6 +1216,8 @@ fn label_before_caption_fix_is_correct() {
         "\\begin{figure}\n  x \\label{a} y\n  \\caption{C}\n\\end{figure}\n",
         "\\begin{figure}\n  \\subcaptionbox{Sub}{x}\n  \\label{a}\n  \\caption{C}\n\\end{figure}\n",
         "\\begin{figure}\n  \\caption{Cap}\n  \\label{fig:x}\n\\end{figure}\n",
+        "\\begin{enumerate}\n  \\label{item:first}\n  \\item[(a)] First\n  \\item Second\n\\end{enumerate}\n",
+        "\\begin{enumerate}\n  \\item First\n  \\label{item:first}\n  \\item Second\n\\end{enumerate}\n",
     ] {
         assert_fix_is_correct(case);
     }

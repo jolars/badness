@@ -1,27 +1,34 @@
-//! `label-before-caption`: a `\label` that precedes the `\caption` inside a float
-//! environment, where it captures the *enclosing* counter instead of the float's.
+//! `label-before-caption`: a `\label` that precedes the statement which establishes
+//! its intended counter—a float's `\caption` or an `enumerate` list's first `\item`.
 //!
 //! `\label` records whatever `\@currentlabel` holds, and inside a float that value
 //! is set by `\caption` (which `\refstepcounter`s the `figure`/`table` counter).
 //! A `\label` placed *before* the caption therefore stores whatever the last
-//! `\refstepcounter` left behind — normally the enclosing section number — so
+//! `\refstepcounter` left behind—normally the enclosing section number—so
 //! `\ref` prints a number that has nothing to do with the float it points at.
-//! LaTeX issues no warning: the reference resolves, it is simply wrong.
+//! The same applies before the first `\item` in `enumerate`, which has not stepped
+//! the item counter yet. LaTeX issues no warning: the reference resolves, it is
+//! simply wrong.
 //!
 //! Scope is deliberately narrow, because a false positive here proposes moving
 //! content the author placed on purpose:
 //!
-//! - **Only curated float environments** ([`OutlineKind::Float`] — `figure`,
+//! - **Only curated float environments** ([`OutlineKind::Float`]—`figure`,
 //!   `table`, and their starred forms). The set is signature *data*, so widening
-//!   it is a data change rather than a rule change. `\label` before `\item` in a
-//!   list is the same underlying bug and is deliberately out of scope.
-//! - **Only statement-level `\label`s** — those reachable from the float through
-//!   `PARAGRAPH` nodes alone. A `\label` nested in a group or in a command's
-//!   argument belongs to whatever that construct does: `\caption{Text\label{x}}`
-//!   is the *recommended* idiom, and `\subcaptionbox{A\label{x}}{…}` labels the
-//!   subfigure. Neither may be touched, and greedy argument attachment
-//!   (AGENTS.md decision #8) makes "which command owns this group" too soft to
-//!   lean on, so anything below statement level is skipped wholesale.
+//!   it is a data change rather than a rule change.
+//! - **Only the standard numbered `enumerate` list, and only before its first
+//!   statement-level `\item`.** A label after any item may legitimately belong to
+//!   that preceding item, even when another item follows. `itemize` and
+//!   `description` are excluded because their items do not step a reference
+//!   counter. An attached custom `[label]` and a complete Beamer overlay suffix
+//!   remain part of the first item's marker.
+//! - **Only statement-level `\label`s**—those reachable from the float or list
+//!   through `PARAGRAPH` nodes alone. A `\label` nested in a group or in a
+//!   command's argument belongs to whatever that construct does:
+//!   `\caption{Text\label{x}}` is the *recommended* idiom, and
+//!   `\subcaptionbox{A\label{x}}{…}` labels the subfigure. Neither may be touched,
+//!   and greedy argument attachment makes "which command owns this group" too
+//!   soft to lean on, so anything below statement level is skipped wholesale.
 //! - **Counter steps are classified against the outer float.** A nested
 //!   `subfigure`/`subtable` caption and `\subcaption`-family commands step a
 //!   sub-counter, so they do not silence an outer label. Dynamic counter names,
@@ -31,19 +38,22 @@
 //!   evidence of a numbered target, so the shape is left alone.
 //!
 //! **Unsafe autofix**, when a target exists: delete the `\label` and re-insert it
-//! immediately after the first statement-level `\caption`. It is `Unsafe` because
-//! it changes typeset output by design — that is the whole point — and because the
-//! author's intent is inferred, matching the sibling `\label`-placement rule
-//! `space-before-command`. The insertion point is the *statement-level* caption
-//! specifically: inserting after a nested `subfigure`'s caption would move the
-//! label into that subfigure and relabel it.
+//! immediately after the first statement-level outer `\caption` or first
+//! statement-level `\item` marker. It is `Unsafe` because it changes typeset
+//! output by design—that is the whole point—and because the author's intent
+//! is inferred, matching the sibling `\label`-placement rule
+//! `space-before-command`. The float insertion point is the *statement-level*
+//! caption specifically: inserting after a nested `subfigure`'s caption would
+//! move the label into that subfigure and relabel it.
 //!
 //! The fix owes correctness, never layout (AGENTS.md tenet 1). It re-inserts the
-//! label glued to the caption (`\caption{…}\label{…}`) and leaves the line break
-//! to the formatter — the two spellings are byte-identical to TeX, since a float
-//! body is in vertical mode where the intervening space token is discarded. When
-//! the `\label` sits alone on its line, the deletion takes the whole line so no
-//! whitespace-only line is left behind (that would be a `\par`, not nothing).
+//! label glued to its target and leaves the line break to the formatter. In a
+//! float, `\caption{…}\label{…}` is byte-equivalent to a separated spelling
+//! because the body is in vertical mode. In a list,
+//! `\item[marker]\label{…}` begins the item body immediately after `\item` has
+//! stepped the counter. When the `\label` sits alone on its line, the deletion
+//! takes the whole line so no whitespace-only line is left behind (that would be
+//! a `\par`, not nothing).
 
 use std::path::PathBuf;
 
@@ -54,10 +64,16 @@ use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::{Example, Rule, RuleContext};
 
-const EXAMPLES: &[Example] = &[Example {
-    caption: "A `\\label` above its `\\caption` picks up the section counter, not the figure number:",
-    source: "\\begin{figure}\n  \\includegraphics{plot}\n  \\label{fig:plot}\n  \\caption{A plot.}\n\\end{figure}\n",
-}];
+const EXAMPLES: &[Example] = &[
+    Example {
+        caption: "A `\\label` above its `\\caption` picks up the section counter, not the figure number:",
+        source: "\\begin{figure}\n  \\includegraphics{plot}\n  \\label{fig:plot}\n  \\caption{A plot.}\n\\end{figure}\n",
+    },
+    Example {
+        caption: "A `\\label` before the first `\\item` has not seen the item counter step:",
+        source: "\\begin{enumerate}\n  \\label{item:first}\n  \\item First\n\\end{enumerate}\n",
+    },
+];
 
 /// Commands that may set `\@currentlabel` by typesetting a caption.
 const CAPTION_COMMANDS: &[&str] = &[
@@ -71,7 +87,7 @@ const CAPTION_COMMANDS: &[&str] = &[
 
 /// Commands that step a counter by hand. `\refstepcounter` sets `\@currentlabel`
 /// (so a following `\label` is fine); `\stepcounter` does not, but is included
-/// anyway for the same reason the starred captions are — silence over invention.
+/// anyway for the same reason the starred captions are—silence over invention.
 const COUNTER_STEPPERS: &[&str] = &["refstepcounter", "stepcounter"];
 
 pub struct LabelBeforeCaption;
@@ -90,20 +106,20 @@ impl Rule for LabelBeforeCaption {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a `\\label` placed before the `\\caption` inside a float \
-         (`figure`, `table`, and their starred forms). `\\label` records \
-         `\\@currentlabel`, which inside a float is set by `\\caption`; a label \
-         above the caption therefore captures whatever the last `\\refstepcounter` \
-         left behind — usually the enclosing section number — so `\\ref` silently \
-         prints a number unrelated to the float. LaTeX gives no warning. Scoped to \
-         statement-level labels, so the recommended `\\caption{Text\\label{x}}` \
-         idiom and a `\\subcaptionbox{A\\label{x}}{…}` subfigure label are never \
-         touched. Captions that provably step a nested sub-counter do not hide a \
-         later outer label, while dynamic counter names, unknown scopes, starred \
-         captions, and `\\stepcounter` remain conservative cutoffs. The fix moves \
-         the label to just after the first statement-level caption proven to step \
-         the outer counter, and is Unsafe because it changes what `\\ref` prints \
-         (by design) from an inferred intent."
+        "Flag a `\\label` placed before the statement that establishes its \
+         intended counter: the outer `\\caption` in a curated float (`figure`, \
+         `table`, and their starred forms), or the first `\\item` in the standard \
+         numbered `enumerate` list. In either position, `\\label` captures the \
+         previous `\\@currentlabel`—usually an enclosing section number—so \
+         `\\ref` silently prints an unrelated number. LaTeX gives no warning. \
+         The list case is limited to statement-level labels before the first item; \
+         labels after an item may belong to it, while `itemize` and `description` \
+         items do not step a reference counter. Attached custom item labels and \
+         complete Beamer overlay markers remain intact. The float case likewise \
+         skips labels nested in command arguments, and classifies nested counter \
+         steps conservatively. The fix moves the label just after the proven \
+         caption or item marker, and is Unsafe because it intentionally changes \
+         what `\\ref` prints from an inferred intent."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -115,13 +131,23 @@ impl Rule for LabelBeforeCaption {
     }
 
     fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        let Some(float) = el.as_node() else {
+        let Some(env) = el.as_node() else {
             return;
         };
-        let Some(name) = float_name(float) else {
+
+        if let Some(name) = float_name(env) {
+            self.check_float(env, &name, sink);
             return;
-        };
-        let outer_counter = name.strip_suffix('*').unwrap_or(&name);
+        }
+        if is_numbered_list(env) {
+            self.check_numbered_list(env, sink);
+        }
+    }
+}
+
+impl LabelBeforeCaption {
+    fn check_float(&self, float: &SyntaxNode, name: &str, sink: &mut Vec<Diagnostic>) {
+        let outer_counter = name.strip_suffix('*').unwrap_or(name);
 
         // Detection cutoff: the first command that may have stepped this float's
         // own counter. Proven sub-counter steps do not silence an outer label.
@@ -165,6 +191,41 @@ impl Rule for LabelBeforeCaption {
             });
         }
     }
+
+    fn check_numbered_list(&self, list: &SyntaxNode, sink: &mut Vec<Diagnostic>) {
+        let Some(item) = first_statement_item(list) else {
+            return;
+        };
+        let cutoff = usize::from(item.text_range().start());
+        let target = item_marker_end(&item);
+
+        for label in list.descendants() {
+            if label.kind() != SyntaxKind::COMMAND
+                || command_name(&label).as_deref() != Some("label")
+            {
+                continue;
+            }
+            let start = usize::from(label.text_range().start());
+            if start >= cutoff || !at_statement_level(&label, list) {
+                continue;
+            }
+            let fix = target.and_then(|insert_at| {
+                build_move_fix(&label, insert_at, "move `\\label` after the first `\\item`")
+            });
+            sink.push(Diagnostic {
+                rule: self.id(),
+                severity: self.default_severity(),
+                path: PathBuf::new(),
+                start,
+                end: usize::from(label.text_range().end()),
+                message: "`\\label` before the first `\\item` in this `enumerate` does not \
+                          capture the item number"
+                    .to_owned(),
+                fix,
+                related: Vec::new(),
+            });
+        }
+    }
 }
 
 /// The environment's name when it is a curated float, else `None`. Reads the
@@ -181,13 +242,26 @@ fn float_name(env: &SyntaxNode) -> Option<String> {
         .map(|_| name)
 }
 
-/// Whether `node` is reachable from `float` through `PARAGRAPH` nodes alone —
-/// the float's own statement level. Anything separated by a `GROUP`, an
+/// Whether `env` is the standard numbered list. The curated `list` flag alone
+/// is too broad: `itemize` and `description` items do not step a reference
+/// counter, so moving a label past them would not repair anything.
+fn is_numbered_list(env: &SyntaxNode) -> bool {
+    let name = Environment::cast(env.clone())
+        .and_then(|e| e.begin())
+        .and_then(|begin| begin.name());
+    name.as_deref() == Some("enumerate")
+        && signature::builtin()
+            .environment("enumerate")
+            .is_some_and(|sig| sig.list)
+}
+
+/// Whether `node` is reachable from `container` through `PARAGRAPH` nodes
+/// alone—the container's own statement level. Anything separated by a `GROUP`, an
 /// `OPTIONAL`, or a nested `ENVIRONMENT` is owned by that construct instead.
-fn at_statement_level(node: &SyntaxNode, float: &SyntaxNode) -> bool {
+fn at_statement_level(node: &SyntaxNode, container: &SyntaxNode) -> bool {
     let mut cursor = node.parent();
     while let Some(current) = cursor {
-        if &current == float {
+        if &current == container {
             return true;
         }
         if current.kind() != SyntaxKind::PARAGRAPH {
@@ -196,6 +270,16 @@ fn at_statement_level(node: &SyntaxNode, float: &SyntaxNode) -> bool {
         cursor = current.parent();
     }
     false
+}
+
+/// The first outer `\item` in `list`. Nested lists and command arguments are not
+/// item boundaries for the enclosing list.
+fn first_statement_item(list: &SyntaxNode) -> Option<SyntaxNode> {
+    list.descendants().find(|node| {
+        node.kind() == SyntaxKind::COMMAND
+            && command_name(node).as_deref() == Some("item")
+            && at_statement_level(node, list)
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,15 +387,156 @@ fn caption_scope_effect(command: &SyntaxNode, float: &SyntaxNode) -> CounterEffe
     CounterEffect::Unknown
 }
 
+/// The byte immediately after the complete first-item marker. Besides the
+/// command's attached `[label]`, this recognizes Beamer's bounded
+/// `\item<overlay>[label]<overlay>` spelling. An incomplete suffix withholds the
+/// fix while leaving the diagnostic intact.
+fn item_marker_end(item: &SyntaxNode) -> Option<usize> {
+    let (mut end, has_attached_body) = item_command_marker_end(item)?;
+    if has_attached_body {
+        return Some(end);
+    }
+
+    let parent = item.parent()?;
+    let siblings: Vec<SyntaxElement> = parent.children_with_tokens().collect();
+    let mut index = siblings
+        .iter()
+        .position(|element| element.as_node() == Some(item))?
+        + 1;
+
+    if let Some((next, suffix_end)) = angle_marker_suffix(&siblings, index).ok()? {
+        index = next;
+        end = suffix_end;
+    }
+    if let Some((next, suffix_end)) = bracket_marker_suffix(&siblings, index).ok()? {
+        index = next;
+        end = suffix_end;
+    }
+    if let Some((_, suffix_end)) = angle_marker_suffix(&siblings, index).ok()? {
+        end = suffix_end;
+    }
+    Some(end)
+}
+
+/// The attached portion of an item marker and whether the greedy command parse
+/// also captured body content. In the latter case the insertion point is inside
+/// the `COMMAND`, immediately before that content.
+fn item_command_marker_end(item: &SyntaxNode) -> Option<(usize, bool)> {
+    let mut end = None;
+    let mut saw_control_word = false;
+    for child in item.children_with_tokens() {
+        match child.kind() {
+            SyntaxKind::DOC_COMMENT => {}
+            SyntaxKind::CONTROL_WORD => {
+                saw_control_word = true;
+                end = Some(usize::from(child.text_range().end()));
+            }
+            SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE if saw_control_word => {}
+            SyntaxKind::OPTIONAL if saw_control_word => {
+                end = Some(usize::from(child.text_range().end()));
+            }
+            _ if saw_control_word => return end.map(|end| (end, true)),
+            _ => {}
+        }
+    }
+    end.map(|end| (end, false))
+}
+
+/// A complete `<...>` suffix starting at `start`. `Err` means
+/// a would-be suffix or comment could not be proved safe to cross.
+fn angle_marker_suffix(
+    elements: &[SyntaxElement],
+    start: usize,
+) -> Result<Option<(usize, usize)>, ()> {
+    let mut index = skip_marker_trivia(elements, start);
+    let first = match elements.get(index) {
+        Some(first) if first.kind() == SyntaxKind::COMMENT => return Err(()),
+        Some(first) => element_text(first),
+        None => return Ok(None),
+    };
+    if !first.starts_with('<') {
+        return Ok(None);
+    }
+
+    loop {
+        let element = elements.get(index).ok_or(())?;
+        if element.kind() == SyntaxKind::COMMENT {
+            return Err(());
+        }
+        let closes = !matches!(element.kind(), SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE)
+            && element_text(element).ends_with('>');
+        index += 1;
+        if closes {
+            return Ok(Some((index, usize::from(element.text_range().end()))));
+        }
+    }
+}
+
+/// A complete raw `[...]` suffix after a Beamer overlay. Ordinarily the parser
+/// attaches an item's optional label to the `COMMAND`; the raw form is what
+/// remains when an angle suffix intervenes.
+fn bracket_marker_suffix(
+    elements: &[SyntaxElement],
+    start: usize,
+) -> Result<Option<(usize, usize)>, ()> {
+    let mut index = skip_marker_trivia(elements, start);
+    let first = match elements.get(index) {
+        Some(first) if first.kind() == SyntaxKind::COMMENT => return Err(()),
+        Some(first) => first,
+        None => return Ok(None),
+    };
+    if first.kind() == SyntaxKind::OPTIONAL {
+        return Ok(Some((index + 1, usize::from(first.text_range().end()))));
+    }
+    if first.kind() != SyntaxKind::L_BRACKET {
+        return Ok(None);
+    }
+
+    let mut depth = 0usize;
+    loop {
+        let element = elements.get(index).ok_or(())?;
+        match element.kind() {
+            SyntaxKind::L_BRACKET => depth += 1,
+            SyntaxKind::R_BRACKET => depth = depth.checked_sub(1).ok_or(())?,
+            SyntaxKind::COMMENT => return Err(()),
+            _ => {}
+        }
+        index += 1;
+        if depth == 0 {
+            return Ok(Some((index, usize::from(element.text_range().end()))));
+        }
+    }
+}
+
+fn skip_marker_trivia(elements: &[SyntaxElement], mut index: usize) -> usize {
+    while elements.get(index).is_some_and(|element| {
+        matches!(element.kind(), SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE)
+    }) {
+        index += 1;
+    }
+    index
+}
+
+fn element_text(element: &SyntaxElement) -> String {
+    match element {
+        SyntaxElement::Node(node) => node.text().to_string(),
+        SyntaxElement::Token(token) => token.text().to_owned(),
+    }
+}
+
 /// The two-edit move: delete the `\label` where it stands, re-insert it directly
 /// after `caption`. Returns `None` when the caption does not follow the label
 /// (nothing to move it past) or the spans would overlap.
 fn build_fix(label: &SyntaxNode, caption: &SyntaxNode) -> Option<Fix> {
+    let insert_at = usize::from(caption.text_range().end());
+    build_move_fix(label, insert_at, "move `\\label` after `\\caption`")
+}
+
+fn build_move_fix(label: &SyntaxNode, insert_at: usize, description: &str) -> Option<Fix> {
     let text = label.text().to_string();
     let (start, end) = removal_span(label);
-    let insert_at = usize::from(caption.text_range().end());
-    // The caption must sit strictly after the deleted region, or the two edits
-    // are not disjoint and the move is not expressible.
+    // The destination must sit strictly after the deleted region, or the two
+    // edits are not disjoint and the move is not expressible.
     if insert_at <= end {
         return None;
     }
@@ -320,12 +545,12 @@ fn build_fix(label: &SyntaxNode, caption: &SyntaxNode) -> Option<Fix> {
             crate::linter::diagnostic::Edit::new(start, end, ""),
             crate::linter::diagnostic::Edit::new(insert_at, insert_at, text),
         ],
-        "move `\\label` after `\\caption`",
+        description,
     ))
 }
 
 /// The bytes to delete when lifting `label` out. When the label sits alone on its
-/// line, that is the whole line (indent and terminating newline included) — a
+/// line, that is the whole line (indent and terminating newline included)—a
 /// bare node deletion would leave a whitespace-only line, which is a paragraph
 /// break rather than nothing. Otherwise it is exactly the node.
 fn removal_span(label: &SyntaxNode) -> (usize, usize) {
@@ -432,6 +657,71 @@ mod tests {
                 format!("\\begin{{{env}}}\n  \\label{{a}}\n  \\caption{{C}}\n\\end{{{env}}}\n");
             assert_eq!(findings(&src).len(), 1, "{env}");
         }
+    }
+
+    #[test]
+    fn flags_a_statement_level_label_before_the_first_enumerate_item() {
+        let src = "\\begin{enumerate}\n  \\label{item:first}\n  \\item First\n\\end{enumerate}\n";
+        let out = findings(src);
+        assert_eq!(out.len(), 1);
+        assert_eq!(&src[out[0].start..out[0].end], "\\label{item:first}");
+        assert!(out[0].message.contains("`\\item`"));
+    }
+
+    #[test]
+    fn list_gate_is_silent_after_an_item_and_below_statement_level() {
+        for src in [
+            "\\begin{enumerate}\n  \\item First\n  \\label{item:first}\n  \\item Second\n\\end{enumerate}\n",
+            "\\begin{enumerate}\n  {\\label{item:first}}\n  \\item First\n\\end{enumerate}\n",
+            "\\begin{enumerate}\n  \\textbf{\\label{item:first}}\n  \\item First\n\\end{enumerate}\n",
+        ] {
+            assert!(findings(src).is_empty(), "{src}");
+        }
+    }
+
+    #[test]
+    fn list_gate_is_silent_for_non_numbered_lists() {
+        for env in ["itemize", "description"] {
+            let src = format!(
+                "\\begin{{{env}}}\n  \\label{{item:first}}\n  \\item[Term] First\n\\end{{{env}}}\n"
+            );
+            assert!(findings(&src).is_empty(), "{env}");
+        }
+    }
+
+    #[test]
+    fn nested_items_do_not_supply_an_outer_list_target() {
+        let src = "\\begin{enumerate}\n  \\label{outer}\n  \\begin{enumerate}\n    \\item Inner\n  \\end{enumerate}\n\\end{enumerate}\n";
+        assert!(findings(src).is_empty());
+    }
+
+    #[test]
+    fn list_fix_moves_the_label_after_the_complete_item_marker() {
+        for (src, expected) in [
+            (
+                "\\begin{enumerate}\n  \\label{item:first}\n  \\item[(a)] First\n\\end{enumerate}\n",
+                "\\begin{enumerate}\n  \\item[(a)]\\label{item:first} First\n\\end{enumerate}\n",
+            ),
+            (
+                "\\begin{enumerate}\n  \\label{item:first}\n  \\item<2->[custom]<3-> First\n\\end{enumerate}\n",
+                "\\begin{enumerate}\n  \\item<2->[custom]<3->\\label{item:first} First\n\\end{enumerate}\n",
+            ),
+            (
+                "\\begin{enumerate}\n  \\label{item:first}\n  \\item {First}\n\\end{enumerate}\n",
+                "\\begin{enumerate}\n  \\item\\label{item:first} {First}\n\\end{enumerate}\n",
+            ),
+        ] {
+            assert_eq!(fixed(src), expected);
+        }
+    }
+
+    #[test]
+    fn incomplete_item_overlay_is_reported_without_a_fix() {
+        let src =
+            "\\begin{enumerate}\n  \\label{item:first}\n  \\item<2- First\n\\end{enumerate}\n";
+        let out = findings(src);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fix.is_none());
     }
 
     #[test]

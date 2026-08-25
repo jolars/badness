@@ -156,17 +156,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   markers only at column zero; report indented near matches without treating them
   as guards.
 
-Follow-ups from `label-before-caption` (floats only, shipped). All three are
-scope limits recorded at implementation time, not regressions.
-
-- [ ] **Extend `label-before-caption` to list items.** `\label` before `\item`
-  is the same `\@currentlabel` bug: in `\begin{enumerate}\label{i:a}\item
-  A\end{enumerate}` the label captures the enclosing counter, so `\ref{i:a}`
-  prints a number unrelated to the item. Left out of the initial rule because
-  the shapes are more varied than a float's — a label may legitimately sit
-  between two `\item`s and belong to the earlier one, and `description`/
-  `enumitem` custom labels widen the surface — so the statement-level gate that
-  makes the float case safe has to be re-derived before it can fire here.
+The remaining `label-before-caption` scope limit was recorded when the rule
+shipped and is not a regression.
 
 - [ ] **`label-before-caption` is silent outside floats.** `\captionof` in a
   `minipage` fails the same way (`\begin{minipage}{\textwidth}\label{mp}

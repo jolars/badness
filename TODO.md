@@ -150,36 +150,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   pgf/TikZ coordinate arithmetic under `--unsafe-fixes` — is fixed by the shared
   `in_pgf_picture` and `in_pgfmath_argument` gates.)
 
-- [ ] **`makeat-macro` residual on plain-`.tex` package internals.** Recognizing
-  `*.code.tex` as package flavor fixed 98.9% of the pgf `makeat-macro` FPs, but
-  generic-implementation files named plainly (`pgfutil-common.tex`,
-  `support/pgf-regression-test.tex` — `\input` under `\makeatletter`, no
-  `\makeatletter` of their own, no `.code.tex` signal) still emit ~590 findings.
-  There is no clean static signal distinguishing these from a document that
-  genuinely forgot `\makeatletter`, so this is a known limitation rather than a
-  fixable gap; noted for completeness.
-
-- [ ] **`|…|` active-char shortverb is out of scope (catcode limitation).** The
-  sibling of the `codeexample` fix — `\catcode`\|=13` plus `\gdef|{…\verb|…}` —
-  drives the same class of false positive (`straight-quotes`,
-  `unclosed-math-delimiter`, `sectioning-level-jump` on `|\part|`,
-  `missing-nonbreaking-space` on `\ref` inside `|…|`), but it is a genuine
-  catcode limitation, not statically resolvable. Recorded so it is not
-  re-proposed.
-
 ### Rules
 
 - [ ] **Lint indented `.dtx` docstrip guards.** Docstrip recognizes `%<...>`
   markers only at column zero; report indented near matches without treating them
   as guards.
-
-- [ ] **Mine the ChkTeX warning catalog (~44 warnings) for missing rules.**
-  LaTeX Workshop adds no lint rules of its own (it only shells out to
-  ChkTeX/lacheck, both off by default), so ChkTeX's catalog is the source to
-  compare against. Badness already covers the high-value territory (ellipsis,
-  dash length, straight quotes, `$$`, space-before-`\footnote`, intersentence
-  spacing); remaining candidates include space before punctuation or
-  parentheses and missing italic correction (`\/`).
 
 Follow-ups from `label-before-caption` (floats only, shipped). All three are
 scope limits recorded at implementation time, not regressions.
@@ -499,14 +474,3 @@ a file and a line, never a coordinate.
   removal issue) once the formatter/linter call sites migrate — two parallel
   APIs for the same reads with no forcing function is a standing invitation
   for new code to pick the wrong one.
-
-## Open decisions to revisit
-
-- [ ] How much of `\newcommand`/`xparse` to model for the signature DB.
-  *(Semantics)*
-
-- [ ] Formatter opinionatedness: configurable vs. fixed. *(Formatter)*
-
-- [ ] Math preview on hover: skip (LaTeX Workshop covers it), render in the
-  VS Code extension, or a server-side Rust renderer? *(Language server; see
-  `### Hover`)*

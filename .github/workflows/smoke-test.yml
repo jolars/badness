@@ -240,33 +240,16 @@ jobs:
         run: cargo build --release
 
       - name: Scan repositories for debug-format regressions
-        id: scan
         shell: bash
         run: |
           set -euo pipefail
           BADNESS_BIN="$GITHUB_WORKSPACE/target/release/badness"
           BADNESS_SHA="$(git rev-parse HEAD)"
           BADNESS_VERSION="$("$BADNESS_BIN" --version | head -n 1 || true)"
-          RESULTS_DIR="$RUNNER_TEMP/badness-debug-format-scan"
+          export BADNESS_BIN BADNESS_SHA BADNESS_VERSION
+          RESULTS_DIR="$RUNNER_TEMP/badness-debug-format-scan/github"
           REPOS_DIR="$RESULTS_DIR/repos"
-          LOGS_DIR="$RESULTS_DIR/logs"
-          mkdir -p "$REPOS_DIR" "$LOGS_DIR"
-
-          FAILURES_TSV="$RESULTS_DIR/failures.tsv"
-          {
-            printf 'repo\tfailure_type\tfile\tlog_path\treport_path\trepo_sha\tbadness_sha\tbadness_version\tidempotency_input_path\tidempotency_once_path\tidempotency_twice_path\n'
-          } > "$FAILURES_TSV"
-
-          # Normalize the allowlist into exact `repo|path|type` lines (drop blank
-          # and `#` comment lines). A recorded failure whose key matches one of
-          # these is suppressed (see `ALLOWLIST` in the job env, issue #60).
-          ALLOWLIST_ENTRIES="$(printf '%s\n' "$ALLOWLIST" | sed 's/[[:space:]]*$//' | grep -Ev '^[[:space:]]*(#|$)' || true)"
-          SUPPRESSED_COUNT=0
-
-          is_allowlisted() {
-            # args: repo file failure_type
-            grep -Fxq "$1|$2|$3" <<< "$ALLOWLIST_ENTRIES"
-          }
+          mkdir -p "$REPOS_DIR"
 
           while IFS= read -r repo; do
             if [ -z "$repo" ]; then
@@ -275,159 +258,16 @@ jobs:
             repo_dir="$REPOS_DIR/${repo//\//__}"
             git clone --depth 1 "https://github.com/${repo}.git" "$repo_dir"
             repo_sha="$(git -C "$repo_dir" rev-parse HEAD)"
-
-            while IFS= read -r -d '' rel_file; do
-              # Skip dotfile basenames like a bare `.tex`: git's `*.tex` glob
-              # matches them, but badness's file discovery rejects a stemless
-              # dotfile, which would bucket as a bogus `unknown` failure
-              # (issue #59).
-              case "$(basename "$rel_file")" in
-                .*) continue ;;
-              esac
-              # Skip files whose bytes are not valid UTF-8 (e.g. the Latin-1
-              # encoded beamer example/solution `.tex` files with German
-              # umlauts and French accents). Badness reads input as UTF-8 and
-              # refuses anything else with a `stream did not contain valid
-              # UTF-8` read error before any check runs, which would bucket as
-              # a bogus `unknown` failure. Encoding conversion is out of scope
-              # for badness (losslessness is defined byte-for-byte over UTF-8
-              # text); this is a discovery skip, not a badness bug (issue #92).
-              if ! iconv -f UTF-8 -t UTF-8 "$repo_dir/$rel_file" >/dev/null 2>&1; then
-                continue
-              fi
-              file_key="$(printf '%s' "${repo}:${rel_file}" | sha256sum | awk '{print $1}')"
-              log_path="$LOGS_DIR/$file_key.log"
-              report_path="$LOGS_DIR/$file_key.report.md"
-              pass_dir="$LOGS_DIR/$file_key.passes"
-
-              config_args=()
-              status=0
-              (cd "$repo_dir" && timeout 120 "$BADNESS_BIN" debug format --checks all --dump-dir "$pass_dir" "$rel_file") >"$log_path" 2>&1 || status=$?
-              if [ "$status" -ne 0 ]; then
-                # A broken badness.toml in the target repo aborts every file
-                # before any checks run (config errors always name the config
-                # path). That is the target repo's breakage, not a badness
-                # regression, so retry against built-in defaults; only failures
-                # that persist without the repo's config are worth reporting.
-                if grep -Fq 'badness.toml' "$log_path"; then
-                  config_args=(--no-config)
-                  retry_status=0
-                  (cd "$repo_dir" && timeout 120 "$BADNESS_BIN" debug format --checks all "${config_args[@]}" --dump-dir "$pass_dir" "$rel_file") >"$log_path" 2>&1 || retry_status=$?
-                  if [ "$retry_status" -eq 0 ]; then
-                    echo "notice: $repo has an invalid badness config; $rel_file passed with --no-config"
-                    continue
-                  fi
-                  status=$retry_status
-                fi
-                # Generate human-friendly markdown report for issue snippets.
-                (cd "$repo_dir" && timeout 120 "$BADNESS_BIN" debug format --checks all "${config_args[@]}" --report "$rel_file") >"$report_path" 2>&1 || true
-                matched=0
-                failure_types=""
-                idempotency_input_rel=""
-                idempotency_once_rel=""
-                idempotency_twice_rel=""
-
-                safe_rel_file="$(printf '%s' "$rel_file" | sed 's/[^[:alnum:]._-]/_/g')"
-                if [ -f "$pass_dir/$safe_rel_file.idempotency.input.txt" ]; then
-                  idempotency_input_rel="logs/$file_key.passes/$safe_rel_file.idempotency.input.txt"
-                fi
-                if [ -f "$pass_dir/$safe_rel_file.idempotency.once.txt" ]; then
-                  idempotency_once_rel="logs/$file_key.passes/$safe_rel_file.idempotency.once.txt"
-                fi
-                if [ -f "$pass_dir/$safe_rel_file.idempotency.twice.txt" ]; then
-                  idempotency_twice_rel="logs/$file_key.passes/$safe_rel_file.idempotency.twice.txt"
-                fi
-
-                add_failure_type() {
-                  local candidate="$1"
-                  if ! grep -Fxq "$candidate" <<< "$failure_types"; then
-                    if [ -z "$failure_types" ]; then
-                      failure_types="$candidate"
-                    else
-                      failure_types+=$'\n'"$candidate"
-                    fi
-                  fi
-                }
-
-                if [ "$status" -eq 124 ]; then
-                  add_failure_type "timeout"
-                fi
-                if grep -Eiq 'idempot' "$log_path" "$report_path" 2>/dev/null; then
-                  add_failure_type "idempotency"
-                fi
-                if grep -Eiq 'lossless' "$log_path" "$report_path" 2>/dev/null; then
-                  add_failure_type "losslessness"
-                fi
-                if grep -Eiq 'format-error' "$log_path" "$report_path" 2>/dev/null; then
-                  add_failure_type "format-error"
-                fi
-                if grep -Eiq 'content-change' "$log_path" "$report_path" 2>/dev/null; then
-                  add_failure_type "content-change"
-                fi
-                if grep -Eiq 'comment-change' "$log_path" "$report_path" 2>/dev/null; then
-                  add_failure_type "comment-change"
-                fi
-                if [ -f "$report_path" ]; then
-                  while IFS= read -r parsed_type; do
-                    [ -n "$parsed_type" ] && add_failure_type "$parsed_type"
-                  done < <(grep -Eo '\((idempotency|losslessness|format-error|content-change|comment-change)\)' "$report_path" | tr -d '()' | sort -u)
-                fi
-
-                if [ -n "$failure_types" ]; then
-                  matched=1
-                  while IFS= read -r failure_type; do
-                    [ -z "$failure_type" ] && continue
-                    if is_allowlisted "$repo" "$rel_file" "$failure_type"; then
-                      echo "notice: allowlisted $failure_type for $repo:$rel_file (issue #60, record-only)"
-                      SUPPRESSED_COUNT=$((SUPPRESSED_COUNT + 1))
-                      continue
-                    fi
-                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                      "$repo" \
-                      "$failure_type" \
-                      "$rel_file" \
-                      "logs/$file_key.log" \
-                      "logs/$file_key.report.md" \
-                      "$repo_sha" \
-                      "$BADNESS_SHA" \
-                      "$BADNESS_VERSION" \
-                      "$idempotency_input_rel" \
-                      "$idempotency_once_rel" \
-                      "$idempotency_twice_rel" \
-                      >> "$FAILURES_TSV"
-                  done <<< "$failure_types"
-                fi
-
-                if [ "$matched" -eq 0 ]; then
-                  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                    "$repo" \
-                    "unknown" \
-                    "$rel_file" \
-                    "logs/$file_key.log" \
-                    "logs/$file_key.report.md" \
-                    "$repo_sha" \
-                    "$BADNESS_SHA" \
-                    "$BADNESS_VERSION" \
-                    "$idempotency_input_rel" \
-                    "$idempotency_once_rel" \
-                    "$idempotency_twice_rel" \
-                    >> "$FAILURES_TSV"
-                fi
-              fi
-            done < <(git -C "$repo_dir" ls-files -z -- '*.tex' '*.sty' '*.cls' '*.dtx' '*.ins' '*.bib')
+            scripts/smoke_scan_project.sh \
+              "$RESULTS_DIR" github "$repo" "$repo_sha" "$repo_dir" tracked project
           done <<< "$TARGET_REPOS"
-
-          # Hand the suppressed-record tally to the summarize step (separate
-          # shells share only the results dir, which is also the uploaded
-          # artifact).
-          echo "$SUPPRESSED_COUNT" > "$RESULTS_DIR/suppressed_count"
 
       - name: Summarize scan results
         id: summarize
         shell: bash
         run: |
           set -euo pipefail
-          RESULTS_DIR="$RUNNER_TEMP/badness-debug-format-scan"
+          RESULTS_DIR="$RUNNER_TEMP/badness-debug-format-scan/github"
           FAILURES_TSV="$RESULTS_DIR/failures.tsv"
           failure_count="$(($(wc -l < "$FAILURES_TSV") - 1))"
           if [ "$failure_count" -lt 0 ]; then
@@ -444,6 +284,8 @@ jobs:
             echo ""
             echo "- Failure records: $failure_count"
             echo "- Suppressed (allowlisted, record-only): $suppressed_count"
+            echo "- Files scanned: $(cat "$RESULTS_DIR/scanned_count" 2>/dev/null || echo 0)"
+            echo "- Files skipped: $(cat "$RESULTS_DIR/skipped_count" 2>/dev/null || echo 0)"
             echo "- Scanned extensions: \`.tex\`, \`.sty\`, \`.cls\`, \`.dtx\`, \`.ins\`, \`.bib\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -451,25 +293,125 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: debug-format-repo-scan-results
-          path: ${{ runner.temp }}/badness-debug-format-scan
+          path: ${{ runner.temp }}/badness-debug-format-scan/github
+          if-no-files-found: error
+
+  debug-format-arxiv-scan:
+    name: Scan arXiv Projects
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      failure_count: ${{ steps.summarize.outputs.failure_count }}
+    env:
+      # This source has an unclosed delimiter upstream. Keeping the raw file
+      # still exercises parser losslessness and exposes every other failure
+      # kind without filing the known format-error each week. See issue #152.
+      ALLOWLIST: |
+        arxiv:2104.11857v1|Main-Kerr-arxiv.tex|format-error
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+          prefix-key: "v1-rust"
+
+      - name: Build badness binary
+        run: cargo build --release
+
+      - name: Fetch pinned arXiv source projects
+        run: |
+          scripts/fetch_arxiv_sources.py \
+            --manifest tests/arxiv_smoke_sources.tsv \
+            --output "$RUNNER_TEMP/badness-arxiv-sources" \
+            --index "$RUNNER_TEMP/badness-arxiv-sources.tsv"
+
+      - name: Scan arXiv projects for debug-format regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          BADNESS_BIN="$GITHUB_WORKSPACE/target/release/badness"
+          BADNESS_SHA="$(git rev-parse HEAD)"
+          BADNESS_VERSION="$("$BADNESS_BIN" --version | head -n 1 || true)"
+          export BADNESS_BIN BADNESS_SHA BADNESS_VERSION
+          RESULTS_DIR="$RUNNER_TEMP/badness-debug-format-scan/arxiv"
+
+          tail -n +2 "$RUNNER_TEMP/badness-arxiv-sources.tsv" \
+            | while IFS=$'\t' read -r source revision project_dir; do
+                scripts/smoke_scan_project.sh \
+                  "$RESULTS_DIR" arxiv "$source" "$revision" "$project_dir" all none
+              done
+
+      - name: Summarize scan results
+        id: summarize
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULTS_DIR="$RUNNER_TEMP/badness-debug-format-scan/arxiv"
+          FAILURES_TSV="$RESULTS_DIR/failures.tsv"
+          failure_count="$(($(wc -l < "$FAILURES_TSV") - 1))"
+          if [ "$failure_count" -lt 0 ]; then
+            failure_count=0
+          fi
+          suppressed_count="$(cat "$RESULTS_DIR/suppressed_count" 2>/dev/null || echo 0)"
+
+          echo "failure_count=$failure_count" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Badness debug format arXiv scan"
+            echo ""
+            echo "- Failure records: $failure_count"
+            echo "- Suppressed (allowlisted, record-only): $suppressed_count"
+            echo "- Files scanned: $(cat "$RESULTS_DIR/scanned_count" 2>/dev/null || echo 0)"
+            echo "- Files skipped: $(cat "$RESULTS_DIR/skipped_count" 2>/dev/null || echo 0)"
+            echo "- Scanned extensions: \`.tex\`, \`.sty\`, \`.cls\`, \`.dtx\`, \`.ins\`, \`.bib\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scan results artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-format-arxiv-scan-results
+          path: ${{ runner.temp }}/badness-debug-format-scan/arxiv
           if-no-files-found: error
 
   debug-format-repo-scan-issues:
     name: Create Regression Issues
-    needs: debug-format-repo-scan
+    needs:
+      - debug-format-repo-scan
+      - debug-format-arxiv-scan
     runs-on: ubuntu-latest
     permissions:
       issues: write
       contents: read
     steps:
-      - name: Download scan results artifact
+      - name: Download repository scan results
         uses: actions/download-artifact@v8
         with:
           name: debug-format-repo-scan-results
-          path: ${{ runner.temp }}/badness-debug-format-scan
+          path: ${{ runner.temp }}/badness-debug-format-scan/github
+
+      - name: Download arXiv scan results
+        uses: actions/download-artifact@v8
+        with:
+          name: debug-format-arxiv-scan-results
+          path: ${{ runner.temp }}/badness-debug-format-scan/arxiv
+
+      - name: Merge scan results
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULTS_DIR="$RUNNER_TEMP/badness-debug-format-scan"
+          head -n 1 "$RESULTS_DIR/github/failures.tsv" > "$RESULTS_DIR/failures.tsv"
+          tail -n +2 "$RESULTS_DIR/github/failures.tsv" >> "$RESULTS_DIR/failures.tsv"
+          tail -n +2 "$RESULTS_DIR/arxiv/failures.tsv" >> "$RESULTS_DIR/failures.tsv"
 
       - name: Create or update regression issues
-        if: needs.debug-format-repo-scan.outputs.failure_count != '0'
+        if: needs.debug-format-repo-scan.outputs.failure_count != '0' || needs.debug-format-arxiv-scan.outputs.failure_count != '0'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -520,7 +462,7 @@ jobs:
             LC_ALL=C awk -v max_bytes="$MAX_BODY_BYTES" '
               { total += length($0) + 1; if (total > max_bytes) exit; print }
             ' "$file" > "$clamped"
-            printf '\n[Body truncated. See artifact `debug-format-repo-scan-results` for full logs.]\n' >> "$clamped"
+            printf '\n[Body truncated. See the debug-format scan artifacts for full logs.]\n' >> "$clamped"
             mv "$clamped" "$file"
           }
 
@@ -543,24 +485,27 @@ jobs:
             fi
           }
 
-          tail -n +2 "$FAILURES_TSV" | awk -F '\t' '{print $1 "\t" $2}' | sort -u | while IFS=$'\t' read -r repo failure_type; do
-            if [ -z "$repo" ] || [ -z "$failure_type" ]; then
+          tail -n +2 "$FAILURES_TSV" | awk -F '\t' '{print $1 "\t" $2}' | sort -u | while IFS=$'\t' read -r source failure_type; do
+            if [ -z "$source" ] || [ -z "$failure_type" ]; then
               continue
             fi
 
-            marker="badness-debug-format-key:repo=${repo};type=${failure_type}"
-            title="CI: debug-format regression in ${repo} (${failure_type})"
-            count="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {c++} END {print c+0}' "$FAILURES_TSV")"
-            samples="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {printf "- `%s`\n", $3; c++; if (c == 10) exit}' "$FAILURES_TSV")"
-            sample_file="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {print $3; exit}' "$FAILURES_TSV")"
-            sample_log_rel="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {print $4; exit}' "$FAILURES_TSV")"
-            sample_report_rel="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {print $5; exit}' "$FAILURES_TSV")"
-            sample_repo_sha="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {print $6; exit}' "$FAILURES_TSV")"
-            sample_badness_sha="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {print $7; exit}' "$FAILURES_TSV")"
-            sample_badness_version="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {print $8; exit}' "$FAILURES_TSV")"
-            sample_idempotency_input_rel="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {print $9; exit}' "$FAILURES_TSV")"
-            sample_idempotency_once_rel="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {print $10; exit}' "$FAILURES_TSV")"
-            sample_idempotency_twice_rel="$(awk -F '\t' -v r="$repo" -v t="$failure_type" '$1 == r && $2 == t {print $11; exit}' "$FAILURES_TSV")"
+            case "$source" in
+              arxiv:*) marker="badness-debug-format-key:source=${source};type=${failure_type}" ;;
+              *) marker="badness-debug-format-key:repo=${source};type=${failure_type}" ;;
+            esac
+            title="CI: debug-format regression in ${source} (${failure_type})"
+            count="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {c++} END {print c+0}' "$FAILURES_TSV")"
+            samples="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {printf "- `%s`\n", $3; c++; if (c == 10) exit}' "$FAILURES_TSV")"
+            sample_file="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {print $3; exit}' "$FAILURES_TSV")"
+            sample_log_rel="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {print $4; exit}' "$FAILURES_TSV")"
+            sample_report_rel="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {print $5; exit}' "$FAILURES_TSV")"
+            sample_source_revision="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {print $6; exit}' "$FAILURES_TSV")"
+            sample_badness_sha="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {print $7; exit}' "$FAILURES_TSV")"
+            sample_badness_version="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {print $8; exit}' "$FAILURES_TSV")"
+            sample_idempotency_input_rel="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {print $9; exit}' "$FAILURES_TSV")"
+            sample_idempotency_once_rel="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {print $10; exit}' "$FAILURES_TSV")"
+            sample_idempotency_twice_rel="$(awk -F '\t' -v r="$source" -v t="$failure_type" '$1 == r && $2 == t {print $11; exit}' "$FAILURES_TSV")"
             if [ -n "$sample_report_rel" ]; then
               sample_report_path="$RESULTS_DIR/$sample_report_rel"
             else
@@ -581,13 +526,16 @@ jobs:
             if [ -n "$issue_number" ]; then
               comment_file="$RUNNER_TEMP/badness-issue-comment.md"
               {
-                echo "Regression still reproduces for \`$repo\` (\`$failure_type\`)."
+                echo "Regression still reproduces for \`$source\` (\`$failure_type\`)."
                 echo ""
                 echo "- New failure records: $count"
                 echo "- Workflow run: $RUN_URL"
                 echo "- Badness command: \`badness debug format --checks all --report <FILE>\`"
-                if [ -n "$sample_repo_sha" ]; then
-                  echo "- Target repository commit: \`$sample_repo_sha\`"
+                if [ -n "$sample_source_revision" ]; then
+                  case "$source" in
+                    arxiv:*) echo "- arXiv source archive SHA-256: \`$sample_source_revision\`" ;;
+                    *) echo "- Target repository commit: \`$sample_source_revision\`" ;;
+                  esac
                 fi
                 if [ -n "$sample_badness_version" ]; then
                   echo "- Badness version used in scan: \`$sample_badness_version\`"
@@ -616,15 +564,26 @@ jobs:
                 echo ""
                 echo "Sample files:"
                 echo "$samples"
-                if [ -n "$sample_file" ] && [ -n "$sample_repo_sha" ]; then
+                if [ -n "$sample_file" ] && [ -n "$sample_source_revision" ]; then
                   echo ""
                   echo "Reproduce locally:"
                   echo ""
                   echo '```bash'
-                  echo "git clone https://github.com/$repo.git"
-                  echo "cd $(basename "$repo")"
-                  echo "git checkout $sample_repo_sha"
-                  echo "badness debug format --checks all --report \"$sample_file\""
+                  case "$source" in
+                    arxiv:*)
+                      arxiv_id="${source#arxiv:}"
+                      echo "curl --fail --location https://arxiv.org/src/$arxiv_id --output source.tar.gz"
+                      echo "mkdir source && tar -xzf source.tar.gz -C source"
+                      echo "cd source"
+                      echo "badness --no-config debug format --checks all --report \"$sample_file\""
+                      ;;
+                    *)
+                      echo "git clone https://github.com/$source.git"
+                      echo "cd $(basename "$source")"
+                      echo "git checkout $sample_source_revision"
+                      echo "badness debug format --checks all --report \"$sample_file\""
+                      ;;
+                  esac
                   echo '```'
                 fi
                 if [ -n "$report_excerpt" ]; then
@@ -646,13 +605,16 @@ jobs:
                 echo "<!-- $marker -->"
                 echo "# Debug-format regression detected"
                 echo ""
-                echo "- Target repository: \`$repo\`"
+                echo "- Target source: \`$source\`"
                 echo "- Failure type: \`$failure_type\`"
                 echo "- Failure records in this run: $count"
                 echo "- Workflow run: $RUN_URL"
                 echo "- Badness command: \`badness debug format --checks all --report <FILE>\`"
-                if [ -n "$sample_repo_sha" ]; then
-                  echo "- Target repository commit: \`$sample_repo_sha\`"
+                if [ -n "$sample_source_revision" ]; then
+                  case "$source" in
+                    arxiv:*) echo "- arXiv source archive SHA-256: \`$sample_source_revision\`" ;;
+                    *) echo "- Target repository commit: \`$sample_source_revision\`" ;;
+                  esac
                 fi
                 if [ -n "$sample_badness_version" ]; then
                   echo "- Badness version used in scan: \`$sample_badness_version\`"
@@ -684,15 +646,26 @@ jobs:
                 echo ""
                 echo "Sample files:"
                 echo "$samples"
-                if [ -n "$sample_file" ] && [ -n "$sample_repo_sha" ]; then
+                if [ -n "$sample_file" ] && [ -n "$sample_source_revision" ]; then
                   echo ""
                   echo "Reproduce locally:"
                   echo ""
                   echo '```bash'
-                  echo "git clone https://github.com/$repo.git"
-                  echo "cd $(basename "$repo")"
-                  echo "git checkout $sample_repo_sha"
-                  echo "badness debug format --checks all --report \"$sample_file\""
+                  case "$source" in
+                    arxiv:*)
+                      arxiv_id="${source#arxiv:}"
+                      echo "curl --fail --location https://arxiv.org/src/$arxiv_id --output source.tar.gz"
+                      echo "mkdir source && tar -xzf source.tar.gz -C source"
+                      echo "cd source"
+                      echo "badness --no-config debug format --checks all --report \"$sample_file\""
+                      ;;
+                    *)
+                      echo "git clone https://github.com/$source.git"
+                      echo "cd $(basename "$source")"
+                      echo "git checkout $sample_source_revision"
+                      echo "badness debug format --checks all --report \"$sample_file\""
+                      ;;
+                  esac
                   echo '```'
                 fi
                 if [ -n "$report_excerpt" ]; then
@@ -706,7 +679,7 @@ jobs:
                   echo "</details>"
                 fi
                 echo ""
-                echo "See artifact \`debug-format-repo-scan-results\` for full logs."
+                echo "See the debug-format scan artifacts for full logs."
               } > "$body_file"
               clamp_body "$body_file"
 
@@ -749,12 +722,15 @@ jobs:
           FAILURES_TSV="$RESULTS_DIR/failures.tsv"
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-          # Build the set of (repo, failure_type) pairs that failed in this run.
+          # Build the set of source/failure-type pairs that failed in this run.
           current_keys="$RUNNER_TEMP/badness-current-keys.txt"
           : > "$current_keys"
           if [ -f "$FAILURES_TSV" ]; then
             tail -n +2 "$FAILURES_TSV" \
-              | awk -F '\t' 'NF >= 2 && $1 != "" && $2 != "" {printf "badness-debug-format-key:repo=%s;type=%s\n", $1, $2}' \
+              | awk -F '\t' 'NF >= 2 && $1 != "" && $2 != "" {
+                  if ($1 ~ /^arxiv:/) printf "badness-debug-format-key:source=%s;type=%s\n", $1, $2
+                  else printf "badness-debug-format-key:repo=%s;type=%s\n", $1, $2
+                }' \
               | sort -u > "$current_keys"
           fi
 
@@ -769,7 +745,7 @@ jobs:
           echo "$open_issues_json" | jq -c '.[]' | while IFS= read -r issue; do
             number="$(jq -r '.number' <<< "$issue")"
             body="$(jq -r '.body' <<< "$issue")"
-            marker="$(grep -Eo 'badness-debug-format-key:repo=[^;]+;type=[^[:space:]<>]+' <<< "$body" | head -n 1 || true)"
+            marker="$(grep -Eo 'badness-debug-format-key:(repo|source)=[^;]+;type=[^[:space:]<>]+' <<< "$body" | head -n 1 || true)"
             if [ -z "$marker" ]; then
               continue
             fi
@@ -798,8 +774,11 @@ jobs:
           done
 
       - name: Fail workflow when regressions are detected
-        if: needs.debug-format-repo-scan.outputs.failure_count != '0'
+        if: needs.debug-format-repo-scan.outputs.failure_count != '0' || needs.debug-format-arxiv-scan.outputs.failure_count != '0'
+        env:
+          REPO_FAILURES: ${{ needs.debug-format-repo-scan.outputs.failure_count }}
+          ARXIV_FAILURES: ${{ needs.debug-format-arxiv-scan.outputs.failure_count }}
         shell: bash
         run: |
-          echo "Debug format regressions detected: ${{ needs.debug-format-repo-scan.outputs.failure_count }}"
+          echo "Debug format regressions detected: $((REPO_FAILURES + ARXIV_FAILURES))"
           exit 1

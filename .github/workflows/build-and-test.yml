@@ -105,6 +105,16 @@ jobs:
           cargo build -p badness-formatter --features schema
           --release --target wasm32-unknown-unknown
 
+  smoke-scripts:
+    if: github.event_name != 'schedule'
+    name: Smoke Test Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Test source acquisition and project scanning
+        run: python3 -m unittest tests/test_smoke_scripts.py
+
   extension:
     name: VS Code Extension
     if: github.event_name != 'schedule'

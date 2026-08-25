@@ -1,0 +1,5 @@
+# Versioned arXiv identifier and SHA-256 of https://arxiv.org/src/<identifier>.
+# Every supported source file in each archive is scanned; no main file is named.
+1711.07597v2 f4e2bc504a9b7650eec3bf45c0b955f3aee95c1e89d06598cc7da9c32963f1ad
+2104.11857v1 bd08b7af3f9ba05413f94688a31f44c8cb095f1bdb9a5a51d033476f515e5c14
+2205.14808v1 a2d038939ea38821675ed34eefa202db12b11b1edf4fa7425496bcf960ef669d

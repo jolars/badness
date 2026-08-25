@@ -19,6 +19,11 @@ tasks:
     cmds:
       - cargo test --workspace
 
+  smoke-scripts:test:
+    desc: Test smoke-test source acquisition and project scanning scripts
+    cmds:
+      - python3 -m unittest tests/test_smoke_scripts.py
+
   parser-properties:
     desc: Run parser losslessness properties at nightly depth
     env:
@@ -103,7 +108,7 @@ tasks:
 
   check:
     desc: Everything CI runs
-    deps: [fmt-check, lint, test, wasm]
+    deps: [fmt-check, lint, test, smoke-scripts:test, wasm]
 
   wasm:
     desc: Build the wasm-targeting crates for wasm32-unknown-unknown (embeddability guard, mirrors CI)

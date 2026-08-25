@@ -2481,7 +2481,9 @@ mod tests {
                 .min()
                 .unwrap()
         };
-        let (small, large) = (time(4000), time(8000));
+        // Keep the smaller side above tens of milliseconds; shorter samples
+        // were swamped by concurrent test work on macOS ARM runners.
+        let (small, large) = (time(16000), time(32000));
         let ratio = large.as_secs_f64() / small.as_secs_f64().max(f64::EPSILON);
         assert!(
             ratio < 3.0,

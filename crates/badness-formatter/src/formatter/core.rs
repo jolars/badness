@@ -9199,7 +9199,11 @@ fn lower_math_element(el: SyntaxElement, cx: LowerCtx<'_>, spacing: MathSpacing)
                 lower_command_with_math_spacing(&n, cx, spacing)
             }
             SyntaxKind::COMMAND => Ir::verbatim(n.text().to_string()),
-            // Environments, or anything unexpected: defer to generic lowering.
+            // A block environment is an indivisible math atom whose continuation
+            // lines hang from its rendered start column. Generic indentation alone
+            // would instead return to the enclosing math body's base indentation.
+            SyntaxKind::ENVIRONMENT => Ir::align_current(lower_node(&n, cx)),
+            // Anything unexpected: defer to generic lowering.
             _ => lower_node(&n, cx),
         },
         SyntaxElement::Token(t) => lower_loose_token(&t, cx),

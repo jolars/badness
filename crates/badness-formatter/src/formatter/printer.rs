@@ -488,6 +488,17 @@ impl Printer {
                         prefix,
                     });
                 }
+                Ir::AlignCurrent(inner) => {
+                    // A virtual-document prefix is re-emitted separately on
+                    // continuation lines, so the stored indent excludes it.
+                    let prefix_width = prefix.map_or(0, |active| active.line.chars().count());
+                    stack.push(Cmd::Node {
+                        indent: w.current_col().saturating_sub(prefix_width),
+                        mode,
+                        node: inner,
+                        prefix,
+                    });
+                }
                 Ir::BoundedAlign { aligned, fallback } => {
                     let node = if mode != Mode::Break
                         || self.bounded_align_fits(w.current_col(), indent, aligned, prefix)
@@ -979,7 +990,9 @@ impl Printer {
                     }
                 }
                 Ir::Concat(items) => stack.extend(items.iter().rev()),
-                Ir::Indent(inner) | Ir::Align(_, inner) => stack.push(inner),
+                Ir::Indent(inner) | Ir::Align(_, inner) | Ir::AlignCurrent(inner) => {
+                    stack.push(inner);
+                }
                 Ir::BoundedAlign { aligned, .. } => stack.push(aligned),
                 Ir::MarginPrefix { inner, .. } => stack.push(inner),
                 Ir::IfBreak { flat, .. } => stack.push(flat),
@@ -1285,7 +1298,9 @@ impl Printer {
                         work.push((mode, verified, item));
                     }
                 }
-                Ir::Indent(inner) | Ir::Align(_, inner) => work.push((mode, verified, inner)),
+                Ir::Indent(inner) | Ir::Align(_, inner) | Ir::AlignCurrent(inner) => {
+                    work.push((mode, verified, inner));
+                }
                 Ir::BoundedAlign { aligned, fallback } => {
                     // This primitive is emitted at a line's base indentation;
                     // `line_fits` tracks columns but not indentation because an
@@ -1824,6 +1839,31 @@ mod tests {
             ..FormatStyle::default()
         });
         assert_eq!(narrow.print(&ir), "* aa bbbb\n  cc");
+    }
+
+    #[test]
+    fn align_current_hangs_from_rendered_start_column() {
+        let printer = Printer::new(FormatStyle::default());
+        let block = Ir::align_current(Ir::concat([
+            Ir::text("open"),
+            Ir::hard_line(),
+            Ir::text("close"),
+        ]));
+
+        assert_eq!(
+            printer.print(&Ir::concat([Ir::text("lhs "), block.clone()])),
+            "lhs open\n    close"
+        );
+
+        // Prefix bytes occupy real columns but are re-emitted independently,
+        // so they must not be counted again as continuation indentation.
+        assert_eq!(
+            printer.print(&Ir::margin_prefix(
+                "% ",
+                Ir::concat([Ir::text("lhs "), block])
+            )),
+            "% lhs open\n%     close"
+        );
     }
 
     #[test]

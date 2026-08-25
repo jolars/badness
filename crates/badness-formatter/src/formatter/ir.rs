@@ -34,6 +34,11 @@ pub(crate) enum Ir {
     /// width, e.g. a list item's wrapped lines aligning under the text after
     /// `\item `. Build via [`Ir::align`].
     Align(usize, Rc<Ir>),
+    /// Set continuation indentation to the column where `inner` begins. Unlike
+    /// [`Ir::Align`], this reads the actual rendered column, so a block nested
+    /// after a variable-width inline prefix can hang its closer under its opener.
+    /// Build via [`Ir::align_current`].
+    AlignCurrent(Rc<Ir>),
     /// A current-column-aware choice between an aligned layout and its base-indent
     /// fallback. In break mode, the aligned branch is used only when every
     /// continuation line it would render fits the configured width from the
@@ -348,6 +353,15 @@ impl Ir {
         Ir::Align(width, Rc::new(inner))
     }
 
+    /// A hanging indent anchored at the current rendered column (see
+    /// [`Ir::AlignCurrent`]).
+    pub(crate) fn align_current(inner: Ir) -> Ir {
+        if matches!(inner, Ir::Nil) {
+            return inner;
+        }
+        Ir::AlignCurrent(Rc::new(inner))
+    }
+
     /// Choose `aligned` only when its broken continuation lines fit at the
     /// current column; see [`Ir::BoundedAlign`].
     pub(crate) fn bounded_align(aligned: Ir, fallback: Ir) -> Ir {
@@ -439,7 +453,9 @@ impl Ir {
                 parts.iter().any(Ir::contains_group)
             }
             Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_group),
-            Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_group(),
+            Ir::Indent(inner) | Ir::Align(_, inner) | Ir::AlignCurrent(inner) => {
+                inner.contains_group()
+            }
             Ir::BoundedAlign {
                 aligned, fallback, ..
             } => aligned.contains_group() || fallback.contains_group(),
@@ -486,7 +502,9 @@ impl Ir {
                 parts.iter().any(Ir::contains_forced_break)
             }
             Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_forced_break),
-            Ir::Indent(inner) | Ir::Align(_, inner) => inner.contains_forced_break(),
+            Ir::Indent(inner) | Ir::Align(_, inner) | Ir::AlignCurrent(inner) => {
+                inner.contains_forced_break()
+            }
             // Flat mode always chooses the aligned branch, so only that branch
             // can force an enclosing group open. The fallback is selected only
             // after the enclosing layout is already in break mode.
@@ -580,6 +598,10 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
         Ir::Align(width, inner) => {
             let (forced, rewritten) = saturate(inner);
             (forced, rewritten.map(|ir| Ir::Align(*width, Rc::new(ir))))
+        }
+        Ir::AlignCurrent(inner) => {
+            let (forced, rewritten) = saturate(inner);
+            (forced, rewritten.map(|ir| Ir::AlignCurrent(Rc::new(ir))))
         }
         Ir::BoundedAlign { aligned, fallback } => {
             let (forced, aligned_rw) = saturate(aligned);
@@ -739,6 +761,7 @@ mod tests {
             Ir::PreferredFill { atoms, .. } => atoms.iter().for_each(assert_saturated),
             Ir::Indent(inner)
             | Ir::Align(_, inner)
+            | Ir::AlignCurrent(inner)
             | Ir::Group { inner, .. }
             | Ir::MarginPrefix { inner, .. } => assert_saturated(inner),
             Ir::BoundedAlign {

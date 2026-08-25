@@ -184,6 +184,9 @@ comparison, not a byte target.
   indented body, even when the author wrote them on the header line.
 - Keep interior statement wrapping unit-aware and meaning-safe. Underivable
   fallbacks may preserve authored lines but must remain idempotent.
+- Anchor a multiline environment used as a math atom at its rendered start
+  column with `Ir::align_current`; its closer must not fall back to the enclosing
+  display's base indentation.
 - In `render_alignment_rows`, pad terminated grid rows to the full grid width so
   their `\\` markers align; leave unterminated rows unpadded.
 

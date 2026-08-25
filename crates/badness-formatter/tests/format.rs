@@ -1993,6 +1993,16 @@ const MATH_WRAP_FIXTURES: &[(&str, WrapMode, MathWrap, usize)] = &[
         MathWrap::Auto,
         80,
     ),
+    // Issue #155: a block environment used as an inline math atom hangs from
+    // its actual start column. Its closer sits under `\begin{aligned}`, and its
+    // body is one indent step deeper, independent of the enclosing equation's
+    // base indentation.
+    (
+        "issue_155_nested_aligned",
+        WrapMode::Preserve,
+        MathWrap::Preserve,
+        80,
+    ),
     // Issue #141: a final `\\<newline>` is one control-symbol token whose
     // embedded newline already separates the body from its closer. Math grids
     // may absorb that break into their closing frame and still align; generic

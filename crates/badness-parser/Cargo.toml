@@ -1,6 +1,6 @@
 [package]
 name = "badness-parser"
-version = "0.4.0"
+version = "0.5.0"
 edition.workspace = true
 readme = "README.md"
 description = "Lossless CST parser, semantic model, and command-signature database for LaTeX and BibTeX"

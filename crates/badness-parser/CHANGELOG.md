@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/jolars/badness/compare/badness-parser-v0.4.0...badness-parser-v0.5.0) (2026-08-25)
+
+### Features
+- collect labels from environment options ([`df6f1f3`](https://github.com/jolars/badness/commit/df6f1f3eb336f906c0388794c7863f38a1714304))
+- add command declarations ([`c9effb8`](https://github.com/jolars/badness/commit/c9effb8ffa84d52c3043a4e25d5dfe9921194d64))
+
+### Bug Fixes
+- **parser:** close citation command set ([`e10aa54`](https://github.com/jolars/badness/commit/e10aa540cc1cb281bba6308e54a4847b6e4045a1))
+- **formatter:** wrap long citation lists ([`8dbca9e`](https://github.com/jolars/badness/commit/8dbca9e4800b816424eee26c71fa747d475b3c67))
+- honor curated ref/cite families in declarations ([`a3aa4ba`](https://github.com/jolars/badness/commit/a3aa4bab04ebd14960ea8cc18efc67d125513b86))
+
+### Performance Improvements
+- firewall declarations by parse and semantic tier ([`ef61239`](https://github.com/jolars/badness/commit/ef61239fa203af274d8de25479dd2fff72a2e49f))
+
 ## [0.4.0](https://github.com/jolars/badness/compare/badness-parser-v0.3.0...badness-parser-v0.4.0) (2026-08-24)
 
 ### Features

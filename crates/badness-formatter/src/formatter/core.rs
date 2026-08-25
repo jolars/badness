@@ -8565,6 +8565,7 @@ struct MathSurfaceAtom {
     ir: Ir,
     class: MathClass,
     delimiter: Option<DelimiterRole>,
+    colon_relation_prefix: bool,
     spaced_slash: bool,
     slash: bool,
     control_word_operator: bool,
@@ -8574,8 +8575,9 @@ struct MathSurfaceAtom {
 
 /// Lower one CST element into the semantic atoms that its source surface
 /// contains. Structural nodes stay indivisible; a coalesced `WORD` is sliced at
-/// Unicode scalar boundaries. Consecutive relation scalars remain one surface
-/// atom so authored compound spellings such as `<=` are not separated.
+/// Unicode scalar boundaries. Consecutive relation scalars and a colon run
+/// followed by `=` remain one surface atom, so authored compound spellings such
+/// as `<=`, `:=`, and `::=` are not separated.
 fn lower_math_atoms(
     el: SyntaxElement,
     cx: LowerCtx<'_>,
@@ -8595,6 +8597,7 @@ fn lower_math_atoms(
             ir: lower_math_element(el, cx, spacing),
             class: atom.class,
             delimiter: atom.delimiter,
+            colon_relation_prefix: false,
             spaced_slash: false,
             slash: false,
             control_word_operator,
@@ -8619,6 +8622,7 @@ fn lower_math_atoms(
             ir: lower_math_element(el, cx, spacing),
             class: atom.class,
             delimiter: atom.delimiter,
+            colon_relation_prefix: false,
             spaced_slash: false,
             slash: false,
             control_word_operator,
@@ -8633,17 +8637,28 @@ fn lower_math_atoms(
         let start = usize::from(atom.range.start() - token_start);
         let end = usize::from(atom.range.end() - token_start);
         let text = &token.text()[start..end];
-        if atom.class == MathClass::Rel
-            && let Some(previous) = surface.last_mut()
-            && previous.class == MathClass::Rel
-        {
-            previous.ir = Ir::concat([previous.ir.clone(), Ir::verbatim(text)]);
-            continue;
+        if let Some(previous) = surface.last_mut() {
+            let extends_colon_prefix =
+                previous.colon_relation_prefix && atom.class == MathClass::Punct && text == ":";
+            let completes_colon_relation =
+                previous.colon_relation_prefix && atom.class == MathClass::Rel && text == "=";
+            if previous.class == MathClass::Rel && atom.class == MathClass::Rel
+                || extends_colon_prefix
+                || completes_colon_relation
+            {
+                previous.ir = Ir::concat([previous.ir.clone(), Ir::verbatim(text)]);
+                if completes_colon_relation {
+                    previous.class = MathClass::Rel;
+                    previous.colon_relation_prefix = false;
+                }
+                continue;
+            }
         }
         surface.push(MathSurfaceAtom {
             ir: Ir::verbatim(text),
             class: atom.class,
             delimiter: atom.delimiter,
+            colon_relation_prefix: atom.class == MathClass::Punct && text == ":",
             spaced_slash: atom.class == MathClass::Ord
                 && text == "/"
                 && (start == 0

@@ -963,6 +963,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_trim_delims", WrapMode::Preserve, 80),
     ("math_tight_scripts", WrapMode::Preserve, 80),
     // A single space is placed around every top-level binary/relation virtual atom,
+    // with glued colon relations (`:=`, `::=`) kept as one surface atom,
     // including generated Unicode and command classes. A unary `+`/`-` with no
     // left operand stays glued (`-x`, `x=-b`, `2^{-5}`). A fully glued `/` stays
     // tight, while a gap on either side is made symmetric. Script-size punctuation

@@ -53,26 +53,26 @@ jobs:
 
   msrv:
     if: github.event_name != 'schedule'
-    name: MSRV (1.94)
+    name: MSRV (1.89)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust 1.94.1
+      - name: Install Rust 1.89.0
         run: |
-          rustup toolchain install 1.94.1 --profile minimal
-          rustup target add --toolchain 1.94.1 wasm32-unknown-unknown
+          rustup toolchain install 1.89.0 --profile minimal
+          rustup target add --toolchain 1.89.0 wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: msrv-1.94
+          key: msrv-1.89
 
       - name: Check every host target and feature
-        run: cargo +1.94.1 check --workspace --all-targets --all-features --locked
+        run: cargo +1.89.0 check --workspace --all-targets --all-features --locked
 
       - name: Check published libraries for Wasm
         run: >
-          cargo +1.94.1 check -p badness-parser -p badness-formatter
+          cargo +1.89.0 check -p badness-parser -p badness-formatter
           --all-features --locked --target wasm32-unknown-unknown
 
   parser-properties:

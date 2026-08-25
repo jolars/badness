@@ -11,7 +11,7 @@ Badness is a Rust workspace (edition 2024): the root package is the `badness`
 CLI/LSP/linter crate, and the publishable `badness-parser` and
 `badness-formatter` library crates live under `crates/`. The toolchain is pinned
 by `rust-toolchain.toml`, so a stable `rustup` install picks up the right
-version automatically. The published crates support Rust 1.94 and newer; CI
+version automatically. The published crates support Rust 1.89 and newer; CI
 checks that compatibility floor separately from the pinned development
 toolchain.
 

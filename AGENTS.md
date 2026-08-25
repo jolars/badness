@@ -40,7 +40,7 @@ Keep these boundaries intact:
 ## Development workflow
 
 - Prefer test-driven development.
-- Rust edition 2024 is used throughout. Keep the supported Rust 1.94 floor in
+- Rust edition 2024 is used throughout. Keep the supported Rust 1.89 floor in
   `workspace.package.rust-version`, its per-crate inheritance, and the MSRV CI
   job in lockstep; `rust-toolchain.toml` separately pins the current development
   and release compiler.

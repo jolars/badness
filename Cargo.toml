@@ -8,7 +8,7 @@ exclude = ["docs/doc-utils"]
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/jolars/badness"
 authors = ["Johan Larsson <johan@jolars.co>"]

@@ -681,6 +681,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // structural rather than an authored-newline preference, so
     // `\subsection{X}\nprose` and `\subsection{X} prose` lay out identically.
     ("sectioning_starts_own_line", WrapMode::Reflow, 80),
+    // An adjacent `\label` belongs to the heading's structural unit: keep labels
+    // directly below the sectioning command, then place the paragraph separator
+    // after the complete heading-and-label run.
+    ("sectioning_label_stays_attached", WrapMode::Reflow, 80),
     // Comments retain their attachment while section boundaries normalize: a `%`
     // on the heading's own physical line rides it, and a leading own-line `%` stays
     // with the heading, with the blank separator placed before the whole command.

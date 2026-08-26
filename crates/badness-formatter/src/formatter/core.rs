@@ -1730,7 +1730,8 @@ fn dtx_paragraph_reflows(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// carries a forced break). Each commits the run-so-far as a fill, then a fresh run
 /// continues after. Ordinary blocks are joined by [`Ir::hard_line`]; a sectioning
 /// command that is a direct child of a prose paragraph uses [`Ir::empty_line`] on
-/// both sides.
+/// both sides. Adjacent `\label` commands remain attached below that heading, with
+/// the trailing empty line deferred until after the label run.
 ///
 /// A lone newline is normally a break opportunity the fill rejoins, *except* when a
 /// physical line is made up solely of command(s) (a `\usepackage{…}` line, a
@@ -2535,12 +2536,46 @@ fn reflow_elements_checked(
                     && child
                         .parent()
                         .is_some_and(|parent| parent.kind() == SyntaxKind::PARAGRAPH);
+                let is_section_label = child.kind() == SyntaxKind::COMMAND
+                    && command_is_label(child)
+                    && label_follows_sectioning_run(&elements, idx, cx);
+                let section_label_closes_line =
+                    is_section_label && next_is_separated(&elements, idx);
                 let is_block_stmt = kind != ReflowKind::Statement
                     && child.kind() == SyntaxKind::COMMAND
                     && (is_sectioning
                         || (command_is_block(child, cx)
                             && b.atom.is_empty()
                             && next_is_separated(&elements, idx)));
+                if is_section_label && !ir.contains_forced_break() {
+                    let glued_to_previous_label = idx > 0
+                        && matches!(
+                            &elements[idx - 1],
+                            SyntaxElement::Node(previous)
+                                if previous.kind() == SyntaxKind::COMMAND
+                                    && command_is_label(previous)
+                        );
+                    if !glued_to_previous_label {
+                        b.end_line();
+                    }
+                    b.push_atom_piece(ir, &child.text().to_string());
+                    if section_label_closes_line {
+                        b.end_line();
+                        if next_nontrivia_is_label(&elements, idx) {
+                            b.pending_sep = Ir::hard_line();
+                        } else {
+                            b.separate_section();
+                        }
+                        line_has_content = false;
+                        prev_was_block = true;
+                        prev_block_closes_line = true;
+                    } else {
+                        line_has_content = true;
+                    }
+                    line_all_commands = true;
+                    idx += 1;
+                    continue;
+                }
                 if is_block_stmt && !ir.contains_forced_break() {
                     b.end_line();
                     if is_section_boundary {
@@ -2548,7 +2583,7 @@ fn reflow_elements_checked(
                     }
                     b.push_atom_piece(ir, &child.text().to_string());
                     b.end_line();
-                    if is_section_boundary {
+                    if is_section_boundary && !next_nontrivia_is_label(&elements, idx) {
                         b.separate_section();
                     }
                     line_all_commands = true;
@@ -2665,9 +2700,17 @@ fn reflow_elements_checked(
                     // filename shape — leaves the line open so following content can
                     // ride it (the `after_block` paths).
                     prev_block_closes_line =
-                        is_block_stmt || child.kind() == SyntaxKind::ENVIRONMENT;
-                    if is_section_boundary {
+                        is_block_stmt
+                            || section_label_closes_line
+                            || child.kind() == SyntaxKind::ENVIRONMENT;
+                    if is_section_boundary && !next_nontrivia_is_label(&elements, idx) {
                         b.separate_section();
+                    } else if section_label_closes_line {
+                        if next_nontrivia_is_label(&elements, idx) {
+                            b.pending_sep = Ir::hard_line();
+                        } else {
+                            b.separate_section();
+                        }
                     }
                 } else {
                     // A block-level `COMMAND` keeps the line command-only; an inline
@@ -7905,6 +7948,12 @@ fn command_is_sectioning(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         .is_some_and(|sig| sig.sectioning.is_some())
 }
 
+/// Whether `command` is the canonical label command that may remain attached to a
+/// preceding section heading.
+fn command_is_label(command: &SyntaxNode) -> bool {
+    command_name(command).as_deref() == Some("label")
+}
+
 /// Whether `command` is a curated *block-level* command (`\usepackage`,
 /// `\newcommand`, `\maketitle`, …), per the signature DB's [`CommandSig::block`]
 /// flag. Prose reflow treats such a command like a sectioning one — a block-level
@@ -9829,6 +9878,41 @@ fn next_is_separated(elements: &[SyntaxElement], idx: usize) -> bool {
         ),
         Some(SyntaxElement::Node(_)) => false,
     }
+}
+
+/// Whether the next non-trivia element in the paragraph is a `\label` command.
+fn next_nontrivia_is_label(elements: &[SyntaxElement], idx: usize) -> bool {
+    elements[idx + 1..]
+        .iter()
+        .find(|element| !is_collapsible_trivia_element(element))
+        .is_some_and(|element| {
+            matches!(element, SyntaxElement::Node(node) if node.kind() == SyntaxKind::COMMAND && command_is_label(node))
+        })
+}
+
+/// Whether `elements[idx]` is in a label run immediately after a sectioning
+/// command. The paragraph boundary supplies the outer structural gate; scanning
+/// only within this flattened sibling stream cannot attach a label across
+/// intervening prose, comments, or another construct. Glued seams are admitted
+/// because the sectioning rule itself puts the heading and first label on separate
+/// lines; accepting that source shape on pass one is required for idempotence.
+fn label_follows_sectioning_run(elements: &[SyntaxElement], idx: usize, cx: LowerCtx<'_>) -> bool {
+    for element in elements[..idx].iter().rev() {
+        match element {
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
+            SyntaxElement::Node(node)
+                if node.kind() == SyntaxKind::COMMAND && command_is_label(node) => {}
+            SyntaxElement::Node(node)
+                if node.kind() == SyntaxKind::COMMAND && command_is_sectioning(node, cx) =>
+            {
+                return node
+                    .parent()
+                    .is_some_and(|parent| parent.kind() == SyntaxKind::PARAGRAPH);
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 fn absorb(tok: &SyntaxToken, newlines: &mut usize, trailing_ws: &mut String) {

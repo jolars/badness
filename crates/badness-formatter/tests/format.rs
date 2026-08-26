@@ -988,6 +988,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // slash reaches its symmetric layout in the same pass (issue #143).
     // Scientific notation (`1e-5`) is deliberately not special-cased.
     ("math_op_spacing", WrapMode::Preserve, 80),
+    // TeX demotes a binary operator to an ordinary atom after punctuation and
+    // large operators too. The sign therefore stays glued to its operand in both
+    // the ordinary sequencer and the display breaker; in particular, it is not a
+    // break point in an over-width display row.
+    ("math_unary_after_punct_op", WrapMode::Preserve, 80),
     // Curated argument domains are positional: only known `Math` slots recurse
     // through math spacing, while `Text`, `Unknown`, and slots shadowed by a
     // scanned redefinition remain exactly as authored.

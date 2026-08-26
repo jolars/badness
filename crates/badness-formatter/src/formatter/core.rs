@@ -8854,19 +8854,25 @@ fn element_ends_control_word(element: &SyntaxElement) -> bool {
     last.is_some_and(|token| token.kind() == SyntaxKind::CONTROL_WORD)
 }
 
-/// The [`MathRole`] of a top-level math atom. `prev` is the effective role of the
+/// The [`MathRole`] of a top-level math atom. `prev_class` is the TeX class of the
 /// preceding atom and `prev_opener` whether it ended with an opening delimiter: a
 /// `+`/`-` (or any binary operator) with no operand to its left — either the first
-/// atom, one after a relation/binary, or one directly after an opener (`(-1)`) —
+/// atom, one after a binary, large operator, relation, opener, or punctuation —
 /// is unary, so it glues to its operand and is *not* a break point, degrading to
-/// an [`MathRole::Operand`].
-fn math_atom_role(class: MathClass, prev: MathRole, prev_opener: bool) -> MathRole {
+/// an [`MathRole::Operand`]. The full class is needed here because [`MathRole`]
+/// deliberately collapses operators and punctuation into `Operand`.
+fn math_atom_role(class: MathClass, prev_class: MathClass, prev_opener: bool) -> MathRole {
     let raw = match class {
         MathClass::Bin => MathRole::Binary,
         MathClass::Rel => MathRole::Relation,
         _ => MathRole::Operand,
     };
-    if raw == MathRole::Binary && (prev != MathRole::Operand || prev_opener) {
+    if raw == MathRole::Binary
+        && (matches!(
+            prev_class,
+            MathClass::Op | MathClass::Bin | MathClass::Rel | MathClass::Punct
+        ) || prev_opener)
+    {
         MathRole::Operand
     } else {
         raw
@@ -8883,7 +8889,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
     let mut pieces: Vec<MathPiece> = Vec::new();
     // Start as a non-operand so a leading `+`/`-` (no left operand) reads as unary
     // and glues to its operand rather than becoming a break point — e.g. `-x`.
-    let mut prev_role = MathRole::Relation;
+    let mut prev_class = MathClass::Rel;
     let mut prev_opener = false;
     let mut pending_space = false;
     let mut iter = strip_virtual_dtx_framing(elements.iter().cloned(), cx)
@@ -8901,7 +8907,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK => return None,
             other => {
                 for atom in lower_math_atoms(other, cx, MathSpacing::Normal) {
-                    let role = math_atom_role(atom.class, prev_role, prev_opener);
+                    let role = math_atom_role(atom.class, prev_class, prev_opener);
                     let completes_colon_relation = !pending_space
                         && pieces
                             .last()
@@ -8917,11 +8923,11 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
                             Some(DelimiterRole::Close) => -1,
                             Some(DelimiterRole::Fence) | None => 0,
                         };
-                        prev_role = MathRole::Relation;
+                        prev_class = MathClass::Rel;
                         prev_opener = atom.delimiter == Some(DelimiterRole::Open);
                         continue;
                     }
-                    prev_role = role;
+                    prev_class = atom.class;
                     prev_opener = atom.delimiter == Some(DelimiterRole::Open);
                     let bracket_delta = match atom.delimiter {
                         Some(DelimiterRole::Open) => 1,
@@ -9158,6 +9164,7 @@ fn lower_math_seq(
     // Start as a non-operand so a leading `+`/`-` reads as unary (see
     // [`collect_math_pieces`]).
     let mut prev_role = MathRole::Relation;
+    let mut prev_class = MathClass::Rel;
     let mut prev_opener = false; // the previous atom ended with an opening delimiter
     let mut prev_delimiter_edge = false;
     let mut prev_spaced_slash = false;
@@ -9219,7 +9226,7 @@ fn lower_math_seq(
                         out[prev_atom_ir_index] =
                             Ir::concat([Ir::verbatim(" "), out[prev_atom_ir_index].clone()]);
                     }
-                    let role = math_atom_role(atom.class, prev_role, prev_opener);
+                    let role = math_atom_role(atom.class, prev_class, prev_opener);
                     let spaced_slash = atom.spaced_slash
                         || atom.slash
                             && (spacing == MathSpacing::Normal && prev_role != MathRole::Operand
@@ -9280,6 +9287,7 @@ fn lower_math_seq(
                     pending_comment_own_line = false;
                     pending_break = is_line_break;
                     prev_role = role;
+                    prev_class = atom.class;
                 }
             }
         }

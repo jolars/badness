@@ -23,6 +23,11 @@
           "type": "json",
           "path": "npm/badness/package.json",
           "field-path": "$.optionalDependencies.*"
+        },
+        {
+          "type": "regex",
+          "path": "flake.nix",
+          "pattern": "pname = \"badness\";\\n\\s*version = \"([^\"]+)\";"
         }
       ]
     },
@@ -31,7 +36,9 @@
     "editors/code": {
       "release-type": "node",
       "package-name": "badness-code",
-      "follows": ["."]
+      "follows": [
+        "."
+      ]
     }
   }
 }

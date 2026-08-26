@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.20.0](https://github.com/jolars/badness/compare/v0.19.0...v0.20.0) (2026-08-26)
+
+### Features
+- **formatter:** configure item indentation ([`b869f10`](https://github.com/jolars/badness/commit/b869f10f482a53b0da061db8cf433c818f526889)), closes [#150](https://github.com/jolars/badness/issues/150)
+- **formatter:** indent commented begin arguments ([`1da8350`](https://github.com/jolars/badness/commit/1da83509b392e0ca6df7ddf3a1f33c52851ba0f8))
+- report inert suppression directives ([`70e57f7`](https://github.com/jolars/badness/commit/70e57f7818117d3e7c985dcf468685354a8cbcf2))
+- **lint:** check minipage caption labels ([`6ea84bd`](https://github.com/jolars/badness/commit/6ea84bd9fbdefdbb62363ad28746137d5d81f619))
+- **lint:** flag indented docstrip guards ([`9aabc58`](https://github.com/jolars/badness/commit/9aabc58b05496a3ce8a0277be0646ae6017e6386))
+- drop MSRV to 1.89 ([`b5c6250`](https://github.com/jolars/badness/commit/b5c6250179e1375fb9f408b414276efd06466618))
+- **linter:** warn on retired suppressions ([`7c30f9d`](https://github.com/jolars/badness/commit/7c30f9de47c1374239e46a4fec33f04b21254856))
+
+### Bug Fixes
+- **formatter:** close environment lines ([`c72d71d`](https://github.com/jolars/badness/commit/c72d71d5169f6681388c36fc944f8f306f930891))
+- **formatter:** treat gathered as math ([`b31668c`](https://github.com/jolars/badness/commit/b31668c5cd9ce580ccc5d03514c94db62569fcb9))
+- **formatter:** align nested math environments ([`eeebbbf`](https://github.com/jolars/badness/commit/eeebbbf640c3d8c78dbfb4e0cd2c422fd7be6855))
+- support Rust 1.94 ([`a7afd67`](https://github.com/jolars/badness/commit/a7afd671f94f11b0fda1931dc9eef7ba98b67679))
+
+### Dependencies
+- updated crates/badness-formatter to v0.7.0
+- updated crates/badness-parser to v0.6.0
+
 ## [0.19.0](https://github.com/jolars/badness/compare/v0.18.0...v0.19.0) (2026-08-25)
 
 ### Features

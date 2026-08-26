@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/jolars/badness/compare/badness-parser-v0.5.0...badness-parser-v0.6.0) (2026-08-26)
+
+### Features
+- report inert suppression directives ([`70e57f7`](https://github.com/jolars/badness/commit/70e57f7818117d3e7c985dcf468685354a8cbcf2))
+- **lint:** check minipage caption labels ([`6ea84bd`](https://github.com/jolars/badness/commit/6ea84bd9fbdefdbb62363ad28746137d5d81f619))
+- **linter:** warn on retired suppressions ([`7c30f9d`](https://github.com/jolars/badness/commit/7c30f9de47c1374239e46a4fec33f04b21254856))
+
+### Bug Fixes
+- **formatter:** treat gathered as math ([`b31668c`](https://github.com/jolars/badness/commit/b31668c5cd9ce580ccc5d03514c94db62569fcb9))
+- support Rust 1.94 ([`a7afd67`](https://github.com/jolars/badness/commit/a7afd671f94f11b0fda1931dc9eef7ba98b67679))
+
 ## [0.5.0](https://github.com/jolars/badness/compare/badness-parser-v0.4.0...badness-parser-v0.5.0) (2026-08-25)
 
 ### Features

@@ -17,6 +17,7 @@
 //! startup into the constant term and blunt exactly the signal being measured.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use badness::linter::{Diagnostic, OutputMode, Severity, render_findings};
@@ -26,6 +27,10 @@ use badness::parser::parse;
 /// bound sits between. Measured headroom at the time of writing: 1.91x and
 /// 2.10x for the two clean cases.
 const MAX_RATIO: f64 = 3.0;
+
+/// Timing two growth guards concurrently can distort one half of a ratio when
+/// the competing test finishes between the small and large measurements.
+static SCALING_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Best of five — see the module docs on why the minimum.
 fn best_of<T>(mut run: impl FnMut() -> T) -> Duration {
@@ -43,6 +48,9 @@ fn best_of<T>(mut run: impl FnMut() -> T) -> Duration {
 
 /// Assert that doubling the input size grows the time by less than `bound`.
 fn assert_scales<T>(what: &str, n: usize, bound: f64, mut run: impl FnMut(usize) -> T) {
+    let _guard = SCALING_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let small = best_of(|| run(n));
     let large = best_of(|| run(2 * n));
     let ratio = large.as_secs_f64() / small.as_secs_f64().max(f64::EPSILON);

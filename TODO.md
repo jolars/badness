@@ -37,27 +37,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
-- [ ] **The formatter's control-word alphabet ignores catcode context.** The
-  lexer is context-sensitive: `is_letter` (`parser/lexer.rs`) admits `@` only
-  under `\makeatletter` and `_`/`:` only under `\ExplSyntaxOn`. The formatter's
-  `is_control_word_letter` (`formatter/core.rs`) admits all three
-  unconditionally, so it inserts a separating space the lexer never asked for:
-
-  ```tex
-  $\alpha:y$  →  $\alpha :y$
-  $\alpha@y$  →  $\alpha @y$
-  ```
-
-  Those arms cannot ever be right, which makes this cheaper to fix than a
-  context-threading problem sounds. The helper inspects the *next* element's
-  first character, so if it sees `@`, `_`, or `:` at all, the lexer has already
-  ruled that character out as a letter in this context: under `\makeatletter`,
-  `\alpha@y` lexes as one `CONTROL_WORD`, and under `\ExplSyntaxOn` so does
-  `\alpha:y`, and neither reaches the helper. Dropping the three characters is
-  therefore sound without any flag plumbing. A second, separable half: the
-  helper uses `char::is_alphabetic` where the lexer uses `is_ascii_alphabetic`,
-  so `\alpha β` also gets a space it does not need. That one is a readability
-  judgment rather than a defect, so decide it on its own.
+- [ ] **Decide whether math control-word spacing should use the lexer's ASCII
+  alphabet.** The formatter's `is_control_word_letter` (`formatter/core.rs`)
+  uses `char::is_alphabetic`, while the lexer uses `is_ascii_alphabetic`, so
+  `\alphaβ` becomes `\alpha β`. Unlike the mode-specific `@`, `_`, and `:`
+  mismatch, this is a readability judgment rather than a defect.
 
 - [ ] **Widen mandatory-keyval admission (follow-up to the `{…}` segmentation).**
   `ContentKind::Keyval` on a *mandatory* group is now consumed

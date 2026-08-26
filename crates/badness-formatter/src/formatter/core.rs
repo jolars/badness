@@ -8814,7 +8814,7 @@ fn lower_math_atoms(
 }
 
 fn is_control_word_letter(character: char) -> bool {
-    character.is_alphabetic() || matches!(character, '@' | '_' | ':')
+    character.is_alphabetic()
 }
 
 fn element_starts_control_word_letter(element: &SyntaxElement) -> bool {

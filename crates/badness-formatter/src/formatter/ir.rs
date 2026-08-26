@@ -66,6 +66,10 @@ pub(crate) enum Ir {
         inner: Rc<Ir>,
         expand: bool,
         hug: bool,
+        /// Whether `inner` contains an unconditional forced break. Computed
+        /// when the immutable group is built, so lowering-time queries stop at
+        /// group boundaries instead of repeatedly walking nested subtrees.
+        forced_break: bool,
         /// Only meaningful together with `hug`. When set, the prefix fit
         /// measurement *excuses* a leading argument that is an unbreakable atom
         /// too wide to fit on any line (`width >= line_width`): such an atom
@@ -213,10 +217,12 @@ impl Ir {
     }
 
     pub(crate) fn group(inner: Ir) -> Ir {
+        let forced_break = inner.contains_forced_break();
         Ir::Group {
             inner: Rc::new(inner),
             expand: false,
             hug: false,
+            forced_break,
             hug_excuse_overflow: false,
         }
     }
@@ -225,10 +231,12 @@ impl Ir {
     /// the prefix up to the block's opening brace fits, then lets the block
     /// break onto its own lines. See [`Ir::Group`]'s `hug` field.
     pub(crate) fn group_hug(inner: Ir) -> Ir {
+        let forced_break = inner.contains_forced_break();
         Ir::Group {
             inner: Rc::new(inner),
             expand: false,
             hug: true,
+            forced_break,
             hug_excuse_overflow: false,
         }
     }
@@ -239,10 +247,12 @@ impl Ir {
     /// this when every leading argument is a bare atom (nothing breaking could
     /// rescue), so the excuse cannot hide a genuinely fittable argument.
     pub(crate) fn group_hug_excused(inner: Ir) -> Ir {
+        let forced_break = inner.contains_forced_break();
         Ir::Group {
             inner: Rc::new(inner),
             expand: false,
             hug: true,
+            forced_break,
             hug_excuse_overflow: true,
         }
     }
@@ -441,38 +451,6 @@ impl Ir {
         Ir::SoftLine
     }
 
-    /// Whether this tree contains a nested breakable group (`Group` or either
-    /// `ConditionalGroup` variant). Used by the arg-hug rule to decide whether a
-    /// leading argument is a bare atom: if it holds a breakable group, its
-    /// overflow may be rescuable by breaking, so the hug must not excuse it.
-    pub(crate) fn contains_group(&self) -> bool {
-        match self {
-            Ir::Group { .. } | Ir::ConditionalGroup(_) | Ir::ConditionalGroupAllLines(_) => true,
-            Ir::Concat(items) => items.iter().any(Ir::contains_group),
-            Ir::Fill(parts) | Ir::StickyFill(parts) | Ir::HugFill(parts) => {
-                parts.iter().any(Ir::contains_group)
-            }
-            Ir::PreferredFill { atoms, .. } => atoms.iter().any(Ir::contains_group),
-            Ir::Indent(inner) | Ir::Align(_, inner) | Ir::AlignCurrent(inner) => {
-                inner.contains_group()
-            }
-            Ir::BoundedAlign {
-                aligned, fallback, ..
-            } => aligned.contains_group() || fallback.contains_group(),
-            Ir::MarginPrefix { inner, .. } => inner.contains_group(),
-            Ir::IfBreak { flat, broken } => flat.contains_group() || broken.contains_group(),
-            Ir::Text(_)
-            | Ir::Verbatim { .. }
-            | Ir::ColumnZero(_)
-            | Ir::ZeroWidth(_)
-            | Ir::HardLine
-            | Ir::EmptyLine
-            | Ir::Line
-            | Ir::SoftLine
-            | Ir::Nil => false,
-        }
-    }
-
     pub(crate) fn hard_line() -> Ir {
         Ir::HardLine
     }
@@ -510,7 +488,7 @@ impl Ir {
             // after the enclosing layout is already in break mode.
             Ir::BoundedAlign { aligned, .. } => aligned.contains_forced_break(),
             Ir::MarginPrefix { inner, .. } => inner.contains_forced_break(),
-            Ir::Group { inner, expand, .. } => *expand || inner.contains_forced_break(),
+            Ir::Group { forced_break, .. } => *forced_break,
             // The flat-most candidate decides: if even it forces a break, the
             // conditional group always breaks; otherwise some layout is flat-able.
             Ir::ConditionalGroup(cands) | Ir::ConditionalGroupAllLines(cands) => {
@@ -654,9 +632,11 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
             inner,
             expand,
             hug,
+            forced_break,
             hug_excuse_overflow,
         } => {
             let (inner_forced, rewritten) = saturate(inner);
+            debug_assert_eq!(*forced_break, *expand || inner_forced);
             let new_expand = if *hug {
                 *expand
             } else {
@@ -672,6 +652,7 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
                         inner: rewritten.map(Rc::new).unwrap_or_else(|| inner.clone()),
                         expand: new_expand,
                         hug: *hug,
+                        forced_break: *forced_break,
                         hug_excuse_overflow: *hug_excuse_overflow,
                     }),
                 )
@@ -738,9 +719,14 @@ mod tests {
     /// every conditional-group candidate.
     fn assert_saturated(ir: &Ir) {
         if let Ir::Group {
-            inner, expand, hug, ..
+            inner,
+            expand,
+            hug,
+            forced_break,
+            ..
         } = ir
         {
+            assert_eq!(*forced_break, *expand || inner.contains_forced_break());
             if *hug {
                 assert!(!expand, "hug group must never be marked: {ir:?}");
             } else {

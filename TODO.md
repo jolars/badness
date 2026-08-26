@@ -248,21 +248,6 @@ sources below are missing.
   rewritten to slice. Measure with a lexer-only bench first (arity's
   workload-stratified `benches/lex.rs` is the template); do this last, if at all.
 
-- [ ] **`Ir::contains_forced_break` is a per-child subtree walk at lowering
-  time**, so nesting depth is still superlinear — 64% of the run on `{{{x}}}`
-  nested 4000 deep. `saturate` (`formatter/ir.rs`) already computes the
-  identical bit bottom-up in one O(n) pass, precisely so it is "computed on the
-  way up, never by re-traversal", but it runs once at the printer seam while
-  lowering asks the question repeatedly on partial sub-IR — which
-  `formatter/core.rs` explicitly sanctions today. So this is a documented
-  decision to revisit, not a bug to patch: the bit changes as the IR is rebuilt
-  during lowering, so a memo has to be keyed on something that cannot go stale.
-  `Ir::contains_group` has the same shape. Deep brace nesting is the only shape
-  that reaches it (both bench documents are unaffected), so it is not urgent.
-  `tests/scaling.rs` deliberately carries **no** brace-nesting case (its ratio
-  sits at ~2.6x quiet and ~4.3x under parallel test binaries, too close to any
-  useful bound); add one at `MAX_RATIO` when this lands.
-
 - [ ] **Split `crates/badness-parser/tests/parser.rs` by area.** It is now 2,970
   lines and 233 tests; separate math, verbatim, comments, conditionals, and
   aliases into focused integration-test targets.

@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use badness::formatter::{FormatStyle, format_node};
 use badness::linter::{Diagnostic, OutputMode, Severity, render_findings};
 use badness::parser::parse;
 
@@ -98,10 +99,27 @@ fn parsing_a_single_long_line_scales_with_its_length() {
     });
 }
 
-// There is deliberately **no case for brace-nesting depth**, though
-// `contains_doc_margin` was fixed in the same sweep. Lowering is still
-// superlinear there through `Ir::contains_forced_break` (filed in TODO.md), so
-// its ratio sits at ~2.6x quiet and ~4.3x when `cargo test` runs binaries in
-// parallel — close enough to any useful bound to flake, and measuring a
-// property that is not yet true. Add one here once that residue lands; a guard
-// that has to be loosened to pass is not a guard.
+#[test]
+fn formatting_deeply_nested_braces_scales_with_depth() {
+    // The ordinary test-thread stack is exhausted before this input reaches its
+    // asymptotic regime. Parse outside the timed region as well: this guard is
+    // specifically for formatter lowering, not rowan's green-node hashing.
+    std::thread::Builder::new()
+        .name("deep-brace-scaling".into())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            let nested = |n| {
+                let src = format!("{}x{}", "{".repeat(n), "}".repeat(n));
+                parse(&src).syntax()
+            };
+            let small = nested(1000);
+            let large = nested(2000);
+            assert_scales("deep brace formatting", 1000, MAX_RATIO, |n| {
+                let root = if n == 1000 { &small } else { &large };
+                format_node(root, FormatStyle::default()).unwrap()
+            });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

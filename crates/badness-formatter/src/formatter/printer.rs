@@ -563,6 +563,7 @@ impl Printer {
                     expand,
                     hug,
                     hug_excuse_overflow,
+                    ..
                 } => {
                     // Both measurements start from `current_col()` (not the
                     // raw `col`): a group dispatched right after a newline
@@ -1328,6 +1329,7 @@ impl Printer {
                     expand,
                     hug,
                     hug_excuse_overflow,
+                    ..
                 } => {
                     // Mirrors the run loop's `Group` arm, honest contract
                     // included: under a verified `Flat` the printer pins the

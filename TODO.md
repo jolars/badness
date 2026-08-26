@@ -37,6 +37,61 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
+- [ ] **Unary sign not recognized after punctuation or a large operator.**
+  `math_atom_role` (`formatter/core.rs`) coerces a `Bin` atom to `Ord` only when
+  the previous atom was a relation, a binary, or an opener. The TeXbook rule
+  (Chapter 18) also coerces after `Punct` and `Op`, and the miss shows up as
+  inserted spacing:
+
+  ```tex
+  $a,-b$      →  $a, - b$
+  $a;-b$      →  $a; - b$
+  $\sum_i-x$  →  $\sum_i - x$
+  $\int-y$    →  $\int - y$
+  $\lim-z$    →  $\lim - z$
+  ```
+
+  while `$(-1)$`, `$x=-y$`, and `$a+-b$` are all handled. There are two
+  consequences, not one. The sign is spaced away from its operand, contradicting
+  the routine's own docstring ("is unary, so it glues to its operand and is
+  *not* a break point"); and `collect_math_pieces` then treats it as a break
+  candidate, so a wide row splits at it. Same expression, differing only in the
+  atom before the sign:
+
+  ```tex
+  \[ \alpha_{1} + \beta_{2} + \gamma_{3} + \delta_{4}, -\varepsilon_{5} \varphi_{6} \psi_{7} \]
+  ```
+
+  breaks before the `-`, whereas the `=` variant of the same line stays whole
+  with `-\varepsilon_{5}` tight. The cause is that the test reads `prev` as a
+  `MathRole`, and both `Punct` and `Op` have already collapsed into
+  `MathRole::Operand` by then; the fix is to thread the previous `MathClass`
+  instead of its role. Surfaced by reconciling panache's copy of this sequencer
+  against ours: its `operators::coerce` carries the full rule, so the two
+  disagreed on exactly these inputs.
+
+- [ ] **The formatter's control-word alphabet ignores catcode context.** The
+  lexer is context-sensitive: `is_letter` (`parser/lexer.rs`) admits `@` only
+  under `\makeatletter` and `_`/`:` only under `\ExplSyntaxOn`. The formatter's
+  `is_control_word_letter` (`formatter/core.rs`) admits all three
+  unconditionally, so it inserts a separating space the lexer never asked for:
+
+  ```tex
+  $\alpha:y$  →  $\alpha :y$
+  $\alpha@y$  →  $\alpha @y$
+  ```
+
+  Those arms cannot ever be right, which makes this cheaper to fix than a
+  context-threading problem sounds. The helper inspects the *next* element's
+  first character, so if it sees `@`, `_`, or `:` at all, the lexer has already
+  ruled that character out as a letter in this context: under `\makeatletter`,
+  `\alpha@y` lexes as one `CONTROL_WORD`, and under `\ExplSyntaxOn` so does
+  `\alpha:y`, and neither reaches the helper. Dropping the three characters is
+  therefore sound without any flag plumbing. A second, separable half: the
+  helper uses `char::is_alphabetic` where the lexer uses `is_ascii_alphabetic`,
+  so `\alpha β` also gets a space it does not need. That one is a readability
+  judgment rather than a defect, so decide it on its own.
+
 - [ ] **Widen mandatory-keyval admission (follow-up to the `{…}` segmentation).**
   `ContentKind::Keyval` on a *mandatory* group is now consumed
   (`lower_segmented_group`; fixture `keyval_group_splits_entries`), so the setters

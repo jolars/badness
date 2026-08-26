@@ -357,6 +357,31 @@ warning: hard-coded-reference
   | ^^^^^^^ hard-coded reference `Table~1`; use `\ref`/`\cref` to a `\label` so the number stays in sync
 ```
 
+## `indented-docstrip-guard`
+
+Flag a syntactically complete `%<…>` marker in a `.dtx` file when it is preceded only by horizontal whitespace on its physical line. Docstrip recognizes guards only at column zero, so an indented near match is an ordinary comment and does not select or delimit generated code. No autofix is offered because activating a guard can change generated files.
+
+A docstrip guard indented by one space:
+
+```tex
+ %<*package>
+\ProvidesPackage{example}
+ %</package>
+```
+
+```text
+warning: indented-docstrip-guard
+ --> example.dtx:1:2
+  |
+1 |  %<*package>
+  |  ^^^^^^^^^^^ docstrip guards are recognized only at column zero
+warning: indented-docstrip-guard
+ --> example.dtx:3:2
+  |
+3 |  %</package>
+  |  ^^^^^^^^^^^ docstrip guards are recognized only at column zero
+```
+
 ## `invalid-macrocode-frame`
 
 Flag a `.dtx` `macrocode` or `macrocode*` closing frame unless exactly four spaces separate its column-one `%` from `\end{…}`. The `doc` package scans for that literal physical delimiter, so a near match does not close the code chunk even though it looks like an ordinary environment to Badness. The safe autofix replaces only the malformed horizontal space with the required four spaces.

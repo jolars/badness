@@ -1,0 +1,28 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `indented-docstrip-guard`
+
+Flag a syntactically complete `%<…>` marker in a `.dtx` file when it is preceded only by horizontal whitespace on its physical line. Docstrip recognizes guards only at column zero, so an indented near match is an ordinary comment and does not select or delimit generated code. No autofix is offered because activating a guard can change generated files.
+
+A docstrip guard indented by one space:
+
+```tex
+ %<*package>
+\ProvidesPackage{example}
+ %</package>
+```
+
+```text
+warning: indented-docstrip-guard
+ --> example.dtx:1:2
+  |
+1 |  %<*package>
+  |  ^^^^^^^^^^^ docstrip guards are recognized only at column zero
+warning: indented-docstrip-guard
+ --> example.dtx:3:2
+  |
+3 |  %</package>
+  |  ^^^^^^^^^^^ docstrip guards are recognized only at column zero
+```

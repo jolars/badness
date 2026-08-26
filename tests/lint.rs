@@ -41,6 +41,32 @@ fn extra_alignment_tab_runs_through_the_public_driver() {
     );
 }
 
+#[test]
+fn indented_docstrip_guard_runs_with_dtx_lexing() {
+    let findings = lint_project(&[(
+        "pkg.dtx",
+        " %<*package>\n\\ProvidesPackage{pkg}\n %</package>\n",
+    )]);
+    assert_eq!(
+        findings
+            .into_iter()
+            .filter(|(_, rule, _)| *rule == "indented-docstrip-guard")
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "pkg.dtx".to_owned(),
+                "indented-docstrip-guard",
+                "docstrip guards are recognized only at column zero".to_owned(),
+            ),
+            (
+                "pkg.dtx".to_owned(),
+                "indented-docstrip-guard",
+                "docstrip guards are recognized only at column zero".to_owned(),
+            ),
+        ]
+    );
+}
+
 /// Lint a whole `(path, source)` project through the driver exactly as the CLI's
 /// `run_lint` does: build every model first, resolve labels across the include
 /// graph and the package-option model across the members, then lint each file

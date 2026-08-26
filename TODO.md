@@ -150,12 +150,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   pgf/TikZ coordinate arithmetic under `--unsafe-fixes` — is fixed by the shared
   `in_pgf_picture` and `in_pgfmath_argument` gates.)
 
-### Rules
-
-- [ ] **Lint indented `.dtx` docstrip guards.** Docstrip recognizes `%<...>`
-  markers only at column zero; report indented near matches without treating them
-  as guards.
-
 The remaining `label-before-caption` scope limit was recorded when the rule
 shipped and is not a regression.
 

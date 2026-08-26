@@ -521,6 +521,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_empty_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
+    // Declared arguments ordinarily glue onto the `\begin` header. A trailing
+    // comment is a semantic barrier: a following mandatory argument stays in
+    // the header but moves to an indented continuation line, where the comment
+    // cannot consume it.
+    ("environment_argument_comment_barrier", WrapMode::Reflow, 80),
     // Locally defined delimiter aliases inherit the target environment's list
     // and math-grid layout, nest structurally, and stay ordinary commands when
     // no closer proves the pair.

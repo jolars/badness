@@ -182,6 +182,10 @@ comparison, not a byte target.
 - Derive structural statement boundaries from parse structure under reflow.
 - In `lower_environment`, keep commands after a completed `BEGIN` header in the
   indented body, even when the author wrote them on the header line.
+- In `lower_commented_begin`, keep a declared mandatory argument after a
+  trailing header comment in the `BEGIN` header and indent its continuation;
+  never add indentation before a following optional argument, where whitespace
+  can change argument recognition.
 - In `lower_environment`, keep an empty environment's `BEGIN` and `END` on
   separate lines; collapsible body whitespace must not select another layout.
 - Keep interior statement wrapping unit-aware and meaning-safe. Underivable

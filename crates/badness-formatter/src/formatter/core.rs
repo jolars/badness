@@ -5471,11 +5471,14 @@ struct BeginParts {
 /// is a preserved predicate, and relocating a trailing comment rebinds it as the
 /// next construct's `DOC_COMMENT`); one the author gave its own
 /// line travels to the body with the rest of the tail, which is where it already
-/// was. But a header comment *with* a declared arity keeps the whole node on the
-/// byte-faithful path, because both available moves are wrong there: gluing the
-/// argument across the `%` would comment it out, and sending it to the body would
-/// take a `tabular`'s colspec away from the grid. A `.dtx` doc margin or guard is
-/// likewise preserved wholesale — both must open their own line.
+/// was. But a header comment *with* a declared arity keeps every argument in the
+/// header, because both available moves are wrong there: gluing an argument across
+/// the `%` would comment it out, and sending it to the body would take a `tabular`'s
+/// colspec away from the grid. A mandatory argument after a trailing comment is
+/// emitted on an indented continuation line; an optional must retain the generic
+/// path, since inserting whitespace before `[…]` can change whether TeX recognizes
+/// it. A `.dtx` doc margin or guard is likewise preserved wholesale — both must
+/// open their own line.
 ///
 /// Each glued argument is also matched to its signature slot ([`match_arg_slot`],
 /// mirroring [`lower_command`]) so a [`ContentKind::Keyval`] `[…]` — `axis`,
@@ -5499,7 +5502,11 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
     }
     if has_margin || (has_comment && arity > 0) {
         return BeginParts {
-            header: lower_node(begin, cx),
+            header: if has_margin {
+                lower_node(begin, cx)
+            } else {
+                lower_commented_begin(begin, cx, arity)
+            },
             tail: Vec::new(),
         };
     }
@@ -5603,6 +5610,70 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
         header: Ir::concat(head),
         tail: Vec::new(),
     }
+}
+
+/// Lower a declared `\begin` header containing a comment without letting the
+/// comment detach or consume a later argument. When a comment trails one argument
+/// and the next outstanding argument is mandatory, that group is a structural
+/// header continuation and receives one indent. The brace gate matters: TeX skips
+/// whitespace while scanning a mandatory argument, whereas inserting indentation
+/// before an optional `[…]` can change argument recognition.
+fn lower_commented_begin(begin: &SyntaxNode, cx: LowerCtx<'_>, arity: usize) -> Ir {
+    let elements: Vec<SyntaxElement> = begin.children_with_tokens().collect();
+    let mut args_seen = 0usize;
+
+    for (i, element) in elements.iter().enumerate() {
+        if matches!(element, SyntaxElement::Node(node) if matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
+            && args_seen < arity
+        {
+            args_seen += 1;
+            continue;
+        }
+        let SyntaxElement::Token(comment) = element else {
+            continue;
+        };
+        if comment.kind() != SyntaxKind::COMMENT || args_seen >= arity {
+            continue;
+        }
+
+        let trails_argument = elements[..i]
+            .iter()
+            .rev()
+            .find_map(|previous| match previous {
+                SyntaxElement::Token(token) if token.kind() == SyntaxKind::WHITESPACE => None,
+                SyntaxElement::Node(node)
+                    if matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+                {
+                    Some(true)
+                }
+                _ => Some(false),
+            })
+            == Some(true);
+        if !trails_argument {
+            continue;
+        }
+
+        let mut next = i + 1;
+        let mut has_newline = false;
+        while let Some(SyntaxElement::Token(token)) = elements.get(next) {
+            if !is_collapsible_trivia(token.kind()) {
+                break;
+            }
+            has_newline |= token.kind() == SyntaxKind::NEWLINE;
+            next += 1;
+        }
+        if !has_newline
+            || !matches!(elements.get(next), Some(SyntaxElement::Node(node)) if node.kind() == SyntaxKind::GROUP)
+        {
+            continue;
+        }
+
+        let prefix = Ir::concat(lower_element_stream(elements[..=i].iter().cloned(), cx));
+        let continuation = Ir::concat(lower_element_stream(elements[i + 1..].iter().cloned(), cx));
+        return Ir::concat([prefix, Ir::indent(continuation)]);
+    }
+
+    lower_node(begin, cx)
 }
 
 /// True if `node` (an `ENVIRONMENT`) names a list environment the signature DB

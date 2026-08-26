@@ -97,6 +97,10 @@ comparison, not a byte target.
 
 ### Cross-subsystem parser contracts
 
+- Keep `name_group` and `peek_end_name` aligned over the complete flat
+  environment name. Names may contain punctuation such as `@` and `*`, or span
+  lexer tokens at `_`, without changing environment pairing or formatter
+  framing.
 - Share expl3 toggle-name recognition with the formatter through
   `parser::lexer::expl_toggle`; the formatter owns positional layout gating.
 - Environment, conditional, and math pairing must preserve formatter safety and

@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 274 existing fixture slugs. **Re-measure before trusting
+Measured against the 276 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -231,7 +231,7 @@ Candidates not yet checked against a fresh count:
 
 1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` and
-   `environment_leading_body_command` under Done); 34 and 24 slugs now match
+   `environment_leading_body_command` under Done); 35 and 24 slugs now match
    `env`/`arg`, so verify against current slugs before picking.
 
 `items` and bare/named brace groups are no longer thin; re-measure before
@@ -254,6 +254,13 @@ multiline when its lowered body is empty; collapsible whitespace between
 `BEGIN` and `END` cannot choose another layout, and a nested empty environment
 receives the ordinary body indentation. The formatter already implemented the
 rule, so this is a lock-in fixture rather than a production-code change.
+
+Done: environment names containing punctuation
+(`environment_special_character_names`) — pairing reads the complete flat
+`NAME_GROUP`, including punctuation such as `@` and `*` and the multiple lexer
+tokens produced at `_`; the names receive ordinary environment framing and
+nesting. The formatter and parser already implemented the rule, so this is a
+lock-in fixture rather than a production-code change.
 
 Done: `begin_tail_is_body` — content the greedy parser attaches to `BEGIN` past
 the *declared* arity is body, not header, so it indents and reflows with the body

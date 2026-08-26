@@ -521,6 +521,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_empty_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
+    // Pairing reads the complete flat environment name, so punctuation and
+    // lexer-token boundaries (such as `_`) do not alter ordinary framing or
+    // nesting.
+    ("environment_special_character_names", WrapMode::Reflow, 80),
     // An environment lowered as a block opens and closes its own lines, so
     // surrounding prose stays outside the structural frame regardless of whether
     // the author separated the closer with a space or newline. A trailing comment

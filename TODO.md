@@ -279,7 +279,7 @@ sources below are missing.
   out — that is where our rule is usually wrong. Run it at default settings
   (`latexindent probe.tex`, no `-s`) on a hand-authored probe; the committed
   `*-mod*.tex` files are one YAML stack's answer with `-m` on, not its own
-  judgment. Measured gaps against the 274 existing
+  judgment. Measured gaps against the 276 existing
   slugs: `items` (157 files) and bare/named brace groups are no longer thin;
   re-measure before trusting any gap list here. Beamer item
   overlays are covered by `list_item_overlay_prefix`. `mand-args` /
@@ -297,6 +297,8 @@ sources below are missing.
   `environment_argument_comment_barrier` pins that a trailing comment between
   declared environment arguments forces a safe, indented mandatory-argument
   continuation while a following optional remains unindented;
+  `environment_special_character_names` pins full-name pairing and ordinary
+  framing for names containing `@` and `*`, or spanning lexer tokens at `_`;
   `environment_inline_prose_boundaries` pins that an environment expanded as a
   block closes its line before following prose, removing the prior space-versus-
   newline dependency while keeping a trailing comment on the closer;

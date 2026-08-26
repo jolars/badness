@@ -119,6 +119,24 @@ pub enum LineEnding {
     Native,
 }
 
+/// How continuation lines in a list item are indented from the `\item` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "kebab-case")
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum ItemIndent {
+    /// Align continuations under the body following a bare `\item `. The default.
+    #[default]
+    Hang,
+    /// Indent continuations by one `indent_width` step.
+    Indent,
+    /// Align continuations with the `\item` command.
+    None,
+}
+
 impl LineEnding {
     /// Resolve to a concrete ending. `detected` is what the source used and is
     /// consulted only by [`LineEnding::Auto`]; the result is never `Auto` or
@@ -226,6 +244,7 @@ pub(crate) fn apply_line_ending(out: &mut String, resolved: LineEnding) {
 pub struct FormatStyle {
     pub line_width: usize,
     pub indent_width: usize,
+    pub item_indent: ItemIndent,
     pub wrap: WrapMode,
     pub math_wrap: MathWrap,
     pub line_ending: LineEnding,
@@ -236,6 +255,7 @@ impl Default for FormatStyle {
         Self {
             line_width: 80,
             indent_width: 2,
+            item_indent: ItemIndent::default(),
             wrap: WrapMode::default(),
             math_wrap: MathWrap::default(),
             line_ending: LineEnding::default(),

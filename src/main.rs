@@ -25,7 +25,7 @@ use badness::formatter::perturb::{
     survey_trivia_invariance,
 };
 use badness::formatter::{
-    ChangedFile, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode,
+    ChangedFile, FormatStyle, ItemIndent, LineEnding, MathWrap, SentenceOptions, WrapMode,
     check_paths_with_style, format_file_with_packages_sentence, format_with_declarations_sentence,
 };
 use badness::linter::{
@@ -35,8 +35,8 @@ use badness::linter::{
 use std::collections::{BTreeSet, HashMap};
 
 use badness::cli::{
-    Cli, ColorChoice, Command, DebugChecksArg, DebugCommand, LineEndingArg, LintOutput,
-    MathWrapArg, WrapArg,
+    Cli, ColorChoice, Command, DebugChecksArg, DebugCommand, ItemIndentArg, LineEndingArg,
+    LintOutput, MathWrapArg, WrapArg,
 };
 use badness::parser::{LexConfig, parse_with_declarations, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
@@ -65,6 +65,15 @@ fn wrap_mode(arg: WrapArg) -> WrapMode {
         WrapArg::Sentence => WrapMode::Sentence,
         WrapArg::Semantic => WrapMode::Semantic,
         WrapArg::Preserve => WrapMode::Preserve,
+    }
+}
+
+/// Lower the CLI [`ItemIndentArg`] to the formatter's [`ItemIndent`].
+fn item_indent_mode(arg: ItemIndentArg) -> ItemIndent {
+    match arg {
+        ItemIndentArg::Hang => ItemIndent::Hang,
+        ItemIndentArg::Indent => ItemIndent::Indent,
+        ItemIndentArg::None => ItemIndent::None,
     }
 }
 
@@ -116,6 +125,7 @@ fn main() -> ExitCode {
             stdin_filepath,
             line_width,
             indent_width,
+            item_indent,
             wrap,
             math_wrap,
             line_ending,
@@ -145,6 +155,7 @@ fn main() -> ExitCode {
                 &config,
                 line_width,
                 indent_width,
+                item_indent,
                 wrap,
                 math_wrap,
                 line_ending,
@@ -277,7 +288,7 @@ fn main() -> ExitCode {
                         Err(code) => return code,
                     };
                 let (style, wrap_override) =
-                    resolve_style(&config, line_width, None, wrap, None, None);
+                    resolve_style(&config, line_width, None, None, wrap, None, None);
                 let mut abbrev_scratch = Vec::new();
                 let sentence = SentenceOptions::resolve(
                     config.format.lang.as_deref(),
@@ -348,6 +359,7 @@ fn resolve_style(
     config: &Config,
     line_width: Option<usize>,
     indent_width: Option<usize>,
+    item_indent: Option<ItemIndentArg>,
     wrap: Option<WrapArg>,
     math_wrap: Option<MathWrapArg>,
     line_ending: Option<LineEndingArg>,
@@ -358,6 +370,9 @@ fn resolve_style(
     }
     if let Some(w) = indent_width {
         style.indent_width = w;
+    }
+    if let Some(mode) = item_indent {
+        style.item_indent = item_indent_mode(mode);
     }
     let wrap_override: Option<WrapMode> =
         wrap.map(wrap_mode).or(config.format.wrap.map(Into::into));
@@ -425,6 +440,7 @@ const STARTER_CONFIG: &str = "\
 [format]
 # line-width = 80
 # indent-width = 2
+# item-indent = \"hang\"  # hang | indent | none
 # wrap = \"reflow\"  # reflow | stable | sentence | semantic | preserve
                      # omit to use each file kind's default
                      # (.tex -> reflow, .sty/.cls/.dtx/.ins -> preserve)

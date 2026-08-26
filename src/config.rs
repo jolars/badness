@@ -30,7 +30,7 @@ use serde::Deserialize;
 use crate::declarations::{
     CommandDecls, DeclarationError, Declarations, EnvironmentDecls, ResolvedDeclarations,
 };
-use crate::formatter::{FormatStyle, LineEnding, MathWrap, WrapMode};
+use crate::formatter::{FormatStyle, ItemIndent, LineEnding, MathWrap, WrapMode};
 
 pub const CONFIG_FILE_NAME: &str = "badness.toml";
 
@@ -149,6 +149,10 @@ pub struct FormatConfig {
     pub line_width: u32,
     #[serde(default = "default_indent_width")]
     pub indent_width: u32,
+    /// How continuation lines in list items are indented from the `\item`
+    /// column. See [`ItemIndentConfig`].
+    #[serde(default)]
+    pub item_indent: ItemIndentConfig,
     /// The paragraph line-break policy. See [`WrapModeConfig`]. When omitted,
     /// every file kind uses [`WrapMode::default`] (`reflow`) — the formatter
     /// declines to reflow content that is unsafe to reflow on its own, in every
@@ -184,11 +188,36 @@ impl Default for FormatConfig {
         Self {
             line_width: DEFAULT_LINE_WIDTH,
             indent_width: DEFAULT_INDENT_WIDTH,
+            item_indent: ItemIndentConfig::default(),
             wrap: None,
             math_wrap: None,
             line_ending: None,
             lang: None,
             no_break_abbreviations: BTreeMap::new(),
+        }
+    }
+}
+
+/// The `item-indent` key under `[format]`. A serde-named mirror of
+/// [`ItemIndent`], the same split as [`WrapModeConfig`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ItemIndentConfig {
+    /// Align continuations under the body following a bare `\item `.
+    #[default]
+    Hang,
+    /// Indent continuations by one `indent-width` step.
+    Indent,
+    /// Align continuations with the `\item` command.
+    None,
+}
+
+impl From<ItemIndentConfig> for ItemIndent {
+    fn from(value: ItemIndentConfig) -> Self {
+        match value {
+            ItemIndentConfig::Hang => ItemIndent::Hang,
+            ItemIndentConfig::Indent => ItemIndent::Indent,
+            ItemIndentConfig::None => ItemIndent::None,
         }
     }
 }
@@ -378,6 +407,7 @@ impl From<&FormatConfig> for FormatStyle {
         FormatStyle {
             line_width: config.line_width as usize,
             indent_width: config.indent_width as usize,
+            item_indent: config.item_indent.into(),
             wrap: WrapMode::default(),
             // Unlike `wrap`, `math-wrap` has no per-file-kind default: the
             // configured value (or `Auto`) maps straight through, and `Auto`
@@ -697,11 +727,12 @@ mod tests {
     }
 
     #[test]
-    fn default_config_matches_format_style_default_widths() {
+    fn default_config_matches_format_style_defaults() {
         let config = Config::default();
         let style = FormatStyle::from(&config.format);
         assert_eq!(style.line_width, FormatStyle::default().line_width);
         assert_eq!(style.indent_width, FormatStyle::default().indent_width);
+        assert_eq!(style.item_indent, FormatStyle::default().item_indent);
     }
 
     #[test]
@@ -724,6 +755,18 @@ mod tests {
         let style = FormatStyle::from(&config.format);
         assert_eq!(style.indent_width, 4);
         assert_eq!(style.line_width, 80);
+    }
+
+    #[test]
+    fn parses_item_indent() {
+        let config = parse("[format]\nitem-indent = \"indent\"\n").expect("parse");
+        let style = FormatStyle::from(&config.format);
+        assert_eq!(style.item_indent, ItemIndent::Indent);
+    }
+
+    #[test]
+    fn rejects_unknown_item_indent() {
+        assert!(parse("[format]\nitem-indent = \"same\"\n").is_err());
     }
 
     #[test]

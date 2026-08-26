@@ -164,9 +164,9 @@ safety](#reflow-is-safe-by-construction).
 
 `badness.toml` is found by walking ancestors from each input. The CLI is its
 only consumer; the library API takes a resolved `FormatStyle`. Sections are
-`[format]` (`line-width`, `indent-width`, `wrap`, `math-wrap`, `lang`,
-`no-break-abbreviations`), `[lint]` (`select`, `ignore`), `[build]` (`aux-dir`),
-and the [declaration](#declarations) maps `[commands.<name>]` and
+`[format]` (`line-width`, `indent-width`, `item-indent`, `wrap`, `math-wrap`,
+`lang`, `no-break-abbreviations`), `[lint]` (`select`, `ignore`), `[build]`
+(`aux-dir`), and the [declaration](#declarations) maps `[commands.<name>]` and
 `[environments.<name>]`. Excludes follow Ruff: `exclude` replaces the built-in
 default, `extend-exclude` adds to it. `wrap` is an `Option` so the LSP can tell
 "unset" from "set" when merging editor settings over project config, not because

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use badness_formatter::declarations::{Declarations, ResolvedDeclarations};
 use badness_formatter::formatter::{
-    FormatError, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode, format,
+    FormatError, FormatStyle, ItemIndent, LineEnding, MathWrap, SentenceOptions, WrapMode, format,
     format_node_range_with_signatures, format_with_declarations_sentence, format_with_style,
     format_with_style_flavored, format_with_style_flavored_sentence, perturb,
 };
@@ -2079,6 +2079,40 @@ fn assert_fixture(name: &str, style: FormatStyle) {
         formatted,
         "fixture {name} formatted output must round-trip"
     );
+}
+
+#[test]
+fn item_indent_selects_continuation_layout() {
+    let input = "\\begin{itemize}\n\\item First sentence. Second sentence.\n\\end{itemize}\n";
+    let cases = [
+        (
+            ItemIndent::Hang,
+            "\\begin{itemize}\n  \\item First sentence.\n        Second sentence.\n\\end{itemize}\n",
+        ),
+        (
+            ItemIndent::Indent,
+            "\\begin{itemize}\n  \\item First sentence.\n    Second sentence.\n\\end{itemize}\n",
+        ),
+        (
+            ItemIndent::None,
+            "\\begin{itemize}\n  \\item First sentence.\n  Second sentence.\n\\end{itemize}\n",
+        ),
+    ];
+
+    for (item_indent, expected) in cases {
+        let style = FormatStyle {
+            item_indent,
+            wrap: WrapMode::Sentence,
+            ..FormatStyle::default()
+        };
+        let formatted = format_with_style(input, style).expect("format list");
+        assert_eq!(formatted, expected, "item indent: {item_indent:?}");
+        assert_eq!(
+            format_with_style(&formatted, style).expect("reformat list"),
+            formatted,
+            "item indent must be idempotent: {item_indent:?}",
+        );
+    }
 }
 
 /// The `sentence`/`semantic` language profile is config-driven: the German profile

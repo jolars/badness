@@ -25,7 +25,7 @@ pub mod semantic;
 pub mod syntax;
 
 pub use formatter::{
-    FormatError, FormatStyle, LineEnding, MathWrap, SentenceOptions, WrapMode, format,
+    FormatError, FormatStyle, ItemIndent, LineEnding, MathWrap, SentenceOptions, WrapMode, format,
 };
 
 // Re-export rowan so embedders can name the exact tree types this crate is

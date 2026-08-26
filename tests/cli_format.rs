@@ -56,6 +56,31 @@ fn format(dir: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
+fn item_indent_flag_overrides_config() {
+    let dir = repo_dir();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[format]\nwrap = \"sentence\"\nitem-indent = \"none\"\n",
+    )
+    .unwrap();
+    let input = "\\begin{itemize}\n\\item First sentence. Second sentence.\n\\end{itemize}\n";
+
+    let configured = format_stdin(dir.path(), &[], Some(input));
+    assert!(configured.status.success());
+    assert_eq!(
+        String::from_utf8(configured.stdout).unwrap(),
+        "\\begin{itemize}\n  \\item First sentence.\n  Second sentence.\n\\end{itemize}\n",
+    );
+
+    let overridden = format_stdin(dir.path(), &["--item-indent", "indent"], Some(input));
+    assert!(overridden.status.success());
+    assert_eq!(
+        String::from_utf8(overridden.stdout).unwrap(),
+        "\\begin{itemize}\n  \\item First sentence.\n    Second sentence.\n\\end{itemize}\n",
+    );
+}
+
+#[test]
 fn check_prints_a_diff_on_stdout() {
     let dir = repo_dir();
     std::fs::write(dir.path().join("doc.tex"), UNFORMATTED).unwrap();

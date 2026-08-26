@@ -35,7 +35,7 @@ use super::ir::Ir;
 use super::printer::Printer;
 use super::sentence::{ResolvedProfile, SentenceOptions, is_sentence_boundary_text};
 use super::style::{
-    FormatStyle, LineEnding, MathWrap, WrapMode, apply_line_ending, detect_line_ending,
+    FormatStyle, ItemIndent, LineEnding, MathWrap, WrapMode, apply_line_ending, detect_line_ending,
 };
 
 /// Why a document could not be formatted. The formatter only operates on a clean
@@ -351,6 +351,8 @@ fn format_root(
     let dtx_reflow_cache = DtxReflowCache::default();
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
+        item_indent: ctx.style().item_indent,
+        indent_width: ctx.style().indent_width,
         // Resolved here (never `Auto` past this point), so library callers get the
         // derivation from `wrap` for free.
         math_wrap: ctx.style().math_wrap.resolve(ctx.style().wrap),
@@ -736,6 +738,10 @@ fn subtract_holes(regions: Vec<TextRange>, holes: &[TextRange]) -> Vec<TextRange
 #[derive(Clone, Copy)]
 struct LowerCtx<'a> {
     wrap: WrapMode,
+    /// How far list-item continuation lines sit from the `\item` column.
+    item_indent: ItemIndent,
+    /// One structural indentation step, used by [`ItemIndent::Indent`].
+    indent_width: usize,
     /// Display-math break policy, pre-resolved against `wrap` in
     /// [`format_root`] — never [`MathWrap::Auto`] here.
     math_wrap: MathWrap,
@@ -5718,7 +5724,7 @@ enum FlatItem {
 
 /// Lower a list environment (`itemize`/`enumerate`/`description`): each `\item`
 /// starts its own line at the body indent and its body is reflowed with the
-/// continuation lines hanging-indented at the control word's width (`\item `), so a
+/// configured [`ItemIndent`]. Under the default [`ItemIndent::Hang`], a
 /// `description` item's wide `[label]` trails on the first line but does not deepen
 /// the body indent. The framing (`\begin`/`\end`, the indented body with
 /// leading/trailing `hard_line`) matches [`lower_environment`].
@@ -5840,11 +5846,11 @@ fn lower_list_body(
 
 /// Render one [`ListItem`]: any bound doc-comment lines on their own lines above,
 /// then the marker, then a space and the item's body reflowed inside an
-/// [`Ir::align`] whose width is the item's `hang` (the control word plus the
-/// separating space — `\item `), so wrapped lines hang under where the body would
-/// start after a bare `\item`, regardless of how wide the label or overlay is. A
-/// comment glued to an overlay receives no separating space; an empty item (marker
-/// with no body) renders as the bare marker.
+/// [`Ir::align`] whose width comes from [`LowerCtx::item_indent`]. The `hang`
+/// width is the control word plus its separating space (`\item `), deliberately
+/// excluding a label or overlay. A comment glued to an overlay receives no
+/// separating space; an empty item (marker with no body) renders as the bare
+/// marker.
 fn render_list_item(item: &ListItem, cx: LowerCtx<'_>) -> Ir {
     let content = lower_item_chunks(&item.chunks, cx);
     let marker = Ir::verbatim(item.marker.clone());
@@ -5856,7 +5862,12 @@ fn render_list_item(item: &ListItem, cx: LowerCtx<'_>) -> Ir {
         } else {
             Ir::verbatim(" ")
         };
-        Ir::concat([marker, separator, Ir::align(item.hang, content)])
+        let continuation_indent = match cx.item_indent {
+            ItemIndent::Hang => item.hang,
+            ItemIndent::Indent => cx.indent_width,
+            ItemIndent::None => 0,
+        };
+        Ir::concat([marker, separator, Ir::align(continuation_indent, content)])
     };
     if item.doc_lines.is_empty() {
         return body;

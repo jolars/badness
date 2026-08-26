@@ -28,6 +28,17 @@ pub enum WrapArg {
     Preserve,
 }
 
+/// CLI surface for `formatter::ItemIndent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ItemIndentArg {
+    /// Align continuations under the body following a bare `\item ` (default).
+    Hang,
+    /// Indent continuations by one indent-width step.
+    Indent,
+    /// Align continuations with the `\item` command.
+    None,
+}
+
 /// When to colorize output. Mirrors arity's global `--color` so the two CLIs
 /// agree on the spelling and on `NO_COLOR`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
@@ -137,6 +148,9 @@ pub enum Command {
         /// Number of spaces per indent step.
         #[arg(long)]
         indent_width: Option<usize>,
+        /// How to indent continuation lines in list items.
+        #[arg(long, value_enum)]
+        item_indent: Option<ItemIndentArg>,
         /// How to lay out line breaks inside a paragraph.
         #[arg(long, value_enum)]
         wrap: Option<WrapArg>,

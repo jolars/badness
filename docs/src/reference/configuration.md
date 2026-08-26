@@ -13,6 +13,7 @@ its default.
 [format]
 # line-width = 80
 # indent-width = 2
+# item-indent = "hang"  # hang | indent | none
 # wrap = "reflow"  # reflow | stable | sentence | semantic | preserve
 # line-ending = "auto"  # auto | lf | crlf | native
 
@@ -132,6 +133,31 @@ Spaces per indent step. Must be between 1 and 1000.
 ```toml
 [format]
 indent-width = 4
+```
+
+### `item-indent`
+
+How continuation lines in list items are indented relative to the `\item`
+command.
+
+  | Mode     | Behavior                                                      |
+  | -------- | ------------------------------------------------------------- |
+  | `hang`   | Align under the body following a bare `\item ` (the default). |
+  | `indent` | Add one `indent-width` step from the `\item` column.          |
+  | `none`   | Align with the `\item` command.                               |
+
+Labels and Beamer overlays do not widen the `hang` offset, so items retain one
+continuation edge regardless of marker width.
+
+**Default value**: `"hang"`
+
+**Type**: string
+
+**Example**:
+
+```toml
+[format]
+item-indent = "indent"
 ```
 
 ### `wrap`

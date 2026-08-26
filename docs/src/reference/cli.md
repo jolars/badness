@@ -53,6 +53,15 @@ With paths, formats each file in place. Reads stdin (to stdout) when given `-`, 
 `--indent-width <INDENT_WIDTH>`
 :   Number of spaces per indent step
 
+`--item-indent <ITEM_INDENT>`
+:   How to indent continuation lines in list items
+
+    Possible values:
+
+    - `hang`: Align continuations under the body following a bare `\item ` (default)
+    - `indent`: Indent continuations by one indent-width step
+    - `none`: Align continuations with the `\item` command
+
 `--wrap <WRAP>`
 :   How to lay out line breaks inside a paragraph
 

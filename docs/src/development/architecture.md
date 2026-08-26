@@ -1529,6 +1529,13 @@ Design rules:
 3. **`.bib` uses a different carrier.** Directives are read from `@comment{...}`
    entries because BibTeX has no `%` line-comment token between entries.
 
+The resolver also retains every recognized directive with its carrier range and
+an outcome: honored, dangling `skip`, unmatched `on`, unclosed `off`, or
+unsupported. This is the single source of truth for `inert-suppression`; lint
+rules do not re-parse comments or repeat the CST attachment walk. Directive-like
+text on a `.dtx` `DOC_MARGIN` line is retained as unsupported without creating a
+suppression range, as is the format-only axis in a BibTeX `@comment` carrier.
+
 Suppression matching is by **containment**, not overlap. This avoids accidental
 "suppress the whole document" behavior when a region starts inside an ancestor
 node.

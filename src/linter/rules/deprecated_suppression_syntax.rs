@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use crate::directives::Verb;
+use crate::directives::{DirectiveOutcome, Verb};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 
 use super::{Example, Rule, RuleContext};
@@ -47,12 +47,9 @@ impl Rule for DeprecatedSuppressionSyntax {
     }
 
     fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        for located in ctx
-            .suppressions
-            .directives()
-            .iter()
-            .filter(|located| located.directive.deprecated)
-        {
+        for located in ctx.suppressions.directives().iter().filter(|located| {
+            located.directive.deprecated && located.outcome != DirectiveOutcome::Unsupported
+        }) {
             let replacement = match located.directive.verb {
                 Verb::Skip => "badness-lint skip",
                 Verb::SkipFile => "badness-lint skip-file",
@@ -84,12 +81,12 @@ mod tests {
     use super::*;
     use crate::linter::diagnostic::Applicability;
     use crate::linter::fix::apply_fixes;
-    use crate::parser::parse;
+    use crate::parser::{LatexFlavor, LexConfig, parse_with_flavor};
     use crate::semantic::SemanticModel;
     use crate::syntax::SyntaxNode;
 
-    fn findings(src: &str) -> Vec<Diagnostic> {
-        let root = SyntaxNode::new_root(parse(src).green);
+    fn findings_with(src: &str, config: LexConfig) -> Vec<Diagnostic> {
+        let root = SyntaxNode::new_root(parse_with_flavor(src, config).green);
         let model = SemanticModel::build(&root);
         let ctx = RuleContext::new(
             std::path::Path::new("x.tex"),
@@ -102,6 +99,10 @@ mod tests {
         let mut out = Vec::new();
         DeprecatedSuppressionSyntax.check_file(&ctx, &mut out);
         out
+    }
+
+    fn findings(src: &str) -> Vec<Diagnostic> {
+        findings_with(src, LexConfig::default())
     }
 
     #[test]
@@ -135,5 +136,18 @@ mod tests {
     fn modern_and_ordinary_comments_are_fine() {
         assert!(findings("% badness-lint skip deprecated-command\n\\bf\n").is_empty());
         assert!(findings("% badness is good\n").is_empty());
+    }
+
+    #[test]
+    fn does_not_rewrite_dtx_documentation_prose() {
+        let src = "% badness-ignore deprecated-command\nDocumentation.\n";
+        let out = findings_with(
+            src,
+            LexConfig {
+                flavor: LatexFlavor::Document,
+                dtx: true,
+            },
+        );
+        assert!(out.is_empty());
     }
 }

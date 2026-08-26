@@ -67,6 +67,11 @@ line-comment token:
 @book{oldbook, title = {An Orphaned Book}}
 ```
 
+The `inert-suppression` rule warns when a directive cannot act—for example, a
+dangling `skip`, an unmatched `on`, an unclosed `off`, a directive written as
+typeset prose on a `.dtx` documentation line, or a format-only directive in a
+`.bib` file.
+
 Some rules ship an **auto-fix**. `badness lint --fix` applies the
 meaning-preserving (Safe) ones; `--unsafe-fixes` also applies fixes that may
 change output, such as `missing-nonbreaking-space` (inserting a tie changes line

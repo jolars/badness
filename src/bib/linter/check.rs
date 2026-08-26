@@ -2,10 +2,9 @@
 //! sort. The bib analog of [`crate::linter::check`], and the entry point the CLI
 //! calls for `.bib` inputs.
 //!
-//! Suppression is a deliberate no-op here: bib has no comment token to carry a
-//! `% badness-lint` directive (free text is `JUNK`, structured comments are
-//! `@comment`), so there is nothing to filter against yet. The seam is left where
-//! the LaTeX driver runs its `SuppressionMap`; see `TODO.md` for the deferral.
+//! BibTeX suppression directives live in structured `@comment{...}` entries.
+//! The shared driver shape is the same as LaTeX: build the map once, expose it
+//! to whole-file rules, and filter ordinary findings after dispatch.
 
 use std::path::Path;
 
@@ -13,6 +12,7 @@ use crate::bib::parse;
 use crate::bib::semantic::{self, Model};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
 use crate::linter::diagnostic::Diagnostic;
+use crate::linter::rules::is_unsuppressible_suppression_meta_rule;
 
 use super::rules::{BibRuleContext, all_rules};
 use super::suppression::BibSuppressionMap;
@@ -39,8 +39,7 @@ pub fn check_document(path: &Path, text: &str) -> Vec<Diagnostic> {
 ///
 /// `root` and `model` must describe the same file as `path`. Mirrors
 /// [`crate::linter::check::lint_document`], minus the cross-file `resolution`
-/// argument (no bib rule is cross-file-sensitive yet) and the suppression filter
-/// (no carrier yet).
+/// argument (no bib rule is cross-file-sensitive yet).
 pub fn lint_document(path: &Path, root: &SyntaxNode, model: &Model) -> Vec<Diagnostic> {
     let suppress = BibSuppressionMap::build(root);
     let ctx = BibRuleContext {
@@ -83,7 +82,8 @@ pub fn lint_document(path: &Path, root: &SyntaxNode, model: &Model) -> Vec<Diagn
 
     // Filter out findings suppressed by a `@comment{badness-lint …}` carrier.
     diagnostics.retain(|d| {
-        d.rule == "deprecated-suppression-syntax" || !suppress.is_suppressed(d.rule, d.start, d.end)
+        is_unsuppressible_suppression_meta_rule(d.rule)
+            || !suppress.is_suppressed(d.rule, d.start, d.end)
     });
 
     for d in &mut diagnostics {

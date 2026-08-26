@@ -382,6 +382,25 @@ warning: indented-docstrip-guard
   |  ^^^^^^^^^^^ docstrip guards are recognized only at column zero
 ```
 
+## `inert-suppression`
+
+Flag a suppression directive that cannot take effect: `skip` with no following construct, `on` with no matching `off`, or a directive written on a `.dtx` documentation-margin line, where `%` is typeset prose rather than a comment. Also flag an `off` region left open at EOF; it currently suppresses through the end of the file, but the missing closer is usually accidental. Report-only: moving, deleting, or closing the directive requires knowing the boundary the author intended. Inline suppressions cannot hide this meta diagnostic; use `[lint].ignore` to disable the rule deliberately.
+
+An `on` directive with no matching open region does nothing:
+
+```tex
+% badness-lint on deprecated-command
+{\bf text}
+```
+
+```text
+warning: inert-suppression
+ --> example.tex:1:1
+  |
+1 | % badness-lint on deprecated-command
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `on` has no matching `off`, so this directive closes no region
+```
+
 ## `invalid-macrocode-frame`
 
 Flag a `.dtx` `macrocode` or `macrocode*` closing frame unless exactly four spaces separate its column-one `%` from `\end{…}`. The `doc` package scans for that literal physical delimiter, so a near match does not close the code chunk even though it looks like an ordinary environment to Badness. The safe autofix replaces only the malformed horizontal space with the required four spaces.

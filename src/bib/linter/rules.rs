@@ -31,6 +31,7 @@ pub mod duplicate_key;
 pub mod edits;
 pub mod empty_field;
 pub mod encoding_hints;
+pub mod inert_suppression;
 pub mod missing_required_field;
 pub mod title_capitalization;
 pub mod undefined_string;
@@ -42,6 +43,7 @@ pub use duplicate_field::DuplicateField;
 pub use duplicate_key::DuplicateKey;
 pub use empty_field::EmptyField;
 pub use encoding_hints::EncodingHints;
+pub use inert_suppression::InertSuppression;
 pub use missing_required_field::MissingRequiredField;
 pub use title_capitalization::TitleCapitalization;
 pub use undefined_string::UndefinedString;
@@ -125,6 +127,7 @@ pub fn all_rules() -> Vec<Box<dyn BibRule>> {
     vec![
         Box::new(DuplicateKey),
         Box::new(DeprecatedSuppressionSyntax),
+        Box::new(InertSuppression),
         Box::new(MissingRequiredField),
         Box::new(UnknownField),
         Box::new(EmptyField),
@@ -140,6 +143,7 @@ pub fn all_rules() -> Vec<Box<dyn BibRule>> {
 pub const ALL_BIB_RULE_IDS: &[&str] = &[
     "duplicate-key",
     "deprecated-suppression-syntax",
+    "inert-suppression",
     "missing-required-field",
     "unknown-field",
     "empty-field",

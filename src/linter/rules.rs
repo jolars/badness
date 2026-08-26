@@ -32,6 +32,7 @@ pub mod ellipsis;
 pub mod extra_alignment_tab;
 pub mod hard_coded_reference;
 pub mod indented_docstrip_guard;
+pub mod inert_suppression;
 pub mod invalid_macrocode_frame;
 pub mod label_before_caption;
 pub mod makeat_macro;
@@ -67,6 +68,7 @@ pub use ellipsis::Ellipsis;
 pub use extra_alignment_tab::ExtraAlignmentTab;
 pub use hard_coded_reference::HardCodedReference;
 pub use indented_docstrip_guard::IndentedDocstripGuard;
+pub use inert_suppression::InertSuppression;
 pub use invalid_macrocode_frame::InvalidMacrocodeFrame;
 pub use label_before_caption::LabelBeforeCaption;
 pub use makeat_macro::MakeatMacro;
@@ -777,6 +779,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(ExtraAlignmentTab),
         Box::new(HardCodedReference),
         Box::new(IndentedDocstripGuard),
+        Box::new(InertSuppression),
         Box::new(InvalidMacrocodeFrame),
         Box::new(StraightQuotes),
         Box::new(SwallowedSpace),
@@ -869,6 +872,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "extra-alignment-tab",
     "hard-coded-reference",
     "indented-docstrip-guard",
+    "inert-suppression",
     "invalid-macrocode-frame",
     "straight-quotes",
     "swallowed-space",
@@ -907,6 +911,14 @@ pub fn all_known_rule_ids() -> impl Iterator<Item = &'static str> {
             .copied()
             .filter(|id| !ALL_RULE_IDS.contains(id)),
     )
+}
+
+/// Suppression-meta diagnostics that inline directives may not hide. Each
+/// reports a directive's own syntax or placement, so letting that same mechanism
+/// suppress it would make the failure silent by construction. Configuration
+/// `ignore` remains the deliberate opt-out.
+pub(crate) fn is_unsuppressible_suppression_meta_rule(id: &str) -> bool {
+    matches!(id, "deprecated-suppression-syntax" | "inert-suppression")
 }
 
 /// The pseudo-rule id parse diagnostics carry. It is never a lint rule, so

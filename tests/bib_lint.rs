@@ -159,6 +159,20 @@ fn retired_file_suppression_cannot_hide_its_own_deprecation() {
 }
 
 #[test]
+fn inert_suppression_reports_unsupported_format_directives() {
+    let src = "@comment{badness-format skip-file: hand formatted}\n\
+               @article{k, author={A}, title={T}, journaltitle={J}, year=2020}\n";
+    assert_eq!(rules(src), vec!["inert-suppression"]);
+}
+
+#[test]
+fn inert_suppression_cannot_be_hidden_by_a_blanket_directive() {
+    let src = "@comment{badness-lint skip-file: vendored}\n\
+               @comment{badness-lint on missing-required-field}\n";
+    assert_eq!(rules(src), vec!["inert-suppression"]);
+}
+
+#[test]
 fn empty_field_fix_survives_format_roundtrip() {
     // The empty-field deletion isn't required to be format-clean (layout is the
     // formatter's job), but this one is designed to be: it edits byte ranges so

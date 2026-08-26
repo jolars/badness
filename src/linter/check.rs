@@ -11,7 +11,10 @@ use crate::semantic::SemanticModel;
 use crate::syntax::SyntaxNode;
 
 use super::diagnostic::Diagnostic;
-use super::rules::{RuleContext, RuleRegistry, StreamVisitor, fixable_registry, registry};
+use super::rules::{
+    RuleContext, RuleRegistry, StreamVisitor, fixable_registry,
+    is_unsuppressible_suppression_meta_rule, registry,
+};
 use super::suppression::SuppressionMap;
 
 /// Parse and lint a single file's `text` from scratch, returning its parse
@@ -137,7 +140,8 @@ fn lint_with(
 
     let suppress = SuppressionMap::from_suppressions(&ctx.suppressions);
     diagnostics.retain(|d| {
-        d.rule == "deprecated-suppression-syntax" || !suppress.is_suppressed(d.rule, d.start, d.end)
+        is_unsuppressible_suppression_meta_rule(d.rule)
+            || !suppress.is_suppressed(d.rule, d.start, d.end)
     });
 
     for d in &mut diagnostics {

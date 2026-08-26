@@ -43,10 +43,11 @@
 //! root crate. Resolving a directive is a pure function of the tree, so it sits
 //! below both.
 //!
-//! **Scope limit:** a directive is recognized in a [`SyntaxKind::COMMENT`] token
-//! only. In a `.dtx` documentation line the leading `%` is a `DOC_MARGIN` and the
-//! rest is prose, so a directive written there is inert; inside a `macrocode`
-//! chunk (where `%` comments are ordinary) it works as everywhere else.
+//! Active directives are recognized in [`SyntaxKind::COMMENT`] tokens. A `.dtx`
+//! documentation line starts with `DOC_MARGIN`, not a comment; directive-shaped
+//! prose there is retained as [`DirectiveOutcome::Unsupported`] so the linter can
+//! explain why it is inert. Inside a `macrocode` chunk, `%` comments are ordinary
+//! and directives work as everywhere else.
 
 use std::collections::BTreeMap;
 
@@ -109,14 +110,35 @@ pub struct Directive {
     pub deprecated: bool,
 }
 
-/// A parsed directive together with the exact token and family-name ranges that
-/// carried it. Consumers retain this syntax fact so diagnostics never need to
-/// parse comment text a second time.
+/// What a recognized directive accomplished after placement and region matching.
+///
+/// The linter consumes this retained resolver fact for meta diagnostics; it must
+/// not repeat the CST attachment walk or try to infer region state from the
+/// merged suppression ranges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectiveOutcome {
+    /// The directive targets a construct or file, opens a region that is later
+    /// closed, or closes such a region.
+    Honored,
+    /// A `skip` has no following meaningful construct.
+    DanglingSkip,
+    /// An `on` has no matching open region with the same axis and rule.
+    UnmatchedOn,
+    /// An `off` has no matching `on`; its range still extends to EOF.
+    UnclosedOff,
+    /// The carrier or axis is recognized but unsupported by the consumer.
+    Unsupported,
+}
+
+/// A parsed directive together with the exact carrier and family-name ranges,
+/// plus its placement outcome. Consumers retain these facts so diagnostics never
+/// need to parse comment text or repeat the attachment walk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocatedDirective {
     pub directive: Directive,
     pub range: TextRange,
     pub family_range: TextRange,
+    pub outcome: DirectiveOutcome,
 }
 
 /// Read a directive out of a comment token's text. Returns `None` for an
@@ -219,6 +241,7 @@ struct OpenRegion {
     axis: Axis,
     rule: Option<String>,
     start: TextSize,
+    directive_index: usize,
 }
 
 impl Suppressions {
@@ -249,26 +272,34 @@ impl Suppressions {
             let NodeOrToken::Token(token) = element else {
                 continue;
             };
-            if token.kind() != SyntaxKind::COMMENT {
+            let Some((carrier, range, supported)) = directive_carrier(&token) else {
                 continue;
-            }
-            let Some(directive) = parse_directive(token.text()) else {
+            };
+            let Some(directive) = parse_directive(&carrier) else {
                 continue;
             };
             let family = directive_family(&directive);
-            let family_start = token
-                .text()
+            let family_start = carrier
                 .find(family)
                 .expect("parsed directive contains its family name");
-            let token_start = usize::from(token.text_range().start());
+            let token_start = usize::from(range.start());
+            let directive_index = directives.len();
             directives.push(LocatedDirective {
                 directive: directive.clone(),
-                range: token.text_range(),
+                range,
                 family_range: TextRange::new(
                     TextSize::from((token_start + family_start) as u32),
                     TextSize::from((token_start + family_start + family.len()) as u32),
                 ),
+                outcome: if supported {
+                    DirectiveOutcome::Honored
+                } else {
+                    DirectiveOutcome::Unsupported
+                },
             });
+            if !supported {
+                continue;
+            }
             let mut record = |range: TextRange, rule: &Option<String>| {
                 if directive.axis.covers_format() {
                     format.push(range);
@@ -285,6 +316,8 @@ impl Suppressions {
                 Verb::Skip => {
                     if let Some(range) = skip_target(&token) {
                         record(range, &directive.rule);
+                    } else {
+                        directives[directive_index].outcome = DirectiveOutcome::DanglingSkip;
                     }
                 }
                 // A region opens at the same place a `skip` would target: the
@@ -316,10 +349,12 @@ impl Suppressions {
                         .iter()
                         .any(|o| o.axis == directive.axis && o.rule == directive.rule)
                     {
+                        directives[directive_index].outcome = DirectiveOutcome::UnclosedOff;
                         open.push(OpenRegion {
                             axis: directive.axis,
                             rule: directive.rule.clone(),
                             start,
+                            directive_index,
                         });
                     }
                 }
@@ -329,10 +364,13 @@ impl Suppressions {
                         .position(|o| o.axis == directive.axis && o.rule == directive.rule)
                     {
                         let region = open.remove(i);
+                        directives[region.directive_index].outcome = DirectiveOutcome::Honored;
                         record(
                             TextRange::new(region.start, token.text_range().start()),
                             &region.rule,
                         );
+                    } else {
+                        directives[directive_index].outcome = DirectiveOutcome::UnmatchedOn;
                     }
                 }
             }
@@ -365,8 +403,9 @@ impl Suppressions {
         }
     }
 
-    /// Whether the document carries no directive at all — the fast path for the
-    /// overwhelming majority of files, so a consumer can skip its per-node test.
+    /// Whether the document carries no effective suppression range — the fast
+    /// path for the overwhelming majority of files, so a consumer can skip its
+    /// per-node test.
     pub fn is_empty(&self) -> bool {
         self.format.is_empty() && self.lint_all.is_empty() && self.lint_rules.is_empty()
     }
@@ -390,6 +429,38 @@ impl Suppressions {
     /// no range (such as an unmatched `on`).
     pub fn directives(&self) -> &[LocatedDirective] {
         &self.directives
+    }
+}
+
+/// A directive-bearing token's text, full carrier range, and whether that
+/// carrier can take effect. Ordinary comments are active. A `.dtx` documentation
+/// margin is retained for diagnostics, but its line is typeset source rather than
+/// a comment, so it never contributes a suppression range.
+fn directive_carrier(token: &SyntaxToken) -> Option<(String, TextRange, bool)> {
+    match token.kind() {
+        SyntaxKind::COMMENT => Some((token.text().to_owned(), token.text_range(), true)),
+        SyntaxKind::DOC_MARGIN => {
+            let start = token.text_range().start();
+            let mut end = start;
+            let mut text = String::new();
+            let mut current = Some(token.clone());
+            while let Some(part) = current {
+                if part.kind() == SyntaxKind::NEWLINE {
+                    break;
+                }
+                let part_text = part.text();
+                if let Some(line_end) = part_text.find(['\r', '\n']) {
+                    text.push_str(&part_text[..line_end]);
+                    end = part.text_range().start() + TextSize::from(line_end as u32);
+                    break;
+                }
+                text.push_str(part_text);
+                end = part.text_range().end();
+                current = part.next_token();
+            }
+            Some((text, TextRange::new(start, end), false))
+        }
+        _ => None,
     }
 }
 
@@ -482,10 +553,83 @@ fn first_meaningful_after(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
+    use crate::parser::{LatexFlavor, LexConfig, parse, parse_with_flavor};
 
     fn suppressions_of(src: &str) -> Suppressions {
         Suppressions::build(&SyntaxNode::new_root(parse(src).green))
+    }
+
+    fn dtx_suppressions_of(src: &str) -> Suppressions {
+        let parsed = parse_with_flavor(
+            src,
+            LexConfig {
+                flavor: LatexFlavor::Document,
+                dtx: true,
+            },
+        );
+        assert_eq!(parsed.syntax().to_string(), src);
+        Suppressions::build(&parsed.syntax())
+    }
+
+    #[test]
+    fn classifies_inert_and_incomplete_directives() {
+        for (src, expected) in [
+            (
+                "% badness-lint skip deprecated-command\n",
+                DirectiveOutcome::DanglingSkip,
+            ),
+            (
+                "% badness-lint on deprecated-command\n",
+                DirectiveOutcome::UnmatchedOn,
+            ),
+            (
+                "% badness-lint off deprecated-command\n\\bf\n",
+                DirectiveOutcome::UnclosedOff,
+            ),
+        ] {
+            let suppressions = suppressions_of(src);
+            assert_eq!(suppressions.directives().len(), 1, "{src:?}");
+            assert_eq!(suppressions.directives()[0].outcome, expected, "{src:?}");
+        }
+    }
+
+    #[test]
+    fn matched_and_targeted_directives_are_honored() {
+        for src in [
+            "% badness-lint skip deprecated-command\n\\bf\n",
+            "% badness-lint off deprecated-command\n\\bf\n% badness-lint on deprecated-command\n",
+            "% badness-lint skip-file deprecated-command\n",
+        ] {
+            let suppressions = suppressions_of(src);
+            assert!(
+                suppressions
+                    .directives()
+                    .iter()
+                    .all(|located| located.outcome == DirectiveOutcome::Honored),
+                "{src:?}: {:?}",
+                suppressions.directives()
+            );
+        }
+    }
+
+    #[test]
+    fn retains_dtx_doc_margin_directive_as_unsupported() {
+        let src = "% badness-lint skip deprecated-command\nDocumentation.\n";
+        let suppressions = dtx_suppressions_of(src);
+        let [located] = suppressions.directives() else {
+            panic!(
+                "expected one retained directive: {:?}",
+                suppressions.directives()
+            );
+        };
+        assert_eq!(located.outcome, DirectiveOutcome::Unsupported);
+        assert_eq!(
+            &src[usize::from(located.range.start())..usize::from(located.range.end())],
+            "% badness-lint skip deprecated-command"
+        );
+        assert!(suppressions.format_ranges().is_empty());
+        assert!(suppressions.lint_all_ranges().is_empty());
+        assert!(suppressions.lint_rule_ranges().is_empty());
     }
 
     #[test]

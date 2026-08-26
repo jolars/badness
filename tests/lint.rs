@@ -364,6 +364,27 @@ fn retired_file_suppression_cannot_hide_its_own_deprecation() {
 }
 
 #[test]
+fn inert_suppression_cannot_be_hidden_by_a_blanket_directive() {
+    let src = "% badness-lint skip-file: vendored\n% badness-lint on deprecated-command\n";
+    assert_eq!(lint(src), vec![("inert-suppression", Severity::Warning)]);
+}
+
+#[test]
+fn inert_suppression_reports_a_dtx_documentation_line() {
+    let findings = lint_project(&[(
+        "pkg.dtx",
+        "% badness-lint skip deprecated-command\nDocumentation.\n",
+    )]);
+    assert_eq!(
+        findings
+            .into_iter()
+            .filter(|(_, rule, _)| *rule == "inert-suppression")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn stylistic_rules_collected_in_document_order() {
     // An obsolete environment, a `$$` display, and a reversed `\left`/`\right`
     // pair — all surface, sorted by position.

@@ -62,6 +62,25 @@ After applying the fix:
 @string{x = {X}}
 ```
 
+## `inert-suppression`
+
+Flag a structured BibTeX suppression directive that cannot take effect: `skip` with no following entry, `on` with no matching `off`, or any `badness-format` directive, because the BibTeX formatter does not support format suppression. Also flag an `off` region left open at EOF; it currently suppresses through the end of the file, but the missing closer is usually accidental. Report-only: repairing the directive requires knowing the entry, boundary, or formatting policy the author intended. Inline suppressions cannot hide this meta diagnostic; use `[lint].ignore` to disable the rule deliberately.
+
+BibTeX recognizes the directive grammar, but its formatter has no suppression mechanism:
+
+```bib
+@comment{badness-format skip-file: preserve this file}
+@book{key}
+```
+
+```text
+warning: inert-suppression
+ --> references.bib:1:1
+  |
+1 | @comment{badness-format skip-file: preserve this file}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the BibTeX formatter does not support format suppression, so this directive does nothing
+```
+
 ## `missing-required-field`
 
 Flag a regular entry lacking a field its type requires, per the biblatex data model. An alternation like `date` *or* `year` is satisfied by either, and classic-BibTeX aliases count (`journal` satisfies `journaltitle`). An entry type the built-in database does not know carries no signature and is never flagged. Report-only -- field content cannot be invented.

@@ -22,7 +22,8 @@
 //! grammar but does nothing in a `.bib`: the bib formatter is a canonical
 //! re-emitter rather than a trivia-only pass, so "reproduce this span byte for
 //! byte" is a different mechanism there, not a matter of routing these ranges
-//! through. Recorded in `TODO.md`.
+//! through. Such a directive is retained as [`DirectiveOutcome::Unsupported`]
+//! for the `inert-suppression` rule.
 //!
 //! [`COMMENT_ENTRY`]: crate::bib::syntax::SyntaxKind::COMMENT_ENTRY
 
@@ -31,12 +32,14 @@ use std::collections::HashMap;
 use rowan::NodeOrToken;
 
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
-use crate::directives::{Directive, Verb, parse_directive};
+use crate::directives::{Directive, DirectiveOutcome, Verb, parse_directive};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LocatedDirective {
     pub directive: Directive,
+    pub range: rowan::TextRange,
     pub family_range: rowan::TextRange,
+    pub outcome: DirectiveOutcome,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,6 +55,7 @@ pub struct BibSuppressionMap {
 struct OpenRegion {
     rule: Option<String>,
     start: usize,
+    directive_index: usize,
 }
 
 impl BibSuppressionMap {
@@ -87,12 +91,19 @@ impl BibSuppressionMap {
                 .find(family)
                 .expect("parsed directive contains its family name");
             let start = usize::from(node.text_range().start()) + relative;
+            let directive_index = map.directives.len();
             map.directives.push(LocatedDirective {
                 directive: directive.clone(),
+                range: node.text_range(),
                 family_range: rowan::TextRange::new(
                     rowan::TextSize::from(start as u32),
                     rowan::TextSize::from((start + family.len()) as u32),
                 ),
+                outcome: if directive.axis.covers_lint() {
+                    DirectiveOutcome::Honored
+                } else {
+                    DirectiveOutcome::Unsupported
+                },
             });
             if !directive.axis.covers_lint() {
                 continue;
@@ -104,6 +115,8 @@ impl BibSuppressionMap {
                 Verb::Skip => {
                     if let Some(target) = next_meaningful_sibling(&node) {
                         map.record(target, &directive.rule);
+                    } else {
+                        map.directives[directive_index].outcome = DirectiveOutcome::DanglingSkip;
                     }
                 }
                 // Unlike the LaTeX side there is no forward comment binding to
@@ -112,20 +125,25 @@ impl BibSuppressionMap {
                 // opens at the next meaningful sibling.
                 Verb::Off => {
                     if !open.iter().any(|o| o.rule == directive.rule) {
+                        map.directives[directive_index].outcome = DirectiveOutcome::UnclosedOff;
                         let start = next_meaningful_sibling(&node)
                             .map(|(s, _)| s)
                             .unwrap_or_else(|| usize::from(node.text_range().end()));
                         open.push(OpenRegion {
                             rule: directive.rule.clone(),
                             start,
+                            directive_index,
                         });
                     }
                 }
                 Verb::On => {
                     if let Some(i) = open.iter().position(|o| o.rule == directive.rule) {
                         let region = open.remove(i);
+                        map.directives[region.directive_index].outcome = DirectiveOutcome::Honored;
                         let end = usize::from(node.text_range().start());
                         map.record((region.start, end), &region.rule);
+                    } else {
+                        map.directives[directive_index].outcome = DirectiveOutcome::UnmatchedOn;
                     }
                 }
             }
@@ -208,9 +226,49 @@ fn span(range: rowan::TextRange) -> (usize, usize) {
 mod tests {
     use super::*;
     use crate::bib::parse;
+    use crate::directives::DirectiveOutcome;
 
     fn map_of(src: &str) -> BibSuppressionMap {
         BibSuppressionMap::build(&parse(src).syntax())
+    }
+
+    #[test]
+    fn classifies_inert_and_incomplete_directives() {
+        for (src, expected) in [
+            (
+                "@comment{badness-lint skip missing-required-field}\n",
+                DirectiveOutcome::DanglingSkip,
+            ),
+            (
+                "@comment{badness-lint on missing-required-field}\n",
+                DirectiveOutcome::UnmatchedOn,
+            ),
+            (
+                "@comment{badness-lint off missing-required-field}\n@book{a}\n",
+                DirectiveOutcome::UnclosedOff,
+            ),
+            (
+                "@comment{badness-format skip-file}\n@book{a}\n",
+                DirectiveOutcome::Unsupported,
+            ),
+        ] {
+            let map = map_of(src);
+            assert_eq!(map.directives().len(), 1, "{src:?}");
+            assert_eq!(map.directives()[0].outcome, expected, "{src:?}");
+        }
+    }
+
+    #[test]
+    fn retains_the_full_bib_directive_range() {
+        let src = "@comment{badness-format skip-file}\n";
+        let map = map_of(src);
+        let [located] = map.directives() else {
+            panic!("expected one retained directive: {:?}", map.directives());
+        };
+        assert_eq!(
+            &src[usize::from(located.range.start())..usize::from(located.range.end())],
+            "@comment{badness-format skip-file}"
+        );
     }
 
     #[test]

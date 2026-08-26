@@ -319,24 +319,17 @@ a file and a line, never a coordinate.
 
 ## BibTeX/BibLaTeX
 
-- [ ] **A meta rule for inert suppression directives.** Ruff's documented wart is
-  that a misplaced `# fmt: off` does nothing and says nothing; badness now has
-  the same hole. Report a `% badness…` directive that suppresses nothing: an
-  `on` with no open region, a `skip` with no following construct, an `off` left
-  unclosed at EOF (which runs to end of file on purpose, but is worth saying), a
-  `% badness-format` directive in a `.bib` (parsed, deliberately inert), and a
-  directive written on a `.dtx` doc-margin line, where the leading `%` is a
-  margin rather than a comment so the directive is inert by construction. Wants
-  the same retained-directive list as the rule above, so do them together —
-  fatou's `meta/*-suppression` rules are the model. A natural companion is
-  `unexplained-suppression` (no `: <reason>`).
+- [ ] **`unexplained-suppression`.** Report a suppression directive with no
+  `: <reason>`. Requiring reasons is a project convention rather than a defect,
+  while badness currently enables every registered rule by default; either
+  accept the default-on policy or first add explicit opt-in rule metadata.
 
 - [ ] **Format suppression in `.bib`.** The `% badness-format` axis parses in a
   `.bib` `@comment{…}` and deliberately does nothing. The bib formatter is a
   canonical re-emitter rather than a trivia-only pass, so "reproduce this span
   byte for byte" is a genuinely different mechanism there, not a matter of
-  routing the resolved ranges through. Until it exists, the axis is silently
-  inert, which is the meta rule above's job to report.
+  routing the resolved ranges through. Until it exists, `inert-suppression`
+  reports the unsupported axis.
 
 - [ ] **A `%`-comment directive carrier inside a `.bib` entry.** Now that a `%`
   comment exists inside an entry, the LaTeX-side carrier could work there too;

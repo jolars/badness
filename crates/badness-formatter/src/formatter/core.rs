@@ -4827,6 +4827,28 @@ fn lower_env_body(
         let rest = lower_element_stream(body[tail_len + 1..].iter().cloned(), cx);
         return Ir::concat(std::iter::once(spliced).chain(rest));
     }
+    // A named math environment can likewise begin with content greedy attachment
+    // left inside `BEGIN`, followed by the parser's ordinary `MATH` body wrapper.
+    // The math-grid path flattens those siblings together, but a grid containing a
+    // non-final multiline cell must fall back here. Keep the recovered prefix in
+    // math mode on that fallback: lowering a comment-bearing group generically
+    // would reset binary-operator context after the comment and indent its body a
+    // full step rather than hanging it one column past `{`.
+    if tail_len > 0
+        && body
+            .get(tail_len)
+            .and_then(SyntaxElement::as_node)
+            .is_some_and(|node| node.kind() == SyntaxKind::MATH)
+    {
+        let prefix = lower_math_seq(
+            body[..tail_len].iter().cloned(),
+            cx,
+            MathSpacing::Normal,
+            false,
+        );
+        let rest = lower_element_stream(body[tail_len..].iter().cloned(), cx);
+        return Ir::concat(std::iter::once(prefix).chain(rest));
+    }
     if lifted {
         lower_body_dropping_leading_comment(body, cx)
     } else {

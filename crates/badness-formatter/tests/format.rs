@@ -1151,6 +1151,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // tail content, not a header argument. The specialized math lowering must
     // retain it alongside the following `MATH` node (issue #120).
     ("math_env_begin_tail", WrapMode::Preserve, 80),
+    // A comment-bearing leading group is likewise greedy BEGIN tail content. If
+    // a following `&` makes the grid decline, the fallback must still lower that
+    // group in math mode, preserving its operator context and one-column hang.
+    ("math_grid_begin_tail_comment", WrapMode::Reflow, 80),
     ("math_env_gather", WrapMode::Preserve, 80),
     ("math_env_align_spacing", WrapMode::Preserve, 80),
     // expl3 code formatting in a `.tex` document. A `~` is the catcode-10 literal

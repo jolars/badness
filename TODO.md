@@ -248,6 +248,20 @@ sources below are missing.
   rewritten to slice. Measure with a lexer-only bench first (arity's
   workload-stratified `benches/lex.rs` is the template); do this last, if at all.
 
+- [ ] **Deeply nested CST construction is quadratic in rowan's cache
+  rehashing.** Parser-only timing on `{` repeated around `x` grows from 60.5 ms
+  at depth 1000 to 231.2 ms at depth 2000 (3.82x, debug build, enlarged test
+  stack). A perf profile attributes 17.5% self-time to
+  `FxHasher::add_to_hash` and 15.0% to `rowan::green::node_cache::node_hash`.
+  Rowan 0.17's `NodeCache::node` carries a precomputed child hash for ordinary
+  lookup, but the `insert_with_hasher` callback recursively hashes a stored
+  green subtree when hashbrown grows the table; a depth chain therefore
+  rehashes progressively longer prefixes. Check newer rowan releases and raise
+  this upstream before adding a local cache fork. Do not disable green-node
+  interning without measuring the memory regression. Once fixed, add a
+  parser-only brace-depth case to `tests/scaling.rs` at `MAX_RATIO`, using a
+  larger thread stack so the guard reaches its asymptotic regime.
+
 - [ ] **Split `crates/badness-parser/tests/parser.rs` by area.** It is now 2,970
   lines and 233 tests; separate math, verbatim, comments, conditionals, and
   aliases into focused integration-test targets.

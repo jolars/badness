@@ -150,17 +150,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   pgf/TikZ coordinate arithmetic under `--unsafe-fixes` — is fixed by the shared
   `in_pgf_picture` and `in_pgfmath_argument` gates.)
 
-The remaining `label-before-caption` scope limit was recorded when the rule
-shipped and is not a regression.
-
-- [ ] **`label-before-caption` is silent outside floats.** `\captionof` in a
-  `minipage` fails the same way (`\begin{minipage}{\textwidth}\label{mp}
-  \captionof{figure}{C}\end{minipage}`), but `minipage` is not an
-  `OutlineKind::Float`, so the rule never looks. Widening the container set
-  means deciding which environments may host a `\captionof` without inventing
-  findings on ordinary layout environments; the float set is curated signature
-  data precisely so this stays a data question.
-
 ## Language server
 
 ### Feature status vs LaTeX Workshop

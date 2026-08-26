@@ -4,7 +4,7 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `label-before-caption`
 
-Flag a `\label` placed before the statement that establishes its intended counter: the outer `\caption` in a curated float (`figure`, `table`, and their starred forms), or the first `\item` in the standard numbered `enumerate` list. In either position, `\label` captures the previous `\@currentlabel`—usually an enclosing section number—so `\ref` silently prints an unrelated number. LaTeX gives no warning. The list case is limited to statement-level labels before the first item; labels after an item may belong to it, while `itemize` and `description` items do not step a reference counter. Attached custom item labels and complete Beamer overlay markers remain intact. The float case likewise skips labels nested in command arguments, and classifies nested counter steps conservatively. The fix moves the label just after the proven caption or item marker, and is Unsafe because it intentionally changes what `\ref` prints from an inferred intent.
+Flag a `\label` placed before the statement that establishes its intended counter: the outer `\caption` in a curated float (`figure`, `table`, and their starred forms), an explicit `\captionof` in a curated caption container (`minipage`), or the first `\item` in the standard numbered `enumerate` list. In either position, `\label` captures the previous `\@currentlabel`—usually an enclosing section number—so `\ref` silently prints an unrelated number. LaTeX gives no warning. The list case is limited to statement-level labels before the first item; labels after an item may belong to it, while `itemize` and `description` items do not step a reference counter. Attached custom item labels and complete Beamer overlay markers remain intact. The float case likewise skips labels nested in command arguments, and classifies nested counter steps conservatively. The fix moves the label just after the proven caption or item marker, and is Unsafe because it intentionally changes what `\ref` prints from an inferred intent.
 
 A `\label` above its `\caption` picks up the section counter, not the figure number:
 
@@ -39,4 +39,21 @@ warning: label-before-caption
   |
 2 |   \label{item:first}
   |   ^^^^^^^^^^^^^^^^^^ `\label` before the first `\item` in this `enumerate` does not capture the item number
+```
+
+A `\label` above `\captionof` in a minipage likewise precedes the explicit counter step:
+
+```tex
+\begin{minipage}{\textwidth}
+  \label{fig:plot}
+  \captionof{figure}{A plot.}
+\end{minipage}
+```
+
+```text
+warning: label-before-caption
+ --> example.tex:2:3
+  |
+2 |   \label{fig:plot}
+  |   ^^^^^^^^^^^^^^^^ `\label` before `\captionof` in this `minipage` does not capture the caption number
 ```

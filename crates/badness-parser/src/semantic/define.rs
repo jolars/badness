@@ -986,6 +986,8 @@ fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
         statement_body: false,
         // A source definition exposes no package-specific `label` key semantics.
         label_key: false,
+        // A source definition does not prove that labels belong to a `\captionof`.
+        caption_container: false,
         align: false,
         no_indent: false,
         // A user `\newenvironment` is not assumed to be a list; the built-in DB

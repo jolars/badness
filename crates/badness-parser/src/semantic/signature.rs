@@ -297,6 +297,12 @@ pub struct EnvironmentSig {
     /// Project declarations inherit the fact through `like`; the CWL and scanned
     /// tiers never grant it.
     pub label_key: bool,
+    /// `true` for non-float environments in which a statement-level
+    /// `\captionof` conventionally establishes the numbered target for the
+    /// surrounding content. This is a curated linter fact: admitting every block
+    /// environment would make a preceding `\label` look caption-bound without
+    /// enough evidence of the author's intent.
+    pub caption_container: bool,
     /// `true` for alignment environments whose `&` columns the formatter lays out
     /// into a grid (`align`, `pmatrix`, …). Independent of `math`: every flagged
     /// environment here is also math, but the formatter consults this flag, not
@@ -409,6 +415,8 @@ pub(crate) const fn environment(generated: GeneratedEnvironment) -> EnvironmentS
         // A key named `label` is not enough to prove `\label` semantics, so the
         // mechanical CWL tier can never grant this fact.
         label_key: false,
+        // Caption ownership is curated package behavior, not an arity fact.
+        caption_container: false,
         align: generated.align,
         no_indent: generated.no_indent,
         list: generated.list,
@@ -1003,6 +1011,8 @@ struct RawEnvironment {
     statement_body: bool,
     #[serde(default, rename = "labelKey")]
     label_key: bool,
+    #[serde(default, rename = "captionContainer")]
+    caption_container: bool,
     #[serde(default)]
     align: bool,
     #[serde(default, rename = "noIndent")]
@@ -1025,6 +1035,7 @@ impl From<RawEnvironment> for EnvironmentSig {
             code: raw.code,
             statement_body: raw.statement_body,
             label_key: raw.label_key,
+            caption_container: raw.caption_container,
             align: raw.align,
             no_indent: raw.no_indent,
             list: raw.list,
@@ -1526,6 +1537,24 @@ mod tests {
         assert!(builtin().environment("frame").unwrap().label_key);
         assert!(builtin().environment("lstlisting").unwrap().label_key);
         assert!(!builtin().environment("tikzpicture").unwrap().label_key);
+    }
+
+    #[test]
+    fn caption_container_flag_is_curated_and_defaults_false() {
+        let db = parse(
+            r#"{
+              "environments": {
+                "plain": {},
+                "captioned": { "captionContainer": true }
+              }
+            }"#,
+        )
+        .expect("valid captionContainer schema");
+        assert!(!db.environment("plain").unwrap().caption_container);
+        assert!(db.environment("captioned").unwrap().caption_container);
+
+        assert!(builtin().environment("minipage").unwrap().caption_container);
+        assert!(!builtin().environment("center").unwrap().caption_container);
     }
 
     #[test]

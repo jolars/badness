@@ -223,7 +223,7 @@
     "tabular": { "args": ["opt", "req"], "align": true, "block": true },
     "tabular*": { "args": ["req", "opt", "req"], "align": true, "block": true },
     "array": { "args": ["opt", "req"], "math": true, "align": true, "block": true },
-    "minipage": { "args": ["opt", "req"], "block": true },
+    "minipage": { "args": ["opt", "req"], "block": true, "captionContainer": true },
     "multicols": { "args": ["req"], "block": true },
     "thebibliography": { "args": ["req"], "block": true },
 

@@ -1229,6 +1229,7 @@ fn label_before_caption_is_reported_end_to_end() {
     for src in [
         "\\begin{figure}\n  \\includegraphics{a}\n  \\label{fig:x}\n  \\caption{Cap}\n\\end{figure}\n",
         "\\begin{enumerate}\n  \\label{item:first}\n  \\item First\n\\end{enumerate}\n",
+        "\\begin{minipage}{1cm}\n  \\label{fig:x}\n  \\captionof{figure}{Cap}\n\\end{minipage}\n",
     ] {
         assert!(
             lint(src)
@@ -1267,6 +1268,7 @@ fn label_before_caption_fix_is_correct() {
         "\\begin{figure}\n  \\caption{Cap}\n  \\label{fig:x}\n\\end{figure}\n",
         "\\begin{enumerate}\n  \\label{item:first}\n  \\item[(a)] First\n  \\item Second\n\\end{enumerate}\n",
         "\\begin{enumerate}\n  \\item First\n  \\label{item:first}\n  \\item Second\n\\end{enumerate}\n",
+        "\\begin{minipage}{1cm}\n  \\label{fig:x}\n  \\captionof{figure}{Cap}\n\\end{minipage}\n",
     ] {
         assert_fix_is_correct(case);
     }

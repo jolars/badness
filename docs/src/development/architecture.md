@@ -337,6 +337,13 @@ source-scanned signatures cannot grant it. This is not inferred from
 `ContentKind::Keyval`, because many key-value processors give `label` unrelated
 meanings.
 
+The linter's `label-before-caption` rule uses the independent curated
+`captionContainer` flag for non-float environments whose statement-level
+`\captionof` conventionally owns a preceding label. `minipage` is the initial
+member. Ordinary block environments are not inferred to be caption containers,
+and plain `\caption` remains float-scoped; this keeps the unsafe move fix on the
+silent side when the intended counter is ambiguous.
+
 ## The parser
 
 The parser is hand-written recursive descent over a flat token stream. It treats

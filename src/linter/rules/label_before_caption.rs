@@ -1,5 +1,6 @@
 //! `label-before-caption`: a `\label` that precedes the statement which establishes
-//! its intended counter—a float's `\caption` or an `enumerate` list's first `\item`.
+//! its intended counter—a float's `\caption`, a `minipage`'s explicit
+//! `\captionof`, or an `enumerate` list's first `\item`.
 //!
 //! `\label` records whatever `\@currentlabel` holds, and inside a float that value
 //! is set by `\caption` (which `\refstepcounter`s the `figure`/`table` counter).
@@ -16,6 +17,9 @@
 //! - **Only curated float environments** ([`OutlineKind::Float`]—`figure`,
 //!   `table`, and their starred forms). The set is signature *data*, so widening
 //!   it is a data change rather than a rule change.
+//! - **Only curated non-float caption containers** for `\captionof`. Today this is
+//!   `minipage`, the standard boxed layout used for non-floating captions. An
+//!   ordinary `\caption` has no implicit caption type there and remains silent.
 //! - **Only the standard numbered `enumerate` list, and only before its first
 //!   statement-level `\item`.** A label after any item may legitimately belong to
 //!   that preceding item, even when another item follows. `itemize` and
@@ -73,6 +77,10 @@ const EXAMPLES: &[Example] = &[
         caption: "A `\\label` before the first `\\item` has not seen the item counter step:",
         source: "\\begin{enumerate}\n  \\label{item:first}\n  \\item First\n\\end{enumerate}\n",
     },
+    Example {
+        caption: "A `\\label` above `\\captionof` in a minipage likewise precedes the explicit counter step:",
+        source: "\\begin{minipage}{\\textwidth}\n  \\label{fig:plot}\n  \\captionof{figure}{A plot.}\n\\end{minipage}\n",
+    },
 ];
 
 /// Commands that may set `\@currentlabel` by typesetting a caption.
@@ -108,7 +116,8 @@ impl Rule for LabelBeforeCaption {
     fn description(&self) -> &'static str {
         "Flag a `\\label` placed before the statement that establishes its \
          intended counter: the outer `\\caption` in a curated float (`figure`, \
-         `table`, and their starred forms), or the first `\\item` in the standard \
+         `table`, and their starred forms), an explicit `\\captionof` in a curated \
+         caption container (`minipage`), or the first `\\item` in the standard \
          numbered `enumerate` list. In either position, `\\label` captures the \
          previous `\\@currentlabel`—usually an enclosing section number—so \
          `\\ref` silently prints an unrelated number. LaTeX gives no warning. \
@@ -141,11 +150,55 @@ impl Rule for LabelBeforeCaption {
         }
         if is_numbered_list(env) {
             self.check_numbered_list(env, sink);
+            return;
+        }
+        if let Some(name) = caption_container_name(env) {
+            self.check_caption_container(env, &name, sink);
         }
     }
 }
 
 impl LabelBeforeCaption {
+    fn check_caption_container(
+        &self,
+        container: &SyntaxNode,
+        name: &str,
+        sink: &mut Vec<Diagnostic>,
+    ) {
+        let Some(target) = first_explicit_caption_target(container) else {
+            return;
+        };
+        let cutoff = usize::from(target.text_range().start());
+
+        for label in container.descendants().filter(|node| {
+            node.kind() == SyntaxKind::COMMAND
+                && command_name(node).as_deref() == Some("label")
+                && at_statement_level(node, container)
+        }) {
+            let start = usize::from(label.text_range().start());
+            if start >= cutoff {
+                continue;
+            }
+            sink.push(Diagnostic {
+                rule: self.id(),
+                severity: self.default_severity(),
+                path: PathBuf::new(),
+                start,
+                end: usize::from(label.text_range().end()),
+                message: format!(
+                    "`\\label` before `\\captionof` in this `{name}` does not capture \
+                     the caption number"
+                ),
+                fix: build_move_fix(
+                    &label,
+                    usize::from(target.text_range().end()),
+                    "move `\\label` after `\\captionof`",
+                ),
+                related: Vec::new(),
+            });
+        }
+    }
+
     fn check_float(&self, float: &SyntaxNode, name: &str, sink: &mut Vec<Diagnostic>) {
         let outer_counter = name.strip_suffix('*').unwrap_or(name);
 
@@ -240,6 +293,41 @@ fn float_name(env: &SyntaxNode) -> Option<String> {
         .environment(&name)
         .filter(|sig| sig.outline == Some(OutlineKind::Float))
         .map(|_| name)
+}
+
+/// The environment's name when curated data proves it is a conventional host
+/// for an explicit, non-floating caption.
+fn caption_container_name(env: &SyntaxNode) -> Option<String> {
+    let name = Environment::cast(env.clone())
+        .and_then(|e| e.begin())
+        .and_then(|begin| begin.name())?;
+    signature::builtin()
+        .environment(&name)
+        .filter(|sig| sig.caption_container)
+        .map(|_| name)
+}
+
+/// The first statement-level command that may set `\@currentlabel`, provided it
+/// is a complete, unstarred `\captionof`. Any earlier caption or manual counter
+/// operation is a barrier—the later label may intentionally belong to it.
+fn first_explicit_caption_target(container: &SyntaxNode) -> Option<SyntaxNode> {
+    for command in container
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::COMMAND && at_statement_level(node, container))
+    {
+        let Some(name) = command_name(&command) else {
+            continue;
+        };
+        let bare = name.strip_suffix('*').unwrap_or(&name);
+        if !CAPTION_COMMANDS.contains(&bare) && !COUNTER_STEPPERS.contains(&bare) {
+            continue;
+        }
+        return (name == "captionof"
+            && nth_group_text(&command, 0).is_some()
+            && nth_group_text(&command, 1).is_some())
+        .then_some(command);
+    }
+    None
 }
 
 /// Whether `env` is the standard numbered list. The curated `list` flag alone
@@ -735,6 +823,39 @@ mod tests {
         // `center` is not a float: no caption counter is involved.
         let src = "\\begin{center}\n  \\label{a}\n  \\caption{C}\n\\end{center}\n";
         assert!(findings(src).is_empty());
+    }
+
+    #[test]
+    fn flags_label_before_captionof_in_a_minipage() {
+        let src = "\\begin{minipage}{\\textwidth}\n  \\label{mp}\n  \\captionof{figure}{C}\n\\end{minipage}\n";
+        let out = findings(src);
+        assert_eq!(out.len(), 1);
+        assert_eq!(&src[out[0].start..out[0].end], "\\label{mp}");
+        assert!(out[0].message.contains("`\\captionof`"));
+        assert_eq!(
+            fixed(src),
+            "\\begin{minipage}{\\textwidth}\n  \\captionof{figure}{C}\\label{mp}\n\\end{minipage}\n"
+        );
+    }
+
+    #[test]
+    fn captionof_container_gate_is_conservative() {
+        for src in [
+            // An ordinary layout environment does not establish enough intent.
+            "\\begin{center}\n  \\label{x}\n  \\captionof{figure}{C}\n\\end{center}\n",
+            // Plain `\\caption` has no caption type outside a float.
+            "\\begin{minipage}{1cm}\n  \\label{x}\n  \\caption{C}\n\\end{minipage}\n",
+            // A nested label belongs to its owning construct.
+            "\\begin{minipage}{1cm}\n  {\\label{x}}\n  \\captionof{figure}{C}\n\\end{minipage}\n",
+            // Once the caption has stepped its counter, a following label is correct.
+            "\\begin{minipage}{1cm}\n  \\captionof{figure}{C}\n  \\label{x}\n\\end{minipage}\n",
+            // An earlier counter-affecting command makes the label's owner ambiguous.
+            "\\begin{minipage}{1cm}\n  \\refstepcounter{foo}\n  \\label{x}\n  \\captionof{figure}{C}\n\\end{minipage}\n",
+            // An incomplete caption target cannot receive a fix safely.
+            "\\begin{minipage}{1cm}\n  \\label{x}\n  \\captionof{figure}\n\\end{minipage}\n",
+        ] {
+            assert!(findings(src).is_empty(), "{src:?}");
+        }
     }
 
     #[test]

@@ -1,0 +1,15 @@
+[package]
+name = "zed_badness"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.6.0"
+
+# Keep the WebAssembly extension independent from Badness's native workspace.
+[workspace]

@@ -1,0 +1,11 @@
+id = "badness-language-server"
+name = "Badness"
+description = "Language server, formatter, and linter for LaTeX and BibTeX"
+version = "0.1.0"
+schema_version = 1
+authors = ["Johan Larsson <johan@jolars.co>"]
+repository = "https://github.com/jolars/badness"
+
+[language_servers.badness-language-server]
+name = "Badness Language Server"
+languages = ["LaTeX", "BibTeX"]

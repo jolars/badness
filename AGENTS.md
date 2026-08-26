@@ -182,6 +182,8 @@ comparison, not a byte target.
 - Derive structural statement boundaries from parse structure under reflow.
 - In `lower_environment`, keep commands after a completed `BEGIN` header in the
   indented body, even when the author wrote them on the header line.
+- In `lower_environment`, keep an empty environment's `BEGIN` and `END` on
+  separate lines; collapsible body whitespace must not select another layout.
 - Keep interior statement wrapping unit-aware and meaning-safe. Underivable
   fallbacks may preserve authored lines but must remain idempotent.
 - Anchor a multiline environment used as a math atom at its rendered start

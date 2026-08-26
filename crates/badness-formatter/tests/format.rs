@@ -518,6 +518,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("list_item_continuation_hang", WrapMode::Preserve, 80),
     ("environment_reindents", WrapMode::Preserve, 80),
     ("environment_blank_lines_in_body", WrapMode::Preserve, 80),
+    ("environment_empty_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
     // Locally defined delimiter aliases inherit the target environment's list

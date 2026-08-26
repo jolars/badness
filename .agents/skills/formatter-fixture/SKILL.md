@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 267 existing fixture slugs. **Re-measure before trusting
+Measured against the 271 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -231,7 +231,7 @@ Candidates not yet checked against a fresh count:
 
 1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` and
-   `environment_leading_body_command` under Done); 29 and 23 slugs now match
+   `environment_leading_body_command` under Done); 31 and 23 slugs now match
    `env`/`arg`, so verify against current slugs before picking.
 
 `items` and bare/named brace groups are no longer thin; re-measure before
@@ -248,6 +248,12 @@ Off the list, on their content rather than their quality:
 - **`diacritics`** — two files and two directories with non-ASCII *names*; the
   `.tex` content is a plain nested-environment document. It tests UTF-8 path
   handling, which is a CLI concern with no `expected.tex` to write.
+
+Done: `environment_empty_body` — an environment's structural frame stays
+multiline when its lowered body is empty; collapsible whitespace between
+`BEGIN` and `END` cannot choose another layout, and a nested empty environment
+receives the ordinary body indentation. The formatter already implemented the
+rule, so this is a lock-in fixture rather than a production-code change.
 
 Done: `begin_tail_is_body` — content the greedy parser attaches to `BEGIN` past
 the *declared* arity is body, not header, so it indents and reflows with the body

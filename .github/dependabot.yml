@@ -19,6 +19,17 @@ updates:
         patterns:
           - "*"
   - package-ecosystem: "npm"
+    directory: "/editors/code"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # This must match the oldest supported VS Code API in `engines.vscode`.
+      - dependency-name: "@types/vscode"
+    groups:
+      npm:
+        patterns:
+          - "*"
+  - package-ecosystem: "npm"
     directory: "/npm/badness"
     schedule:
       interval: "weekly"

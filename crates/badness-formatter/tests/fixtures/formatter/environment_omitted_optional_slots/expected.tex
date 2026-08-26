@@ -1,0 +1,17 @@
+\NewDocumentEnvironment{mixed}{O{lead} m O{middle} m}{begin}{end}
+
+\begin{mixed}{first}{second}
+  {\bfseries Body heading} more body
+\end{mixed}
+
+\begin{mixed}[shown]{first}{second}
+  {\bfseries Body heading} more body
+\end{mixed}
+
+\begin{mixed}{first}[shown]{second}
+  {\bfseries Body heading} more body
+\end{mixed}
+
+\begin{mixed}[shown]{first}[shown]{second}
+  {\bfseries Body heading} more body
+\end{mixed}

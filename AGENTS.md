@@ -189,6 +189,10 @@ comparison, not a byte target.
   TeX spacing and comment binding.
 - In `lower_environment`, keep commands after a completed `BEGIN` header in the
   indented body, even when the author wrote them on the header line.
+- In `lower_begin`'s ordinary path, advance declared headers by positional
+  signature slots, not attached-node count; skip omitted optionals, but demote a
+  delimiter mismatch to ordinary glue boundaries so incomplete signatures
+  cannot reclassify text.
 - In `lower_commented_begin`, keep a declared mandatory argument after a
   trailing header comment in the `BEGIN` header and indent its continuation;
   never add indentation before a following optional argument, where whitespace

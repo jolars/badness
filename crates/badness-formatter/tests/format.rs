@@ -623,6 +623,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // `\newenvironment`/`\NewDocumentEnvironment` arg is glued onto the `\begin`.
     ("environment_user_defined_glued", WrapMode::Preserve, 80),
     ("environment_xparse_glued", WrapMode::Preserve, 80),
+    // An omitted optional slot does not remain outstanding after a later
+    // mandatory group matches. Once the signature is exhausted, a separated
+    // brace-shaped element belongs to the body rather than the `\begin` header.
+    ("environment_omitted_optional_slots", WrapMode::Reflow, 80),
     ("verbatim_in_environment", WrapMode::Preserve, 80),
     // An argument-taking verbatim environment: the `[options]` are kept verbatim on
     // the (indented) `\begin` line, while the opaque body is emitted byte-for-byte.

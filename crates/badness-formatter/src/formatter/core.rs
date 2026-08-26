@@ -5450,21 +5450,22 @@ struct BeginParts {
 /// greedy parser over-attached to it.
 ///
 /// **The header ends at the last element glued to it.** Two rules decide where
-/// that is. The environment's *declared* argument groups are glued to
-/// `\begin{name}` whatever the author wrote between them, so `\begin{tabular}\n{cc}`
-/// renders as a single `\begin{tabular}{cc}` header. Past the declared arity — and
-/// from the `{name}` group onwards for an environment with no declared arguments —
-/// the header continues only while each boundary is [`Gap::Glued`]; at the first
-/// gap it stops, and everything from there is body.
+/// that is. Groups matching the environment's *declared* argument slots are glued
+/// to `\begin{name}` whatever the author wrote between them, so
+/// `\begin{tabular}\n{cc}` renders as a single `\begin{tabular}{cc}` header.
+/// Positional matching skips omitted optional slots. Once the supplied groups
+/// exhaust the signature — and from the `{name}` group onwards for an environment
+/// with no declared arguments — the header continues only while each boundary is
+/// [`Gap::Glued`]; at the first gap it stops, and everything from there is body.
 ///
-/// The arity comes from the [`Signatures`] overlay (`cx.signatures`): a document's
+/// The slots come from the [`Signatures`] overlay (`cx.signatures`): a document's
 /// own `\newenvironment{thm}[1]…` is honored just like a built-in `tabular`, with
-/// the scanned definition shadowing a built-in of the same name. Where an arity is
-/// declared it overrides the glue test. This is why a newline-separated `{cc}` joins
-/// `\begin{tabular}` while `\begin{frame}`'s undeclared `{Title}` stays on the
-/// header only because the author glued it there.
+/// the scanned definition shadowing a built-in of the same name. A delimiter
+/// mismatch against a pending required slot invalidates the positional claim and
+/// demotes the rest of the header to ordinary glue boundaries; this keeps an
+/// incomplete curated signature from reclassifying source on the next parse.
 ///
-/// Attachment past the declared arity is not an argument claim, so it must not be
+/// Attachment past the declared slots is not an argument claim, so it must not be
 /// rendered as one: leaving it in the header
 /// stranded it at the `\begin` column, one level short of the body it belongs to
 /// (`\begin{center}\n{\bfseries A heading}`). Gluing it up instead would dress body
@@ -5489,7 +5490,7 @@ struct BeginParts {
 /// it. A `.dtx` doc margin or guard is likewise preserved wholesale — both must
 /// open their own line.
 ///
-/// Each glued argument is also matched to its signature slot ([`match_arg_slot`],
+/// Each declared argument is also matched to its signature slot ([`match_arg_slot`],
 /// mirroring [`lower_command`]) so a [`ContentKind::Keyval`] `[…]` — `axis`,
 /// `tikzpicture`, `lstlisting` — reaches the keyval-aware optional layout. Every
 /// other content kind lowers exactly as the generic path would.
@@ -5523,8 +5524,8 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
     let args = sig.as_ref().map(|sig| &*sig.args).unwrap_or(&[]);
     let elements: Vec<SyntaxElement> = begin.children_with_tokens().collect();
     let mut head: Vec<Ir> = Vec::new();
-    let mut args_seen = 0usize;
     let mut slot = 0usize;
+    let mut signature_matches = true;
     let mut i = 0usize;
     while let Some(element) = elements.get(i) {
         match element {
@@ -5555,9 +5556,17 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
                     flat.push_str(token.text());
                     end += 1;
                 }
-                // A declared argument is still outstanding: it glues to
-                // `\begin{name}`, so the run is dropped.
-                if args_seen < arity {
+                // A following group that matches the next signature slot glues
+                // to `\begin{name}`, so the run is dropped. Match on a copy:
+                // the group arm commits the slot only once it consumes the node.
+                let mut next_slot = slot;
+                let declared_arg_follows = signature_matches
+                    && elements
+                        .get(end)
+                        .and_then(attached_arg_kind)
+                        .and_then(|kind| match_arg_slot(args, &mut next_slot, kind))
+                        .is_some();
+                if declared_arg_follows {
                     i = end;
                     continue;
                 }
@@ -5579,17 +5588,21 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
                 };
             }
             SyntaxElement::Node(child)
-                if args_seen < arity
-                    && matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
+                if matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
                 let is_bracket = child.kind() == SyntaxKind::OPTIONAL;
-                let kind = if is_bracket {
-                    ArgKind::Bracket
-                } else {
-                    ArgKind::Brace
-                };
-                let keyval = match_arg_slot(args, &mut slot, kind)
-                    .is_some_and(|spec| spec.content == ContentKind::Keyval);
+                let kind = attached_arg_kind(element).expect("group or optional argument");
+                let spec = signature_matches
+                    .then(|| match_arg_slot(args, &mut slot, kind))
+                    .flatten();
+                // A delimiter mismatch against a pending required slot means the
+                // signature is incomplete for this source shape. Demote the rest
+                // of the header to ordinary glue boundaries instead of making a
+                // later group look declared by skipping over the mismatch.
+                if spec.is_none() && slot < args.len() {
+                    signature_matches = false;
+                }
+                let keyval = spec.is_some_and(|spec| spec.content == ContentKind::Keyval);
                 // A *mandatory* keyval group is deliberately not wired here, unlike
                 // on the command path ([`lower_command`]): no environment is curated
                 // with one, and the `\begin` header answers to rules a `[…]` does not
@@ -5600,7 +5613,6 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
                 } else {
                     lower_node(child, cx)
                 });
-                args_seen += 1;
                 i += 1;
             }
             // The `\begin` control word, the `{name}` group, and anything the
@@ -5618,6 +5630,15 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
     BeginParts {
         header: Ir::concat(head),
         tail: Vec::new(),
+    }
+}
+
+/// The positional signature delimiter represented by an attached syntax node.
+fn attached_arg_kind(element: &SyntaxElement) -> Option<ArgKind> {
+    match element.as_node()?.kind() {
+        SyntaxKind::GROUP => Some(ArgKind::Brace),
+        SyntaxKind::OPTIONAL => Some(ArgKind::Bracket),
+        _ => None,
     }
 }
 

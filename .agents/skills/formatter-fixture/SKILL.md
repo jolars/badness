@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 276 existing fixture slugs. **Re-measure before trusting
+Measured against the 277 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -231,7 +231,7 @@ Candidates not yet checked against a fresh count:
 
 1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` and
-   `environment_leading_body_command` under Done); 35 and 24 slugs now match
+   `environment_leading_body_command` under Done); 36 and 24 slugs now match
    `env`/`arg`, so verify against current slugs before picking.
 
 `items` and bare/named brace groups are no longer thin; re-measure before
@@ -312,6 +312,18 @@ before a following optional can change whether TeX recognizes it. Default
 latexindent corroborated the mandatory continuation indent and preserved the
 comment boundary; its retention of authored breaks in the no-comment control was
 an explained divergence from Badness's formatter-owned reflow.
+
+Done: omitted optional environment slots
+(`environment_omitted_optional_slots`) — `lower_begin`'s ordinary path matches
+attached groups against positional signature slots instead of counting attached
+nodes. Omitted optionals are skipped; once supplied groups exhaust the
+signature, a separated brace-shaped element begins the body. An unmatched
+delimiter before a pending required slot demotes the remaining header to
+ordinary glue boundaries, which keeps incomplete curated signatures from
+changing content classification on the next parse. Default latexindent
+preserved the authored broken argument lines (explained divergence: it does not
+remove breaks), while an already-inline control corroborated the body group's
+indentation in all four optional-presence shapes.
 
 Done: `filecontents` (`filecontents_protected_body`) — no defect found; it pins
 that a verbatim-body environment's `\begin` line never breaks under width

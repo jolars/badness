@@ -1627,10 +1627,9 @@ project and TeX installation. The LSP may therefore consult read-only indexes
 and metadata for editor features. That information must never flow back into
 formatting or change the syntax tree.
 
-The LSP is built on `lsp-server` and `lsp-types`, rust-analyzer's stack, rather
-than tower-lsp. Salsa cancellation is a synchronous unwind that composes with
-`lsp-server`'s sync main loop plus threadpool and fights tower-lsp's async
-`&self` model.
+The LSP is built on `lsp-server` and `lsp-types`, rust-analyzer's stack. Salsa
+cancellation is a synchronous unwind that composes with `lsp-server`'s sync main
+loop plus threadpool.
 
 ### The live buffer
 

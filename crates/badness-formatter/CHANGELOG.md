@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0](https://github.com/jolars/badness/compare/badness-formatter-v0.6.0...badness-formatter-v0.7.0) (2026-08-26)
+
+### Features
+- **formatter:** configure item indentation ([`b869f10`](https://github.com/jolars/badness/commit/b869f10f482a53b0da061db8cf433c818f526889)), closes [#150](https://github.com/jolars/badness/issues/150)
+- **formatter:** indent commented begin arguments ([`1da8350`](https://github.com/jolars/badness/commit/1da83509b392e0ca6df7ddf3a1f33c52851ba0f8))
+
+### Bug Fixes
+- **formatter:** close environment lines ([`c72d71d`](https://github.com/jolars/badness/commit/c72d71d5169f6681388c36fc944f8f306f930891))
+- **formatter:** treat gathered as math ([`b31668c`](https://github.com/jolars/badness/commit/b31668c5cd9ce580ccc5d03514c94db62569fcb9))
+- **formatter:** preserve math tail context ([`6dcb8ed`](https://github.com/jolars/badness/commit/6dcb8ed58b12f9ce85cedd686614dcc58b348229))
+- **formatter:** align nested math environments ([`eeebbbf`](https://github.com/jolars/badness/commit/eeebbbf640c3d8c78dbfb4e0cd2c422fd7be6855))
+- support Rust 1.94 ([`a7afd67`](https://github.com/jolars/badness/commit/a7afd671f94f11b0fda1931dc9eef7ba98b67679))
+
+### Dependencies
+- updated crates/badness-parser to v0.6.0
+
 ## [0.6.0](https://github.com/jolars/badness/compare/badness-formatter-v0.5.0...badness-formatter-v0.6.0) (2026-08-25)
 
 ### Features

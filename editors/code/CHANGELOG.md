@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.20.0](https://github.com/jolars/badness/compare/badness-code-v0.19.0...badness-code-v0.20.0) (2026-08-26)
+
+### Bug Fixes
+- **editors:** pin `@types/vscode` and update version ([`23c6953`](https://github.com/jolars/badness/commit/23c6953537dca6063e83c2a77d7e2c28588ed73f))
+
+### Dependencies
+- updated badness to v0.20.0
+
 ## [0.19.0](https://github.com/jolars/badness/compare/badness-code-v0.18.0...badness-code-v0.19.0) (2026-08-25)
 
 ### Dependencies

@@ -152,13 +152,11 @@ jobs:
         working-directory: editors/code
         run: npm ci
 
-      # Type-checks against @types/vscode + vscode-languageclient and bundles
-      # with esbuild. Mirrors the check-types + bundle steps that
-      # vscode:prepublish runs at release time, so dependency bumps that break
-      # the extension fail on the PR instead of at publish.
-      - name: Compile extension
+      # Packaging validates compatibility between the VS Code API types and
+      # the extension's declared minimum VS Code version.
+      - name: Package extension
         working-directory: editors/code
-        run: npm run compile
+        run: npm run package -- --target win32-arm64 -o /tmp/badness.vsix
 
   cargo-audit:
     name: Cargo Audit

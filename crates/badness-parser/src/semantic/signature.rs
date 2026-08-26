@@ -1521,6 +1521,13 @@ mod tests {
     }
 
     #[test]
+    fn gathered_is_math_without_alignment_grid_semantics() {
+        let gathered = builtin().environment("gathered").expect("curated");
+        assert!(gathered.math);
+        assert!(!gathered.align);
+    }
+
+    #[test]
     fn label_key_flag_is_curated_and_defaults_false() {
         let db = parse(
             r#"{

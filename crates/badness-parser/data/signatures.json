@@ -273,6 +273,7 @@
     "eqnarray*": { "math": true, "align": true },
 
     "aligned": { "math": true, "align": true },
+    "gathered": { "math": true },
     "alignedat": { "math": true, "align": true },
     "split": { "math": true, "align": true },
     "cases": { "math": true, "align": true },

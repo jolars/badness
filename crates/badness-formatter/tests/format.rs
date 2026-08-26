@@ -1157,6 +1157,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // group in math mode, preserving its operator context and one-column hang.
     ("math_grid_begin_tail_comment", WrapMode::Reflow, 80),
     ("math_env_gather", WrapMode::Preserve, 80),
+    ("math_env_gathered", WrapMode::Reflow, 80),
     ("math_env_align_spacing", WrapMode::Preserve, 80),
     // expl3 code formatting in a `.tex` document. A `~` is the catcode-10 literal
     // space and breaks like an ordinary (breakable) space when a line overflows,

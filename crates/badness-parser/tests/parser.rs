@@ -128,6 +128,13 @@ fn environment_with_body() {
 }
 
 #[test]
+fn gathered_math_environment() {
+    insta::assert_snapshot!(tree(
+        "\\begin{gathered}\n  x + y \\\\\n  {a % comment\n    + b}\n\\end{gathered}"
+    ));
+}
+
+#[test]
 fn inline_and_display_math() {
     insta::assert_snapshot!(tree(r"$x^2$ and \[ y_i \]"));
 }

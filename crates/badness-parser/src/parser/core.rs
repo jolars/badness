@@ -329,6 +329,26 @@ mod tests {
     }
 
     #[test]
+    fn gathered_environment_parses_math_groups_and_rows() {
+        use crate::syntax::SyntaxKind;
+        let input = "\\begin{gathered}\n  x + y \\\\\n  {a % comment\n    + b}\n\\end{gathered}\n";
+        let root = parse(input).syntax();
+        let math = root
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::MATH)
+            .expect("the gathered body is wrapped in a MATH node");
+        assert!(
+            math.descendants().any(|n| n.kind() == SyntaxKind::GROUP),
+            "groups in gathered stay inside math"
+        );
+        assert!(
+            math.children().any(|n| n.kind() == SyntaxKind::LINE_BREAK),
+            "authored rows stay direct children of MATH"
+        );
+        assert_eq!(reconstruct(input), input);
+    }
+
+    #[test]
     fn non_math_environment_body_is_unchanged() {
         use crate::syntax::SyntaxKind;
         let input = "\\begin{itemize}\n  \\item a\n\\end{itemize}\n";

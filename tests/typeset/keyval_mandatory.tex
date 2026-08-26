@@ -1,9 +1,11 @@
-% The mandatory-group mirror of `keyval_optionals.tex`: every command here is
-% curated `{"kind": "req", "content": "keyval"}`, so the formatter may split its
-% brace argument at a comma the author *glued* — materializing a space token TeX
-% sees. Each key list is authored on one long line so the split actually fires.
+% The mandatory-group mirror of `keyval_optionals.tex`: every command or
+% environment here has a curated `{"kind": "req", "content": "keyval"}` slot,
+% so the formatter may split its brace argument at a comma the author *glued* —
+% materializing a space token TeX sees. Each key list is authored on one long
+% line so the split actually fires.
 \documentclass[a4paper,11pt]{article}
 \usepackage{geometry,graphicx,tikz,listings,pgfplots,siunitx,enumitem,caption,hyperref}
+\usepackage{tabularray}
 \geometry{margin=2cm,heightrounded,includeheadfoot,footskip=1cm,headsep=5mm}
 \hypersetup{colorlinks=true,linkcolor=blue,citecolor=green,urlcolor=magenta,bookmarks=true}
 \pgfplotsset{compat=1.18,width=6cm,height=4cm,tick label style={font=\small}}
@@ -35,4 +37,8 @@ Text with \href{https://example.com}{a link} and \SI{1.23456}{\metre\per\second}
 \begin{lstlisting}
 x = 1
 \end{lstlisting}
+\begin{tblr}{colspec={ll},hlines,vlines,row{1}={font=\bfseries},cell{2}{1}={bg=yellow!20},}
+  Alpha & Beta \\
+  Gamma & Delta \\
+\end{tblr}
 \end{document}

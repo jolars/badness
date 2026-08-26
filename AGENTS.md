@@ -193,6 +193,11 @@ comparison, not a byte target.
   signature slots, not attached-node count; skip omitted optionals, but demote a
   delimiter mismatch to ordinary glue boundaries so incomplete signatures
   cannot reclassify text.
+- In `lower_begin`, route a declared `ContentKind::Keyval` slot through the
+  delimiter-appropriate segmented layout. Keep `tblr`/`longtblr`/`talltblr`
+  unmarked as `align`: their required group is a keyval list, not the raw column
+  specification that `column_alignments` reads; the structural ampersand router
+  still owns their grids.
 - In `lower_commented_begin`, keep a declared mandatory argument after a
   trailing header comment in the `BEGIN` header and indent its continuation;
   never add indentation before a following optional argument, where whitespace

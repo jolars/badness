@@ -5491,9 +5491,10 @@ struct BeginParts {
 /// open their own line.
 ///
 /// Each declared argument is also matched to its signature slot ([`match_arg_slot`],
-/// mirroring [`lower_command`]) so a [`ContentKind::Keyval`] `[…]` — `axis`,
-/// `tikzpicture`, `lstlisting` — reaches the keyval-aware optional layout. Every
-/// other content kind lowers exactly as the generic path would.
+/// mirroring [`lower_command`]) so a [`ContentKind::Keyval`] argument reaches the
+/// delimiter-appropriate segmented layout: `[…]` for `axis`/`tikzpicture`, and
+/// `{…}` for tabularray's inner specification. Every other content kind lowers
+/// exactly as the generic path would.
 fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
     let sig = cx.signatures.environment_at(begin);
     let arity = sig.as_ref().map(|sig| sig.args.len()).unwrap_or(0);
@@ -5590,7 +5591,6 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
             SyntaxElement::Node(child)
                 if matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
             {
-                let is_bracket = child.kind() == SyntaxKind::OPTIONAL;
                 let kind = attached_arg_kind(element).expect("group or optional argument");
                 let spec = signature_matches
                     .then(|| match_arg_slot(args, &mut slot, kind))
@@ -5603,16 +5603,18 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
                     signature_matches = false;
                 }
                 let keyval = spec.is_some_and(|spec| spec.content == ContentKind::Keyval);
-                // A *mandatory* keyval group is deliberately not wired here, unlike
-                // on the command path ([`lower_command`]): no environment is curated
-                // with one, and the `\begin` header answers to rules a `[…]` does not
-                // — the grid router reads the colspec group, and a verbatim-body
-                // environment's header line may never break at all.
-                head.push(if keyval && is_bracket {
-                    lower_optional(child, cx, true).unwrap_or_else(|| lower_node(child, cx))
-                } else {
-                    lower_node(child, cx)
+                let segmented = keyval.then(|| match child.kind() {
+                    SyntaxKind::OPTIONAL => lower_optional(child, cx, true),
+                    SyntaxKind::GROUP => lower_segmented_group(
+                        child,
+                        SyntaxKind::L_BRACE,
+                        SyntaxKind::R_BRACE,
+                        cx,
+                        true,
+                    ),
+                    _ => unreachable!("argument kind checked above"),
                 });
+                head.push(segmented.flatten().unwrap_or_else(|| lower_node(child, cx)));
                 i += 1;
             }
             // The `\begin` control word, the `{name}` group, and anything the

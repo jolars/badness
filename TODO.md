@@ -47,8 +47,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `ContentKind::Keyval` on a *mandatory* group is now consumed
   (`lower_segmented_group`; fixture `keyval_group_splits_entries`), so the setters
   `\pgfkeys`/`\tikzset`/`\lstset`/… take one entry per line instead of a prose
-  reflow that wrapped mid-key. Two halves were deliberately left out and neither
-  is a bug:
+  reflow that wrapped mid-key. One lower-confidence admission question remains:
 
   - The bulk CWL tier still drops a `%keyvals` mark on a `{…}`
     (`scripts/gen_cwl_signatures.py`, `_parse_arg_shape`). The reason it gave —
@@ -57,11 +56,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
     output where the same mistake on a bracket is contained. Lifting the scoping
     means first *measuring* which names would gain it (needs the pinned CWL
     source) and putting the textual ones through `task typeset:check`.
-  - Environments are unwired: `lower_begin` keeps `keyval && is_bracket`. The
-    corpus case is tabularray's `\begin{tblr}{hlines={white},…}` (latexindent's
-    `keyEqualsValueBraces/issue-378`), and it pulls in two things a command does
-    not have — the grid router reads the colspec group, and a verbatim-body
-    environment's `\begin` line may never break at all.
+
+  The environment half is done: `lower_begin` now routes a matched mandatory
+  keyval slot through `lower_segmented_group`, and the curated `tblr`, `longtblr`,
+  and `talltblr` signatures declare their outer and inner specifications as
+  keyval (`environment_keyval_group_splits_entries`). They deliberately do not
+  set `align`, whose column reader expects a raw colspec group; top-level `&`
+  still selects the structural grid path. The real tabularray case is covered by
+  `tests/typeset/keyval_mandatory.tex`.
 
   This entry also sets the reach of the `blank-line-in-keyval` rule, which reads
   only the hand-curated tier: any name admitted here is a name that rule starts
@@ -305,6 +307,10 @@ sources below are missing.
   `environment_inline_prose_boundaries` pins that an environment expanded as a
   block closes its line before following prose, removing the prior space-versus-
   newline dependency while keeping a trailing comment on the closer;
+  `environment_keyval_group_splits_entries` pins that tabularray's curated
+  mandatory inner specification segments at top-level commas under width while
+  nested commas stay sealed and comment-bearing groups take the shared keyval
+  block fallback;
   the remaining environment and argument shapes are still open.
   Sectioning/`headings` is done (two slugs, and the Tier-1 lone-newline
   bug that lived there). `ifelsefi` (402 files) is done too, via the

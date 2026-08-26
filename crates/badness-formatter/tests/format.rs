@@ -891,6 +891,17 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // content only. A nested `.style={…}` value keeps its own commas sealed inside
     // the child `GROUP`, and a list that fits stays exactly as authored.
     ("keyval_group_splits_entries", WrapMode::Reflow, 80),
+    // The environment mirror: a mandatory `ContentKind::Keyval` argument on a
+    // `\begin` header segments at its top-level commas too. The standard tabularray
+    // environments share `O{} m +b`; their optional outer and mandatory inner
+    // specifications are independent keyval slots. Nested commas stay sealed,
+    // authored one-line and multiline forms converge, and a comment retains the
+    // shared keyval block fallback.
+    (
+        "environment_keyval_group_splits_entries",
+        WrapMode::Reflow,
+        80,
+    ),
     // A keyval `{…}` declines to the block form on the same preserved predicates as
     // the bracket: a `%` (which must end its line) and a blank-line `\par`, reached
     // through `segment_delimited_body`'s bail. The block form breaks after the `{`

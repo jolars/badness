@@ -231,8 +231,9 @@ Candidates not yet checked against a fresh count:
 
 1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` and
-   `environment_leading_body_command` under Done); 36 and 24 slugs now match
-   `env`/`arg`, so verify against current slugs before picking.
+   `environment_leading_body_command` and
+   `environment_keyval_group_splits_entries` under Done); 36 and 24 slugs now
+   match `env`/`arg`, so verify against current slugs before picking.
 
 `items` and bare/named brace groups are no longer thin; re-measure before
 returning either family to the ranked backlog.
@@ -358,6 +359,26 @@ the wrong scope. Prefer that shape over a new rule.
 oracle that sees a space token, and on the first run it failed — on an invalid
 key in the *test document* rather than a formatter bug. Compile a new
 `tests/typeset/` input on its own before trusting a diff from it.
+
+Done: mandatory keyval arguments on environments
+(`environment_keyval_group_splits_entries`) — `lower_begin` routes a declared
+`ContentKind::Keyval` brace slot through the same top-level-comma segmentation as
+the command path. The standard tabularray environments (`tblr`, `longtblr`, and
+`talltblr`) are curated as `O{} m` keyval headers but deliberately not as `align`:
+their mandatory group is an inner keyval specification, not the raw column spec
+`column_alignments` assumes. Their top-level `&` still selects the structural grid
+router. A direct compile and `task typeset:check` proved the introduced spaces
+typeset identically; all four gate-corpus baselines stayed fixed.
+
+Default latexindent preserved the short inline header and comment boundary,
+preserved the overlong inline header because modify-line-breaks was off, and
+indented an already-expanded mandatory group two tab levels beneath `\begin`.
+Those were explained divergences from Badness's width-owned reflow and its shared
+segmented-group frame; its unchanged glued-comma spacing was no opinion. The
+initial proposal kept the comment-bearing opener inline, but implementation
+exposed its conflict with `keyval_group_declines_on_comment`: a proven keyval
+group that cannot segment takes the symmetric block fallback. The user accepted
+that correction instead of adding an environment-only exception.
 
 Done: Beamer item overlays (`list_item_overlay_prefix`) — a complete
 `<overlay>` prefix and its optional `[label]` are marker syntax and remain glued

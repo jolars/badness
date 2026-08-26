@@ -1528,6 +1528,27 @@ mod tests {
     }
 
     #[test]
+    fn tabularray_environment_arguments_are_curated_keyvals() {
+        let db = builtin();
+        for name in ["tblr", "longtblr", "talltblr"] {
+            let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
+            assert!(env.block(), "{name} is a block environment");
+            assert!(!env.align, "{name} has no raw column-spec argument");
+            assert_eq!(env.args.len(), 2, "{name} takes outer and inner specs");
+            assert_eq!(env.args[0].kind, ArgKind::Bracket, "{name} outer spec");
+            assert!(!env.args[0].required, "{name} outer spec is optional");
+            assert_eq!(env.args[1].kind, ArgKind::Brace, "{name} inner spec");
+            assert!(env.args[1].required, "{name} inner spec is mandatory");
+            assert!(
+                env.args
+                    .iter()
+                    .all(|arg| arg.content == ContentKind::Keyval),
+                "{name} specs are keyval lists"
+            );
+        }
+    }
+
+    #[test]
     fn label_key_flag_is_curated_and_defaults_false() {
         let db = parse(
             r#"{

@@ -1,0 +1,32 @@
+\begin{tblr}[caption={A short table}, label={tab:short}]{colspec={ll}, hlines}
+  A & B \\
+\end{tblr}
+
+\begin{longtblr}{
+  colspec={ll},
+  hlines,
+  vlines,
+  row{1}={font=\bfseries},
+  cell{2}{1}={r=2,c=1,bg=blue7},
+}
+  Alpha & Beta  \\
+  Gamma & Delta \\
+\end{longtblr}
+
+\begin{talltblr}{
+  colspec={ll},
+  hlines,
+  vlines,
+  row{1}={font=\bfseries},
+  cell{2}{1}={r=2,c=1,bg=blue7},
+}
+  Alpha & Beta  \\
+  Gamma & Delta \\
+\end{talltblr}
+
+\begin{tblr}{
+  colspec={ll},% keep this boundary
+  hlines,vlines
+}
+  A & B \\
+\end{tblr}

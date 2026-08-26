@@ -286,7 +286,7 @@ impl FormatStyle {
 
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
-    use super::{FormatStyle, LineEnding, MathWrap, WrapMode};
+    use super::{FormatStyle, ItemIndent, LineEnding, MathWrap, WrapMode};
 
     /// The wire spelling of every variant, as a `match` so a new variant fails
     /// to compile here instead of silently shipping an unchecked spelling.
@@ -317,6 +317,14 @@ mod serde_tests {
             LineEnding::Lf => "lf",
             LineEnding::Crlf => "crlf",
             LineEnding::Native => "native",
+        }
+    }
+
+    fn item_indent_wire(indent: ItemIndent) -> &'static str {
+        match indent {
+            ItemIndent::Hang => "hang",
+            ItemIndent::Indent => "indent",
+            ItemIndent::None => "none",
         }
     }
 
@@ -368,6 +376,13 @@ mod serde_tests {
     }
 
     #[test]
+    fn item_indents_use_their_toml_spelling() {
+        for indent in [ItemIndent::Hang, ItemIndent::Indent, ItemIndent::None] {
+            round_trip(indent, item_indent_wire(indent));
+        }
+    }
+
+    #[test]
     fn format_style_keys_are_kebab_case_and_default_the_rest() {
         let json = serde_json::to_value(FormatStyle::default()).expect("serializes");
         let object = json.as_object().expect("an object");
@@ -377,6 +392,7 @@ mod serde_tests {
             keys,
             [
                 "indent-width",
+                "item-indent",
                 "line-ending",
                 "line-width",
                 "math-wrap",
@@ -398,7 +414,7 @@ mod serde_tests {
 
 #[cfg(all(test, feature = "schema"))]
 mod schema_tests {
-    use super::{LineEnding, MathWrap, WrapMode};
+    use super::{ItemIndent, LineEnding, MathWrap, WrapMode};
 
     /// The schema an embedder publishes has to enumerate the accepted values,
     /// not just say "string".
@@ -434,6 +450,10 @@ mod schema_tests {
         assert_eq!(
             variants(schemars::schema_for!(LineEnding)),
             ["auto", "crlf", "lf", "native"]
+        );
+        assert_eq!(
+            variants(schemars::schema_for!(ItemIndent)),
+            ["hang", "indent", "none"]
         );
     }
 }

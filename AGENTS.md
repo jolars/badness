@@ -180,6 +180,9 @@ comparison, not a byte target.
 - `.dtx` margin and guard escapes must fall back safely to preservation, and
   required `macrocode` framing bytes must remain literal.
 - Derive structural statement boundaries from parse structure under reflow.
+- In `reflow_elements`, make an environment close its line before following
+  prose; a trailing comment still rides the closer because moving it changes
+  TeX spacing and comment binding.
 - In `lower_environment`, keep commands after a completed `BEGIN` header in the
   indented body, even when the author wrote them on the header line.
 - In `lower_commented_begin`, keep a declared mandatory argument after a

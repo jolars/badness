@@ -521,6 +521,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_empty_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
+    // An environment lowered as a block opens and closes its own lines, so
+    // surrounding prose stays outside the structural frame regardless of whether
+    // the author separated the closer with a space or newline. A trailing comment
+    // still rides the closer because relocating it changes TeX spacing and binding.
+    ("environment_inline_prose_boundaries", WrapMode::Reflow, 80),
     // Declared arguments ordinarily glue onto the `\begin` header. A trailing
     // comment is a semantic barrier: a following mandatory argument stays in
     // the header but moves to an indented continuation line, where the comment

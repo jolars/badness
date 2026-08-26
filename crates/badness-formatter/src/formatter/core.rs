@@ -2207,11 +2207,11 @@ fn reflow_elements_checked(
     // riding comment keeps a single space before it.
     let mut prev_was_block = false;
     let mut block_gap = false;
-    // Set alongside `prev_was_block` when the committed block *closes* its line: a
-    // sectioning or curated block command, whose whole rule is that the line ends
-    // after it. A trailing `%` still rides (it must never be relocated), but content
-    // starts a fresh line instead of riding the way it does after an environment or
-    // a doc-commented `\input`.
+    // Set alongside `prev_was_block` when the committed block *closes* its line: an
+    // environment, sectioning command, or curated block command. A trailing `%`
+    // still rides (it must never be relocated), but content starts a fresh line.
+    // Other forced blocks, such as a doc-commented `\input`, leave their last line
+    // open so content from the same source line can ride it.
     let mut prev_block_closes_line = false;
 
     let mut idx = 0;
@@ -2648,15 +2648,17 @@ fn reflow_elements_checked(
                     line_all_commands = true;
                     line_has_content = false;
                     prev_was_block = true;
-                    // A block-level statement whose lowering forced a break (a `%`
-                    // bound to it as a `DOC_COMMENT`, a comment inside a title, a
-                    // multi-line `\title` body) took this path rather than the
-                    // statement arm above, which cannot route a `.dtx` margin. It
-                    // still closes its line. Everything else that lands here — an
+                    // An environment is a complete structural block, so prose after
+                    // its closer starts a fresh line whether the source gap was a
+                    // space or newline. A block-level statement whose lowering forced
+                    // a break (a `%` bound to it as a `DOC_COMMENT`, a comment inside
+                    // a title, a multi-line `\title` body) closes its line for the
+                    // same reason. Everything else that lands here — an
                     // un-signatured command, a glued block command, `\input`'s bare
                     // filename shape — leaves the line open so following content can
                     // ride it (the `after_block` paths).
-                    prev_block_closes_line = is_block_stmt;
+                    prev_block_closes_line =
+                        is_block_stmt || child.kind() == SyntaxKind::ENVIRONMENT;
                     if is_section_boundary {
                         b.separate_section();
                     }

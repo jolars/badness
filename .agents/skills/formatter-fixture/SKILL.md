@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 273 existing fixture slugs. **Re-measure before trusting
+Measured against the 274 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -231,7 +231,7 @@ Candidates not yet checked against a fresh count:
 
 1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` and
-   `environment_leading_body_command` under Done); 33 and 24 slugs now match
+   `environment_leading_body_command` under Done); 34 and 24 slugs now match
    `env`/`arg`, so verify against current slugs before picking.
 
 `items` and bare/named brace groups are no longer thin; re-measure before
@@ -286,6 +286,15 @@ and recorded rule without a production-code change. Default latexindent
 preserved both inline spellings (explained divergence: it does not add breaks),
 while an already-broken control corroborated the body placement and nesting
 depth.
+
+Done: inline environments amid prose (`environment_inline_prose_boundaries`) —
+an environment expanded as a structural block opens and closes its own lines;
+following prose never rides the closer merely because the author used a space
+instead of a newline. A trailing comment still rides the closer because moving
+it changes TeX spacing and comment binding. Default latexindent preserved the
+inline probes (explained divergence: it does not add breaks), corroborated the
+suffix boundary and comment attachment where the author supplied breaks, and
+corroborated the complete generic and nested multiline controls.
 
 Done: comments between declared environment arguments
 (`environment_argument_comment_barrier`) — declared arguments ordinarily glue

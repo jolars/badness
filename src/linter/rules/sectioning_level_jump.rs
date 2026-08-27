@@ -2,19 +2,19 @@
 //! level below the preceding heading (`\section` straight to `\subsubsection`,
 //! skipping `\subsection`). Modeled on textidote's `sh:secskip`.
 //!
-//! LaTeX's standard sectioning commands form a fixed ladder — `\part` (0),
-//! `\chapter` (1), `\section` (2), `\subsection` (3), `\subsubsection` (4),
-//! `\paragraph` (5), `\subparagraph` (6). Descending the outline should step one
-//! rung at a time; jumping past a rung produces a lopsided table of contents and
-//! usually signals a wrong command. We flag only *downward* jumps of more than
-//! one level between consecutive headings: climbing back up (closing sections) is
-//! normal, and repeated headings at the same level are fine.
+//! The structural ladder runs from `\part` through `\subsubsection`. `\chapter`
+//! participates only for classes known to provide it, or once the source uses it;
+//! chapterless and unknown classes conservatively place `\section` below `\part`.
+//! `\paragraph` and `\subparagraph` are treated as transparent run-in labels,
+//! matching their common use in contemporary technical papers. Descending the
+//! outline should otherwise step one rung at a time. We flag only *downward* jumps
+//! of more than one level between consecutive structural headings: climbing back
+//! up (closing sections) is normal, and repeated headings at one level are fine.
 //!
-//! The comparison is purely *relative* to the immediately preceding heading, never
-//! against an absolute top level, so the rule is document-class agnostic — an
-//! `article` that opens with `\section` is not treated as "skipping `\part` and
-//! `\chapter`". The first heading in the document sets the baseline and is never
-//! flagged.
+//! The comparison is purely *relative* to the immediately preceding structural
+//! heading, never against an absolute top level. An `article` that opens with
+//! `\section`, or uses `\part` followed by `\section`, is therefore valid. The
+//! first structural heading in the document sets the baseline and is never flagged.
 //!
 //! **Report-only** (no autofix). Fixing a skip means either promoting the offending
 //! heading or inserting an intermediate heading — a structural, meaning-changing
@@ -30,7 +30,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{command_name, control_word_range};
+use crate::ast::{command_name, control_word_range, nth_group_text};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::semantic::signature;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
@@ -68,19 +68,18 @@ impl Rule for SectioningLevelJump {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a heading that descends more than one sectioning level below the \
-         preceding heading -- `\\section` straight to `\\subsubsection`, skipping \
-         `\\subsection` (textidote's `sh:secskip`). Standard sectioning commands \
-         form a fixed ladder (`\\part`, `\\chapter`, `\\section`, `\\subsection`, \
-         `\\subsubsection`, `\\paragraph`, `\\subparagraph`); descending it a rung \
-         at a time keeps the outline sound, and a jump usually signals the wrong \
-         command. Only *downward* jumps between consecutive headings are flagged -- \
-         climbing back up to close sections is normal, as are repeated headings at \
-         one level. The comparison is relative to the previous heading, never an \
-         absolute top level, so an `article` opening with `\\section` is fine. \
-         Report-only: repairing a skip (promote the heading or insert an \
-         intermediate one) is a structural choice for the author, not a \
-         correct-by-construction edit."
+        "Flag a structural heading that descends more than one level below the \
+         preceding structural heading -- `\\section` straight to \
+         `\\subsubsection`, skipping `\\subsection` (textidote's `sh:secskip`). \
+         The active ladder follows the document class: `\\chapter` is included \
+         only for classes known to provide it or when the source uses it, while \
+         unknown classes conservatively omit it. `\\paragraph` and \
+         `\\subparagraph` are transparent because technical papers commonly use \
+         them as run-in labels rather than outline subdivisions. Only *downward* \
+         jumps are flagged -- climbing back up and repeated headings at one level \
+         are normal. The comparison is relative to the previous structural \
+         heading, never an absolute top level. Report-only: repairing a skip is a \
+         structural choice for the author, not a correct-by-construction edit."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -91,7 +90,10 @@ impl Rule for SectioningLevelJump {
     // headings in document order (the previous heading's level), which a stateless
     // per-element `check` cannot track. Rides the driver's one shared walk.
     fn stream(&self) -> Option<Box<dyn StreamVisitor>> {
-        Some(Box::new(SectioningLevelJumpVisitor { prev_level: None }))
+        Some(Box::new(SectioningLevelJumpVisitor {
+            prev_level: None,
+            has_chapter: false,
+        }))
     }
 }
 
@@ -99,6 +101,36 @@ impl Rule for SectioningLevelJump {
 /// a heading deeper than `prev + 1` skipped at least one rung of the ladder.
 struct SectioningLevelJumpVisitor {
     prev_level: Option<u8>,
+    has_chapter: bool,
+}
+
+/// Whether a statically named document class is known to provide `\chapter`.
+/// Unknown and article-like classes conservatively omit that rung: assuming an
+/// unavailable heading would create a false positive that the source cannot
+/// disprove. An encountered `\chapter` independently proves the rung exists.
+fn class_has_chapter(name: &str) -> bool {
+    matches!(
+        name,
+        "amsbook"
+            | "book"
+            | "extbook"
+            | "extreport"
+            | "memoir"
+            | "report"
+            | "scrbook"
+            | "scrreprt"
+            | "tufte-book"
+    )
+}
+
+/// Rank a sectioning level in the active class ladder. Classes without
+/// `\chapter` place `\section` directly below `\part`.
+fn active_level(level: u8, has_chapter: bool) -> u8 {
+    if !has_chapter && level > 1 {
+        level - 1
+    } else {
+        level
+    }
 }
 
 /// Whether the `COMMAND` node carries a `*` variant token (`\section*`): the star
@@ -136,6 +168,11 @@ impl StreamVisitor for SectioningLevelJumpVisitor {
         let Some(name) = command_name(node) else {
             return;
         };
+        if name == "documentclass" {
+            self.has_chapter =
+                nth_group_text(node, 0).is_some_and(|class| class_has_chapter(class.trim()));
+            return;
+        }
         let Some(level) = signature::builtin()
             .command(&name)
             .and_then(|c| c.sectioning)
@@ -150,12 +187,24 @@ impl StreamVisitor for SectioningLevelJumpVisitor {
         if is_starred(node) {
             return;
         }
+        // In contemporary technical papers these are conventionally run-in
+        // topic labels rather than outline subdivisions. Keep them transparent
+        // so they neither trigger a jump nor hide one between structural headings.
+        if matches!(name.as_str(), "paragraph" | "subparagraph") {
+            return;
+        }
+        if name == "chapter" {
+            self.has_chapter = true;
+        }
         if let Some(prev) = self.prev_level
-            && level > prev + 1
+            && active_level(level, self.has_chapter) > active_level(prev, self.has_chapter) + 1
         {
-            // The nearest missing rung; `prev + 1 <= level <= 6`, so the index is
-            // in range.
-            let expected = LEVEL_NAMES[(prev + 1) as usize];
+            let expected_level = if !self.has_chapter && prev == 0 {
+                2 // `\section` follows `\part` in chapterless classes.
+            } else {
+                prev + 1
+            };
+            let expected = LEVEL_NAMES[expected_level as usize];
             let previous = LEVEL_NAMES[prev as usize];
             let range = control_word_range(node).unwrap_or_else(|| node.text_range());
             sink.push(Diagnostic {
@@ -260,14 +309,54 @@ mod tests {
     }
 
     #[test]
-    fn part_to_section_skips_chapter() {
-        let out = findings("\\part{A}\n\\section{B}\n");
+    fn part_to_section_skips_chapter_in_book() {
+        let out = findings("\\documentclass{book}\n\\part{A}\n\\section{B}\n");
         assert_eq!(out.len(), 1);
         assert!(
             out[0].message.contains("expected `\\chapter`"),
             "got: {}",
             out[0].message
         );
+    }
+
+    #[test]
+    fn part_to_section_is_fine_in_article() {
+        assert!(findings("\\documentclass{article}\n\\part{A}\n\\section{B}\n").is_empty());
+    }
+
+    #[test]
+    fn unknown_class_does_not_assume_a_chapter_level() {
+        assert!(findings("\\documentclass{custom}\n\\part{A}\n\\section{B}\n").is_empty());
+    }
+
+    #[test]
+    fn an_encountered_chapter_proves_the_level_exists() {
+        let out = findings("\\documentclass{custom}\n\\chapter{A}\n\\subsection{B}\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains("expected `\\section`"));
+    }
+
+    #[test]
+    fn part_to_subsection_skips_section_in_article() {
+        let out = findings("\\documentclass{article}\n\\part{A}\n\\subsection{B}\n");
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].message.contains("expected `\\section`"),
+            "got: {}",
+            out[0].message
+        );
+    }
+
+    #[test]
+    fn paragraph_headings_are_transparent() {
+        assert!(findings("\\section{A}\n\\paragraph{B}\n\\subparagraph{C}\n").is_empty());
+    }
+
+    #[test]
+    fn paragraph_does_not_hide_a_later_jump() {
+        let out = findings("\\section{A}\n\\paragraph{note}\n\\subsubsection{B}\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains("expected `\\subsection`"));
     }
 
     #[test]

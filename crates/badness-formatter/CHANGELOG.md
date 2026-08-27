@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.8.0](https://github.com/jolars/badness/compare/badness-formatter-v0.7.0...badness-formatter-v0.8.0) (2026-08-27)
+
+### Features
+- **formatter:** close display math lines ([`7394f25`](https://github.com/jolars/badness/commit/7394f2547d34c22f1d005c7832273200ddae4d80))
+- **formatter:** glue inline command arguments ([`f1093ff`](https://github.com/jolars/badness/commit/f1093ff47df04a3921f3608408e8f4b74de14a2d))
+- **formatter:** split environment keyvals ([`3ea1412`](https://github.com/jolars/badness/commit/3ea14126ad154a33deab073d1142524370a29174))
+
+### Bug Fixes
+- **formatter:** preserve BibTeX lint directives ([`e0567a9`](https://github.com/jolars/badness/commit/e0567a9b2034a68737d0cb5b54f25a1c581bf8cc)), fixes [#159](https://github.com/jolars/badness/issues/159)
+- **formatter:** align commented statements ([`440eca0`](https://github.com/jolars/badness/commit/440eca0d1f8f9ebe955e70a0e3d56e9be99b9b01)), fixes [#158](https://github.com/jolars/badness/issues/158)
+- **formatter:** split commented begin tails ([`5d30318`](https://github.com/jolars/badness/commit/5d303186c912fb778ac09c7bbf56c612f50d508f))
+- **formatter:** tighten keyval commas ([`d9a3453`](https://github.com/jolars/badness/commit/d9a3453f54dfaa3e8ef943a6ea8a7b25d469bec5))
+- **formatter:** preserve authored line-break rows ([`4886414`](https://github.com/jolars/badness/commit/488641446488f0b9360e16890cec8ab5367c606f))
+- **formatter:** keep labels with headings ([`7ba5fa5`](https://github.com/jolars/badness/commit/7ba5fa57be034a78598c248dbfa630b8c3852046))
+- **formatter:** match omitted environment slots ([`c00340f`](https://github.com/jolars/badness/commit/c00340f45f3b0c55bf48becc2365e77cf2ea464f))
+- **formatter:** honor control-word boundaries ([`4ee6fc6`](https://github.com/jolars/badness/commit/4ee6fc6d89bf1314f8a319fd8805835fd37a92c5))
+- **formatter:** recognize unary math signs ([`6afa14f`](https://github.com/jolars/badness/commit/6afa14fa237327e9de92fbc0cbf1be3e4d8c6acc))
+
+### Performance Improvements
+- **formatter:** cache group break state ([`4a37963`](https://github.com/jolars/badness/commit/4a37963a7fefc8027997757ab4d7d24d150bf509))
+
+### Dependencies
+- updated crates/badness-parser to v0.7.0
+
 ## [0.7.0](https://github.com/jolars/badness/compare/badness-formatter-v0.6.0...badness-formatter-v0.7.0) (2026-08-26)
 
 ### Features

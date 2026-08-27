@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.7.0](https://github.com/jolars/badness/compare/badness-parser-v0.6.0...badness-parser-v0.7.0) (2026-08-27)
+
+### Features
+- **formatter:** split environment keyvals ([`3ea1412`](https://github.com/jolars/badness/commit/3ea14126ad154a33deab073d1142524370a29174))
+
 ## [0.6.0](https://github.com/jolars/badness/compare/badness-parser-v0.5.0...badness-parser-v0.6.0) (2026-08-26)
 
 ### Features

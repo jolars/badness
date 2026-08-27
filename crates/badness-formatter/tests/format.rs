@@ -530,6 +530,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // the author separated the closer with a space or newline. A trailing comment
     // still rides the closer because relocating it changes TeX spacing and binding.
     ("environment_inline_prose_boundaries", WrapMode::Reflow, 80),
+    // Sibling environments each retain their structural frame without acquiring
+    // a synthetic blank line. Authored blank lines remain paragraph boundaries,
+    // and a trailing comment stays attached to the preceding closer.
+    ("environment_adjacent_siblings", WrapMode::Reflow, 80),
     // Display math is a complete block in prose, so following prose starts a
     // fresh line while a trailing comment still rides the closer. Opaque
     // arguments retain glued suffix boundaries because inserting whitespace

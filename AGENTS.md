@@ -197,6 +197,9 @@ comparison, not a byte target.
 - In `reflow_elements`, make an environment close its line before following
   prose; a trailing comment still rides the closer because moving it changes
   TeX spacing and comment binding.
+- In `reflow_elements`, keep sibling environments on consecutive structural
+  frames without synthesizing a blank line; preserve authored paragraph breaks
+  and comments attached to a preceding closer.
 - In `reflow_elements`, make display math close its line before following prose
   only under `Prose` and `ProseArg`; opaque argument paths must preserve a glued
   suffix, and a trailing comment still rides the closer.

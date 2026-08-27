@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 281 existing fixture slugs. **Re-measure before trusting
+Measured against the 282 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -232,7 +232,7 @@ Candidates not yet checked against a fresh count:
 1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` and
    `environment_leading_body_command` and
-   `environment_keyval_group_splits_entries` under Done); 37 and 25 slugs now
+   `environment_keyval_group_splits_entries` under Done); 38 and 25 slugs now
    match `env`/`arg`, so verify against current slugs before picking.
 
 `items` and bare/named brace groups are no longer thin; re-measure before
@@ -303,6 +303,16 @@ it changes TeX spacing and comment binding. Default latexindent preserved the
 inline probes (explained divergence: it does not add breaks), corroborated the
 suffix boundary and comment attachment where the author supplied breaks, and
 corroborated the complete generic and nested multiline controls.
+
+Done: adjacent sibling environments (`environment_adjacent_siblings`) — each
+environment keeps its own structural frame, but adjacency alone does not create
+a blank line. Authored paragraph breaks remain, nested siblings receive ordinary
+body indentation, and a trailing comment stays attached to the preceding closer.
+The formatter already implemented the rule, so this is a lock-in fixture rather
+than a production-code change. Default latexindent preserved the inline probes
+(explained divergence: it does not add breaks), corroborated consecutive frames,
+nesting, authored blank lines, and comment attachment in already-expanded
+controls, and exposed no unexplained divergence.
 
 Done: comments between declared environment arguments
 (`environment_argument_comment_barrier`) — declared arguments ordinarily glue

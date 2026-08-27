@@ -968,9 +968,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // break inside the group's fill that strands a command alone on a printed
     // line re-reads to the same layout on the next pass.
     ("group_command_stranded_by_width", WrapMode::Reflow, 40),
-    // A `\\` inside a group is a soft atom: rows the author spread over source
-    // lines join when they fit (newline ↔ space, typeset-identical — the `\\`
-    // still breaks the typeset line), and a glued `\\` never gains a space.
+    // An authored newline immediately after `\\` remains hard in a plain opaque
+    // argument whose command alone occupies the paragraph. Inline and macro-like
+    // groups retain the ordinary fill, and a glued successor stays glued.
     ("group_linebreak_rows", WrapMode::Reflow, 80),
     // A multi-line group in a tabular cell no longer carries a forced break, so
     // the grid aligns instead of falling back to the preserved layout.

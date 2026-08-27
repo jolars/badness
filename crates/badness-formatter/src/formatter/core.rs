@@ -7405,6 +7405,12 @@ fn lower_bracketed(
 /// flat rendering and vanishes broken, where the delimiter's own newline
 /// supplies the space token; an empty body keeps its padding flat (`{ }` and
 /// `{\n}` both render `{ }` — deleting it would delete a space token).
+/// One Tier-2 boundary is preserved rather than width-driven: an authored newline
+/// immediately after a [`SyntaxKind::LINE_BREAK`] remains a hard source line in a
+/// structurally plain, command-only text group. A same-line space remains available
+/// to the fill, and inline, command/parameter-like, or glued successors remain
+/// untouched; the narrow shape avoids treating `\\` in opaque macro code as a
+/// semantic row break.
 ///
 /// A body the fill cannot own takes today's indented block form
 /// ([`lower_bracketed`]) instead, keyed on preserved predicates and content
@@ -7441,6 +7447,9 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         }
     }
     let block = || lower_bracketed(node, SyntaxKind::L_BRACE, SyntaxKind::R_BRACE, cx, false);
+    if plain_opaque_block_has_authored_rows(node, cx) {
+        return block();
+    }
     let mut open = Ir::Nil;
     let mut close = Ir::Nil;
     let mut lead: Option<String> = None;
@@ -7550,6 +7559,87 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }
     parts.push(close);
     Ir::group(Ir::concat(parts))
+}
+
+/// Whether an opaque group is the plain text argument of a command that alone
+/// occupies its paragraph, with every `\\` followed by an authored newline and
+/// flanked by words. This is the conservative shape in which source rows are
+/// useful structure rather than plausible macro parameter text.
+fn plain_opaque_block_has_authored_rows(group: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    if cx.in_dtx_doc_region {
+        return false;
+    }
+    let Some(command) = group
+        .parent()
+        .filter(|node| node.kind() == SyntaxKind::COMMAND)
+    else {
+        return false;
+    };
+    let Some(paragraph) = command
+        .parent()
+        .filter(|node| node.kind() == SyntaxKind::PARAGRAPH)
+    else {
+        return false;
+    };
+    if is_dtx_doc_paragraph(&paragraph) {
+        return false;
+    }
+    let mut content = paragraph
+        .children_with_tokens()
+        .filter(|element| !is_collapsible_trivia_element(element));
+    if !content
+        .next()
+        .is_some_and(|element| element.as_node() == Some(&command))
+        || content.next().is_some()
+    {
+        return false;
+    }
+    let elements: Vec<SyntaxElement> = group.children_with_tokens().collect();
+    if !elements.iter().all(|element| match element {
+        SyntaxElement::Token(token) => matches!(
+            token.kind(),
+            SyntaxKind::L_BRACE
+                | SyntaxKind::R_BRACE
+                | SyntaxKind::WORD
+                | SyntaxKind::WHITESPACE
+                | SyntaxKind::NEWLINE
+        ),
+        SyntaxElement::Node(node) => node.kind() == SyntaxKind::LINE_BREAK,
+    }) {
+        return false;
+    }
+    let mut saw_line_break = false;
+    for (index, element) in elements.iter().enumerate() {
+        if !matches!(element, SyntaxElement::Node(node) if node.kind() == SyntaxKind::LINE_BREAK) {
+            continue;
+        }
+        saw_line_break = true;
+        let left_is_word = elements[..index]
+            .iter()
+            .rev()
+            .find(|element| !is_collapsible_trivia_element(element))
+            .is_some_and(
+                |element| matches!(element, SyntaxElement::Token(t) if t.kind() == SyntaxKind::WORD),
+            );
+        let mut newlines = 0usize;
+        let right = elements[index + 1..].iter().find(|element| {
+            if let SyntaxElement::Token(token) = element
+                && is_collapsible_trivia(token.kind())
+            {
+                newlines += usize::from(token.kind() == SyntaxKind::NEWLINE);
+                false
+            } else {
+                true
+            }
+        });
+        let right_is_word = right.is_some_and(
+            |element| matches!(element, SyntaxElement::Token(t) if t.kind() == SyntaxKind::WORD),
+        );
+        if !left_is_word || newlines != 1 || !right_is_word {
+            return false;
+        }
+    }
+    saw_line_break
 }
 
 /// Lower a [`SyntaxKind::OPTIONAL`] argument group, or `None` to leave it on the

@@ -1164,22 +1164,32 @@ exactly the perturbation-eligible gaps, so strict invariance holds by
 construction; a glued junction never gains a break, and delimiter padding rides
 the flat rendering and vanishes broken — exchanged for the delimiter's own
 newline, never deleted, since an opaque argument's space tokens are typeset. An
-edge gap joins that vanish-when-broken protocol only when its flat spelling is a
-single space, the one spelling a break reproduces; any other spelling rides
-verbatim and never breaks. An *interior* blank line, a direct comment, a token
-embedding a newline, or a child carrying a forced break sends the group to the
-indented block form instead — preserved predicates and content only. An *edge*
-blank does not: the block form trims edge blanks away, so declining on one would
-key on a predicate the emitter destroys, and it erases to padding instead,
-matching the deletion the block form already performed. The optional-argument
-lowering makes the mirrored promise: a `segment_delimited_body` decline takes
-the block form unconditionally, and a dropped trailing separator re-emits the
-authored whitespace it replaced. What remains of `spans_multiple_lines` is the
-delimited-group residue behind the non-`Reflow` modes and the doc-margined
-corner, sanctioned Tier 2 on the fixed-point argument written at the predicate:
-the block form always ends with a newline before its closer, so its output
-re-reads multi-line and re-blocks byte-stably, and the inline path emits no
-newline, so single-line re-reads single-line.
+authored newline immediately after a `LINE_BREAK` node is the one Tier-2 hard
+boundary in a structurally plain, command-only text group: it remains a newline,
+while inline and macro-like groups retain their ordinary fill and a same-line or
+glued successor remains untouched. The preservation is a fixed point; a break
+after every `LINE_BREAK` and the block-form delimiter framing are re-emitted, so
+the same structural gate selects the same layout on the next pass. The narrow
+shape avoids claiming that `\\` in opaque macro code is semantic. Virtual `.dtx`
+documentation streams are excluded because a forced child break can escape
+through their rebuilt `% ` margins and perturb structural framing on the next
+pass. An edge gap joins that vanish-when-broken protocol only when its flat
+spelling is a single space, the one spelling a break reproduces; any other
+spelling rides verbatim and never breaks. An *interior* blank line, a direct
+comment, a token embedding a newline, or a child carrying a forced break sends
+the group to the indented block form instead — preserved predicates and content
+only. An *edge* blank does not: the block form trims edge blanks away, so
+declining on one would key on a predicate the emitter destroys, and it erases to
+padding instead, matching the deletion the block form already performed. The
+optional-argument lowering makes the mirrored promise: a
+`segment_delimited_body` decline takes the block form unconditionally, and a
+dropped trailing separator re-emits the authored whitespace it replaced. What
+remains of `spans_multiple_lines` is the delimited-group residue behind the
+non-`Reflow` modes and the doc-margined corner, sanctioned Tier 2 on the
+fixed-point argument written at the predicate: the block form always ends with a
+newline before its closer, so its output re-reads multi-line and re-blocks
+byte-stably, and the inline path emits no newline, so single-line re-reads
+single-line.
 
 The rule is enforced at the boundary rather than by review. Every trivia run the
 lowering consumes arrives as a normalized `Gap`

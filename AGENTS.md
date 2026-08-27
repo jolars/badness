@@ -179,6 +179,10 @@ comparison, not a byte target.
   leading bound comment, and after any immediately following `\label` run. Keep
   those labels directly below the heading; do not synthesize `\par` inside nested
   argument or conditional structure.
+- In `lower_opaque_group`, preserve an authored newline immediately after a
+  `LINE_BREAK` only in a structurally plain, command-only text group; leave
+  inline, macro-like, same-line, and glued shapes on the ordinary fill. Keep
+  virtual `.dtx` documentation streams on their margin-owned path.
 
 ### Reflow and structural safety
 

@@ -369,3 +369,4 @@ TSWLatexianTemp*
 
 # trivia-invariant-layout gate corpora (fetched by scripts/fetch_gate_corpora.sh)
 /corpora/
+/test.pdf

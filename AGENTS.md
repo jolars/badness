@@ -214,10 +214,12 @@ comparison, not a byte target.
   unmarked as `align`: their required group is a keyval list, not the raw column
   specification that `column_alignments` reads; the structural ampersand router
   still owns their grids.
-- In `lower_commented_begin`, keep a declared mandatory argument after a
-  trailing header comment in the `BEGIN` header and indent its continuation;
-  never add indentation before a following optional argument, where whitespace
-  can change argument recognition.
+- In `lower_commented_begin`, match declared arguments by positional signature
+  slots: skipped optionals must not keep a completed header open, and
+  over-attached content after it returns as `BeginParts::tail` for body reflow.
+  Keep a genuinely pending mandatory argument after a trailing header comment
+  as an indented header continuation; never indent a following optional, where
+  whitespace can change argument recognition.
 - In `lower_environment`, keep an empty environment's `BEGIN` and `END` on
   separate lines; collapsible body whitespace must not select another layout.
 - Keep interior statement wrapping unit-aware and meaning-safe. Underivable

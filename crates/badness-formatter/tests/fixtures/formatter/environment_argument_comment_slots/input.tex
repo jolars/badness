@@ -1,0 +1,22 @@
+\NewDocumentEnvironment{note}{O{Note} m}{begin}{end}
+
+\begin{note}{Title}% keep the body separate
+{\bfseries Body heading}
+More body.
+\end{note}
+
+\begin{note}{Title}% keep the body inline
+{\bfseries Body heading} More body.
+\end{note}
+
+\begin{note}[Shown]{Title}% keep the body separate
+{\bfseries Body heading}
+More body.
+\end{note}
+
+\NewDocumentEnvironment{mixed}{O{Lead} m O{Middle} m}{begin}{end}
+
+\begin{mixed}{First}% keep the required continuation live
+{Second}
+Body.
+\end{mixed}

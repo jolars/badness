@@ -305,6 +305,10 @@ sources below are missing.
   `environment_argument_comment_barrier` pins that a trailing comment between
   declared environment arguments forces a safe, indented mandatory-argument
   continuation while a following optional remains unindented;
+  `environment_argument_comment_slots` pins the positional counterpart: omitted
+  optionals do not keep a completed commented header open, its greedy tail joins
+  ordinary body reflow, and a genuinely pending mandatory remains a header
+  continuation;
   `environment_special_character_names` pins full-name pairing and ordinary
   framing for names containing `@` and `*`, or spanning lexer tokens at `_`;
   `environment_omitted_optional_slots` pins positional `BEGIN` header matching:

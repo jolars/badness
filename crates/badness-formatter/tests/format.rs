@@ -544,6 +544,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // the header but moves to an indented continuation line, where the comment
     // cannot consume it.
     ("environment_argument_comment_barrier", WrapMode::Reflow, 80),
+    // Commented headers match declared arguments positionally: omitted optional
+    // slots neither invent outstanding arity nor keep over-attached brace-shaped
+    // body content out of ordinary body reflow. A genuinely pending mandatory
+    // argument remains an indented header continuation.
+    ("environment_argument_comment_slots", WrapMode::Reflow, 80),
     // Locally defined delimiter aliases inherit the target environment's list
     // and math-grid layout, nest structurally, and stay ordinary commands when
     // no closer proves the pair.

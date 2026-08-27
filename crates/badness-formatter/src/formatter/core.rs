@@ -23,8 +23,8 @@ use crate::parser::{LatexFlavor, parse_with_declarations, parse_with_flavor};
 use crate::semantic::expl3::{StatementMap, segment_expl_statements};
 use crate::semantic::tikz::statement_glue;
 use crate::semantic::{
-    ArgKind, ArgumentDomain, ContentKind, DelimiterRole, MathClass, SignatureDb, Signatures, expl3,
-    match_arg_slot, match_verbatim_arg_slot, math_atoms, scan_definitions,
+    ArgKind, ArgSpec, ArgumentDomain, ContentKind, DelimiterRole, MathClass, SignatureDb,
+    Signatures, expl3, match_arg_slot, match_verbatim_arg_slot, math_atoms, scan_definitions,
 };
 use crate::syntax::{
     SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, is_collapsible_trivia, is_param_digit,
@@ -5549,7 +5549,6 @@ struct BeginParts {
 /// exactly as the generic path would.
 fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
     let sig = cx.signatures.environment_at(begin);
-    let arity = sig.as_ref().map(|sig| sig.args.len()).unwrap_or(0);
     let mut has_comment = false;
     let mut has_margin = false;
     for token in begin
@@ -5563,18 +5562,17 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
             _ => {}
         }
     }
-    if has_margin || (has_comment && arity > 0) {
+    if has_margin {
         return BeginParts {
-            header: if has_margin {
-                lower_node(begin, cx)
-            } else {
-                lower_commented_begin(begin, cx, arity)
-            },
+            header: lower_node(begin, cx),
             tail: Vec::new(),
         };
     }
 
     let args = sig.as_ref().map(|sig| &*sig.args).unwrap_or(&[]);
+    if has_comment && !args.is_empty() {
+        return lower_commented_begin(begin, cx, args);
+    }
     let elements: Vec<SyntaxElement> = begin.children_with_tokens().collect();
     let mut head: Vec<Ir> = Vec::new();
     let mut slot = 0usize;
@@ -5697,67 +5695,131 @@ fn attached_arg_kind(element: &SyntaxElement) -> Option<ArgKind> {
 }
 
 /// Lower a declared `\begin` header containing a comment without letting the
-/// comment detach or consume a later argument. When a comment trails one argument
-/// and the next outstanding argument is mandatory, that group is a structural
-/// header continuation and receives one indent. The brace gate matters: TeX skips
-/// whitespace while scanning a mandatory argument, whereas inserting indentation
-/// before an optional `[…]` can change argument recognition.
-fn lower_commented_begin(begin: &SyntaxNode, cx: LowerCtx<'_>, arity: usize) -> Ir {
+/// comment detach or consume a later argument. Argument matching mirrors the
+/// ordinary [`lower_begin`] path: omitted optional slots are skipped, a pending
+/// required-slot mismatch demotes the remaining groups, and content past the
+/// completed header becomes [`BeginParts::tail`] for ordinary body reflow.
+///
+/// When a comment trails one argument and the next matched argument is mandatory,
+/// that group is a structural header continuation and receives one indent. The
+/// brace gate matters: TeX skips whitespace while scanning a mandatory argument,
+/// whereas inserting indentation before an optional `[…]` can change argument
+/// recognition.
+fn lower_commented_begin(begin: &SyntaxNode, cx: LowerCtx<'_>, args: &[ArgSpec]) -> BeginParts {
     let elements: Vec<SyntaxElement> = begin.children_with_tokens().collect();
-    let mut args_seen = 0usize;
+    let mut declared = vec![false; elements.len()];
+    let mut required_brace = vec![false; elements.len()];
+    let mut slot = 0usize;
+    let mut signature_matches = true;
 
     for (i, element) in elements.iter().enumerate() {
-        if matches!(element, SyntaxElement::Node(node) if matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))
-            && args_seen < arity
-        {
-            args_seen += 1;
-            continue;
-        }
-        let SyntaxElement::Token(comment) = element else {
+        let Some(kind) = attached_arg_kind(element) else {
             continue;
         };
-        if comment.kind() != SyntaxKind::COMMENT || args_seen >= arity {
-            continue;
+        let spec = signature_matches
+            .then(|| match_arg_slot(args, &mut slot, kind))
+            .flatten();
+        if spec.is_none() && slot < args.len() {
+            signature_matches = false;
         }
-
-        let trails_argument = elements[..i]
-            .iter()
-            .rev()
-            .find_map(|previous| match previous {
-                SyntaxElement::Token(token) if token.kind() == SyntaxKind::WHITESPACE => None,
-                SyntaxElement::Node(node)
-                    if matches!(node.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
-                {
-                    Some(true)
-                }
-                _ => Some(false),
-            })
-            == Some(true);
-        if !trails_argument {
-            continue;
+        if let Some(spec) = spec {
+            declared[i] = true;
+            required_brace[i] = spec.required && kind == ArgKind::Brace;
         }
-
-        let mut next = i + 1;
-        let mut has_newline = false;
-        while let Some(SyntaxElement::Token(token)) = elements.get(next) {
-            if !is_collapsible_trivia(token.kind()) {
-                break;
-            }
-            has_newline |= token.kind() == SyntaxKind::NEWLINE;
-            next += 1;
-        }
-        if !has_newline
-            || !matches!(elements.get(next), Some(SyntaxElement::Node(node)) if node.kind() == SyntaxKind::GROUP)
-        {
-            continue;
-        }
-
-        let prefix = Ir::concat(lower_element_stream(elements[..=i].iter().cloned(), cx));
-        let continuation = Ir::concat(lower_element_stream(elements[i + 1..].iter().cloned(), cx));
-        return Ir::concat([prefix, Ir::indent(continuation)]);
     }
 
-    lower_node(begin, cx)
+    let split = elements
+        .iter()
+        .enumerate()
+        .find_map(|(i, element)| {
+            let SyntaxElement::Token(token) = element else {
+                return None;
+            };
+            if !is_collapsible_trivia(token.kind()) {
+                return None;
+            }
+
+            let mut end = i;
+            let mut newlines = 0usize;
+            while let Some(SyntaxElement::Token(token)) = elements.get(end) {
+                if !is_collapsible_trivia(token.kind()) {
+                    break;
+                }
+                newlines += usize::from(token.kind() == SyntaxKind::NEWLINE);
+                end += 1;
+            }
+            if declared.get(end).copied().unwrap_or(false)
+                || (newlines == 0
+                    && matches!(
+                        elements.get(end),
+                        Some(SyntaxElement::Token(token)) if token.kind() == SyntaxKind::COMMENT
+                    ))
+            {
+                None
+            } else {
+                Some(i)
+            }
+        })
+        .unwrap_or(elements.len());
+
+    let header_elements = &elements[..split];
+    let header = header_elements
+        .iter()
+        .enumerate()
+        .find_map(|(i, element)| {
+            let SyntaxElement::Token(comment) = element else {
+                return None;
+            };
+            if comment.kind() != SyntaxKind::COMMENT {
+                return None;
+            }
+
+            let trails_argument =
+                header_elements[..i]
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(index, previous)| match previous {
+                        SyntaxElement::Token(token) if token.kind() == SyntaxKind::WHITESPACE => {
+                            None
+                        }
+                        SyntaxElement::Node(_) => Some(declared[index]),
+                        _ => Some(false),
+                    })
+                    == Some(true);
+            if !trails_argument {
+                return None;
+            }
+
+            let mut next = i + 1;
+            let mut has_newline = false;
+            while let Some(SyntaxElement::Token(token)) = header_elements.get(next) {
+                if !is_collapsible_trivia(token.kind()) {
+                    break;
+                }
+                has_newline |= token.kind() == SyntaxKind::NEWLINE;
+                next += 1;
+            }
+            if !has_newline || !required_brace.get(next).copied().unwrap_or(false) {
+                return None;
+            }
+
+            let prefix = Ir::concat(lower_element_stream(
+                header_elements[..=i].iter().cloned(),
+                cx,
+            ));
+            let continuation = Ir::concat(lower_element_stream(
+                header_elements[i + 1..].iter().cloned(),
+                cx,
+            ));
+            Some(Ir::concat([prefix, Ir::indent(continuation)]))
+        })
+        .unwrap_or_else(|| Ir::concat(lower_element_stream(header_elements.iter().cloned(), cx)));
+
+    BeginParts {
+        header,
+        tail: elements[split..].to_vec(),
+    }
 }
 
 /// True if `node` (an `ENVIRONMENT`) names a list environment the signature DB

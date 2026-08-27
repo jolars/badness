@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 282 existing fixture slugs. **Re-measure before trusting
+Measured against the 283 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -232,8 +232,10 @@ Candidates not yet checked against a fresh count:
 1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` and
    `environment_leading_body_command` and
-   `environment_keyval_group_splits_entries` under Done); 38 and 25 slugs now
-   match `env`/`arg`, so verify against current slugs before picking.
+   `environment_keyval_group_splits_entries` under Done); 39 and 26 slugs now
+   match `env`/`arg`, so verify against current slugs before picking. The next
+   distinct surveyed argument shape is an escaped delimiter (`\{…\}` or
+   `\[…\]`) inside a declared environment argument.
 
 `items` and bare/named brace groups are no longer thin; re-measure before
 returning either family to the ranked backlog.
@@ -323,6 +325,19 @@ before a following optional can change whether TeX recognizes it. Default
 latexindent corroborated the mandatory continuation indent and preserved the
 comment boundary; its retention of authored breaks in the no-comment control was
 an explained divergence from Badness's formatter-owned reflow.
+
+Done: positional slots in commented environment headers
+(`environment_argument_comment_slots`) — `lower_commented_begin` mirrors the
+ordinary `lower_begin` path: omitted optional slots are skipped while matching
+declared arguments, and separated brace-shaped content after the completed
+header becomes body and splices into its leading prose reflow. A trailing comment
+remains on the header. A genuinely pending mandatory brace argument stays as an
+indented header continuation; an optional continuation never gains indentation.
+Default latexindent corroborated the header-comment attachment and one body
+indent for every shape, and preserved the already-inline body join. Its retention
+of the authored break between the body group and following prose in the two
+broken controls was an explained divergence from Badness's formatter-owned
+reflow. No unexplained divergence surfaced.
 
 Done: omitted optional environment slots
 (`environment_omitted_optional_slots`) — `lower_begin`'s ordinary path matches

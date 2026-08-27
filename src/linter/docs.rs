@@ -231,14 +231,30 @@ pub fn render_rule_doc(rule: &dyn Rule) -> String {
     )
 }
 
-/// Render the reference section for the rule with `id`, or `None` if no built-in
-/// LaTeX rule has that id. Backs `badness lint --explain <rule>`, reusing the
-/// same live-linted rendering as the docs page.
+/// Render the reference section for a current or retired LaTeX rule with `id`,
+/// or `None` if the id is unknown. Backs `badness lint --explain <rule>`, reusing
+/// the same live-linted rendering as the docs page for current rules.
 pub fn explain_rule(id: &str) -> Option<String> {
     all_rules()
         .iter()
         .find(|rule| rule.id() == id)
         .map(|rule| render_rule_doc(rule.as_ref()))
+        .or_else(|| retired_rule_doc(id))
+}
+
+fn retired_rule_doc(id: &str) -> Option<String> {
+    match id {
+        "mismatched-delimiter" => Some(String::from(
+            "## `mismatched-delimiter`\n\n\
+             Retired. TeX permits any valid delimiter glyph after either `\\left` \
+             or `\\right`, including reversed and same-facing pairs such as \
+             `\\left] ... \\right[` and `\\left] ... \\right]`. Delimiter \
+             orientation therefore cannot prove an error, and the rule produced \
+             false positives. The id remains accepted in `select` and `ignore` \
+             for configuration compatibility, but it emits no diagnostics.\n",
+        )),
+        _ => None,
+    }
 }
 
 /// The full `linter-rules.md` reference page: a static preamble, one generated

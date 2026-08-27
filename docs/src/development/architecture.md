@@ -1414,8 +1414,7 @@ unicode-math classifies ordinary `/` as `Ord`. The formatter preserves a fully
 glued slash (`a/b`) but symmetrizes a gap on either side (`a/ b` or `a /b`) to
 `a / b` in both policies. Delimiter depth and unary-after-opener detection use
 the classifier's separate delimiter role, not parallel string tables. The
-ellipsis and mismatched-delimiter lints consume the same facts but apply their
-own policies.
+ellipsis lint consumes the same facts but applies its own policy.
 
 ### Conditionals
 

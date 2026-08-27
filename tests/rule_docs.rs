@@ -12,7 +12,7 @@ use std::path::Path;
 use badness::linter::docs::{
     demo_diagnostics_with, explain_rule, render_reference_page, render_rule_doc,
 };
-use badness::linter::rules::{ALL_RULE_IDS, all_rules};
+use badness::linter::rules::{ALL_RULE_IDS, RETIRED_RULE_IDS, all_rules};
 
 /// Pin the rendered section for every rule. Any change to a rule's diagnostic or
 /// fix that alters its page fails here before the docs go stale.
@@ -62,11 +62,11 @@ fn documented_examples_actually_trigger() {
     }
 }
 
-/// `lint --explain <rule>` resolves every built-in rule id and rejects unknown
-/// ones, so the CLI help surface stays in step with the registry.
+/// `lint --explain <rule>` resolves every current or retired rule id and rejects
+/// unknown ones, so the CLI help surface stays in step with the registries.
 #[test]
 fn explain_resolves_every_rule() {
-    for id in ALL_RULE_IDS {
+    for id in ALL_RULE_IDS.iter().chain(RETIRED_RULE_IDS) {
         let doc = explain_rule(id).unwrap_or_else(|| panic!("no explanation for `{id}`"));
         assert!(doc.contains(id), "explanation for `{id}` omits its id");
     }

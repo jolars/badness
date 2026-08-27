@@ -31,7 +31,7 @@
 //! unreported (a false negative), which the tenets prefer over warning on the
 //! `>{$}` that is the whole reason the gate is silent. No autofix: the fix could
 //! be inserting a closer anywhere, or deleting a stray opener — ambiguous by
-//! nature (mirrors `mismatched-delimiter`).
+//! nature.
 
 use std::path::PathBuf;
 

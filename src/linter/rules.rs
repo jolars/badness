@@ -37,7 +37,6 @@ pub mod invalid_macrocode_frame;
 pub mod label_before_caption;
 pub mod makeat_macro;
 pub mod math_operator_name;
-pub mod mismatched_delimiter;
 pub mod missing_nonbreaking_space;
 pub mod missing_provides;
 pub mod missing_required_argument;
@@ -73,7 +72,6 @@ pub use invalid_macrocode_frame::InvalidMacrocodeFrame;
 pub use label_before_caption::LabelBeforeCaption;
 pub use makeat_macro::MakeatMacro;
 pub use math_operator_name::MathOperatorName;
-pub use mismatched_delimiter::MismatchedDelimiter;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
 pub use missing_provides::MissingProvides;
 pub use missing_required_argument::MissingRequiredArgument;
@@ -784,7 +782,6 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(StraightQuotes),
         Box::new(SwallowedSpace),
         Box::new(SpaceBeforeCommand),
-        Box::new(MismatchedDelimiter),
         Box::new(DashLength),
         Box::new(TimesVariable),
         Box::new(MathOperatorName),
@@ -877,7 +874,6 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "straight-quotes",
     "swallowed-space",
     "space-before-command",
-    "mismatched-delimiter",
     "dash-length",
     "times-variable",
     "math-operator-name",
@@ -896,7 +892,14 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "label-before-caption",
 ];
 
-/// Every known built-in rule id across **both** linters (LaTeX ∪ BibTeX).
+/// Retired LaTeX rule ids that remain recognized in configuration.
+///
+/// Retaining these no-op ids avoids turning an otherwise valid `select` or
+/// `ignore` entry into an unknown-rule warning when a rule is withdrawn because
+/// it cannot distinguish errors from valid input.
+pub const RETIRED_RULE_IDS: &[&str] = &["mismatched-delimiter"];
+
+/// Every current rule id across **both** linters (LaTeX ∪ BibTeX).
 ///
 /// The CLI lints `.tex` and `.bib` files in one pass and folds their findings into
 /// a single diagnostic stream filtered by one [`RuleSelection`], so the selectable
@@ -904,9 +907,19 @@ pub const ALL_RULE_IDS: &[&str] = &[
 /// registries. Without the bib half, every bib finding's id reads as "not active"
 /// and the CLI silently drops it (the LSP, which doesn't post-filter, still shows
 /// them — the source of the CLI/LSP divergence).
-pub fn all_known_rule_ids() -> impl Iterator<Item = &'static str> {
+fn all_current_rule_ids() -> impl Iterator<Item = &'static str> {
     ALL_RULE_IDS.iter().copied().chain(
         crate::bib::linter::ALL_BIB_RULE_IDS
+            .iter()
+            .copied()
+            .filter(|id| !ALL_RULE_IDS.contains(id)),
+    )
+}
+
+/// Every current or retired rule id recognized by configuration and `--explain`.
+pub fn all_known_rule_ids() -> impl Iterator<Item = &'static str> {
+    all_current_rule_ids().chain(
+        RETIRED_RULE_IDS
             .iter()
             .copied()
             .filter(|id| !ALL_RULE_IDS.contains(id)),
@@ -931,10 +944,11 @@ pub const PARSE_RULE_ID: &str = "parse";
 /// the diagnostics `lint_document` already produced without changing that shared
 /// entry point's signature. The semantics are:
 ///
-/// 1. Base set = the ids in `select` when it is `Some`, else every built-in rule.
+/// 1. Base set = the current ids in `select` when it is `Some`, else every current
+///    built-in rule. Retired ids remain accepted as inert configuration entries.
 /// 2. Subtract anything in `ignore`.
-/// 3. Unknown ids in `select`/`ignore` (not in [`ALL_RULE_IDS`]) are returned via
-///    the second tuple element so the caller can surface them; they do not error.
+/// 3. Unknown ids in `select`/`ignore` are returned via the second tuple element
+///    so the caller can surface them; they do not error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleSelection {
     active: Vec<&'static str>,
@@ -951,10 +965,10 @@ impl RuleSelection {
             }
         }
         let base: Vec<&'static str> = match select {
-            Some(picks) => all_known_rule_ids()
+            Some(picks) => all_current_rule_ids()
                 .filter(|id| picks.iter().any(|p| p == id))
                 .collect(),
-            None => all_known_rule_ids().collect(),
+            None => all_current_rule_ids().collect(),
         };
         let active = base
             .into_iter()
@@ -967,7 +981,7 @@ impl RuleSelection {
     /// with no config (the LSP, the library API).
     pub fn all() -> Self {
         Self {
-            active: all_known_rule_ids().collect(),
+            active: all_current_rule_ids().collect(),
         }
     }
 
@@ -986,6 +1000,20 @@ mod tests {
     fn registry_and_id_list_agree() {
         let ids: Vec<&str> = all_rules().iter().map(|r| r.id()).collect();
         assert_eq!(ids, ALL_RULE_IDS);
+    }
+
+    #[test]
+    fn retired_rule_ids_remain_known_but_unregistered() {
+        let registered: Vec<&str> = all_rules().iter().map(|rule| rule.id()).collect();
+        for id in RETIRED_RULE_IDS {
+            assert!(
+                !registered.contains(id),
+                "retired rule `{id}` is registered"
+            );
+            let (selection, unknown) = RuleSelection::resolve(Some(&[id.to_string()]), &[]);
+            assert!(unknown.is_empty(), "retired rule `{id}` is unknown");
+            assert!(!selection.is_active(id), "retired rule `{id}` is active");
+        }
     }
 
     // A rule that ever produces an autofix must report `emits_fix()`, or the

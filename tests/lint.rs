@@ -386,19 +386,19 @@ fn inert_suppression_reports_a_dtx_documentation_line() {
 
 #[test]
 fn stylistic_rules_collected_in_document_order() {
-    // An obsolete environment, a `$$` display, and a reversed `\left`/`\right`
-    // pair — all surface, sorted by position.
+    // An obsolete environment, a `$$` display, and a short numeric range all
+    // surface, sorted by position.
     let src = "\
 \\begin{eqnarray}a&=&b\\end{eqnarray}
 $$x = y$$
-$\\left) a \\right| $
+See pages 5-10.
 ";
     assert_eq!(
         lint(src),
         vec![
             ("obsolete-environment", Severity::Warning),
             ("dollar-display-math", Severity::Warning),
-            ("mismatched-delimiter", Severity::Warning),
+            ("dash-length", Severity::Warning),
         ]
     );
 }
@@ -409,6 +409,19 @@ fn modern_constructs_have_no_findings() {
 \\begin{align}a &= b\\end{align}
 \\[x = y\\]
 $\\left( a \\right] $
+";
+    assert!(lint(src).is_empty(), "got: {:?}", lint(src));
+}
+
+#[test]
+fn left_right_delimiter_orientation_is_not_linted() {
+    // TeX permits valid delimiter glyphs after either marker regardless of
+    // visual orientation. Reversed and same-facing glyphs can be intentional
+    // notation, so orientation alone cannot prove an authoring error.
+    let src = "\
+$\\left] 0, c_m \\right[$
+$\\left] 0, c_m \\right]$
+$\\left) 0, c_m \\right($
 ";
     assert!(lint(src).is_empty(), "got: {:?}", lint(src));
 }

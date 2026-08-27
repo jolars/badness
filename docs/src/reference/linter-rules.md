@@ -497,29 +497,6 @@ warning: space-before-command
   |                  ^ spurious space before `\footnote`; delete it so no stray space is typeset before the command
 ```
 
-## `mismatched-delimiter`
-
-Flag a `\left ... \right` pair whose delimiter glyphs point the wrong way -- a closing glyph opening the pair, or an opening glyph closing it (`\left) ... \right(`). Deliberately conservative: only an *orientation* error is flagged, never a mere opener/closer mismatch, since half-open intervals like `\left( ... \right]` are legitimate. Structural faults (a missing `\right`) are reported by the parser, not this rule. No autofix: the intended glyphs are ambiguous.
-
-A `\left`/`\right` pair whose glyphs point the wrong way:
-
-```tex
-$\left) x \right($
-```
-
-```text
-warning: mismatched-delimiter
- --> example.tex:1:7
-  |
-1 | $\left) x \right($
-  |       ^ `\left)` uses a closing delimiter where an opening one is expected
-warning: mismatched-delimiter
- --> example.tex:1:17
-  |
-1 | $\left) x \right($
-  |                 ^ `\right(` uses an opening delimiter where a closing one is expected
-```
-
 ## `dash-length`
 
 Flag a dash of the wrong length for its context (ChkTeX 8). LaTeX sets a hyphen from `-`, an en dash from `--`, and an em dash from `---`. Between two numbers a range takes an en dash, so `5-10` or `5---10` is flagged with an **unsafe** fix to `--` (unsafe because it changes the typeset glyph and a hyphen between numbers is occasionally intentional). Between two words an en dash (`--`) is almost always a mistake, but whether a hyphen or an em dash was meant is ambiguous, so it is reported **without** a fix -- except when it joins coordinate proper names (`Barzilai--Borwein`, `Newton--Raphson`), detected by an uppercase first letter on either flank, where the en dash is correct and the finding is suppressed. To stay conservative the rule only inspects a dash run that sits inside a single word with content on both sides and is the only dash run in that word, so dates (`2020-01-15`), ISBNs, spaced dashes, and option flags (`--verbose`) are left alone. Column spans in rule commands (`\cline{1-3}`, `\cmidrule(lr){2-3}`) and key arguments (`\label{fig:1-3}`, `\cite{smith2020-1}`) are specs and opaque identifiers rather than typeset ranges, so they are skipped too. Comments, verbatim, and math are never touched.

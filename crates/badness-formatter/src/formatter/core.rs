@@ -2694,19 +2694,24 @@ fn reflow_elements_checked(
                     line_all_commands = true;
                     line_has_content = false;
                     prev_was_block = true;
-                    // An environment is a complete structural block, so prose after
-                    // its closer starts a fresh line whether the source gap was a
-                    // space or newline. A block-level statement whose lowering forced
-                    // a break (a `%` bound to it as a `DOC_COMMENT`, a comment inside
-                    // a title, a multi-line `\title` body) closes its line for the
-                    // same reason. Everything else that lands here — an
-                    // un-signatured command, a glued block command, `\input`'s bare
-                    // filename shape — leaves the line open so following content can
-                    // ride it (the `after_block` paths).
-                    prev_block_closes_line =
-                        is_block_stmt
-                            || section_label_closes_line
-                            || child.kind() == SyntaxKind::ENVIRONMENT;
+                    // Environments and display math are complete structural blocks,
+                    // so prose after their closers starts a fresh line whether the
+                    // source gap was a space or newline. Restrict display math to
+                    // genuine prose: the `Statement` path also lowers opaque group
+                    // bodies, where breaking a glued suffix would add a meaningful
+                    // space token. A block-level statement whose lowering forced a
+                    // break (a `%` bound to it as a `DOC_COMMENT`, a comment inside a
+                    // title, a multi-line `\title` body) closes its line for the same
+                    // reason. Everything else that lands here — an un-signatured
+                    // command, a glued block command, `\input`'s bare filename shape
+                    // — leaves the line open so following content can ride it (the
+                    // `after_block` paths).
+                    let display_math_closes_prose = child.kind() == SyntaxKind::DISPLAY_MATH
+                        && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg);
+                    prev_block_closes_line = is_block_stmt
+                        || section_label_closes_line
+                        || child.kind() == SyntaxKind::ENVIRONMENT
+                        || display_math_closes_prose;
                     if is_section_boundary && !next_nontrivia_is_label(&elements, idx) {
                         b.separate_section();
                     } else if section_label_closes_line {

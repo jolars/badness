@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 280 existing fixture slugs. **Re-measure before trusting
+Measured against the 281 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -232,7 +232,7 @@ Candidates not yet checked against a fresh count:
 1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` and
    `environment_leading_body_command` and
-   `environment_keyval_group_splits_entries` under Done); 36 and 24 slugs now
+   `environment_keyval_group_splits_entries` under Done); 37 and 25 slugs now
    match `env`/`arg`, so verify against current slugs before picking.
 
 `items` and bare/named brace groups are no longer thin; re-measure before
@@ -400,6 +400,16 @@ half of the prose-argument TODO while leaving signature-table widening open.
 Default latexindent preserved the authored breaks (explained divergence: it
 does not remove breaks), had no opinion on an inline space, and corroborated the
 comment barrier.
+
+Done: display math amid prose (`display_math_prose_boundaries`) — a nonempty
+display-math block closes its line before following content under ordinary and
+proven-prose reflow; a trailing comment still rides the closer. Opaque argument
+paths deliberately preserve a glued suffix because inserting whitespace there
+could change the argument's token sequence. Default latexindent preserved the
+inline prose spellings (explained divergence: it does not add breaks),
+corroborated the already-expanded prose and opaque-argument shapes, and
+preserved the glued opaque suffix without offering an opinion on whether to
+break it.
 
 Skip constructs whose corpus family is currently a known failure until the
 underlying bug lands (`oneSentencePerLine` and `commands/figureValign` both wait

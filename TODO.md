@@ -287,7 +287,7 @@ sources below are missing.
   out — that is where our rule is usually wrong. Run it at default settings
   (`latexindent probe.tex`, no `-s`) on a hand-authored probe; the committed
   `*-mod*.tex` files are one YAML stack's answer with `-m` on, not its own
-  judgment. Measured gaps against the 280 existing
+  judgment. Measured gaps against the 281 existing
   slugs: `items` (157 files) and bare/named brace groups are no longer thin;
   re-measure before trusting any gap list here. Beamer item
   overlays are covered by `list_item_overlay_prefix`. `mand-args` /
@@ -313,6 +313,9 @@ sources below are missing.
   `environment_inline_prose_boundaries` pins that an environment expanded as a
   block closes its line before following prose, removing the prior space-versus-
   newline dependency while keeping a trailing comment on the closer;
+  `display_math_prose_boundaries` pins the analogous boundary for display math
+  in ordinary and proven prose, while opaque arguments preserve a glued suffix
+  because inserting whitespace could change their token sequence;
   `environment_keyval_group_splits_entries` pins that tabularray's curated
   mandatory inner specification segments at top-level commas under width while
   nested commas stay sealed and comment-bearing groups take the shared keyval

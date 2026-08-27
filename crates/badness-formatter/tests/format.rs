@@ -530,6 +530,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // the author separated the closer with a space or newline. A trailing comment
     // still rides the closer because relocating it changes TeX spacing and binding.
     ("environment_inline_prose_boundaries", WrapMode::Reflow, 80),
+    // Display math is a complete block in prose, so following prose starts a
+    // fresh line while a trailing comment still rides the closer. Opaque
+    // arguments retain glued suffix boundaries because inserting whitespace
+    // there could change the argument's token sequence.
+    ("display_math_prose_boundaries", WrapMode::Reflow, 80),
     // Declared arguments ordinarily glue onto the `\begin` header. A trailing
     // comment is a semantic barrier: a following mandatory argument stays in
     // the header but moves to an indented continuation line, where the comment

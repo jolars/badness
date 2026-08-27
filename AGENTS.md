@@ -197,6 +197,9 @@ comparison, not a byte target.
 - In `reflow_elements`, make an environment close its line before following
   prose; a trailing comment still rides the closer because moving it changes
   TeX spacing and comment binding.
+- In `reflow_elements`, make display math close its line before following prose
+  only under `Prose` and `ProseArg`; opaque argument paths must preserve a glued
+  suffix, and a trailing comment still rides the closer.
 - In `lower_environment`, keep commands after a completed `BEGIN` header in the
   indented body, even when the author wrote them on the header line.
 - In `lower_begin`'s ordinary path, advance declared headers by positional

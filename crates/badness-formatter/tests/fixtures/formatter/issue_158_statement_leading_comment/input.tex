@@ -1,0 +1,24 @@
+\begin{tikzpicture}
+%
+\relax;
+\end{tikzpicture}
+
+\begin{scope}
+% first
+% second
+\draw (0,0) -- (1,1);
+\end{scope}
+
+\begin{tikzpicture}
+% long statement
+\draw[very thick, blue] (0,0) -- (1,1) -- (2,0) -- (3,1) -- cycle;
+\draw (0,0) % mid-statement
+-- (1,1);
+\relax;
+% next statement
+\relax;
+% conditional statement
+\iftrue x\fi;
+% fallback
+\tikzset{scale=1}
+\end{tikzpicture}

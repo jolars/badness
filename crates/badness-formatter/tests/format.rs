@@ -574,6 +574,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // safety claim, proven by `tests/typeset/statement_seams.tex`), and a run
     // with no `;` (`\tikzset`) keeps the authored-line fallback.
     ("statement_hang", WrapMode::Reflow, 40),
+    // A bound own-line comment is leading documentation, not the statement
+    // head: it and the head stay at body indentation, while width wraps and
+    // tails after genuine mid-statement comments still hang (issue #158).
+    ("issue_158_statement_leading_comment", WrapMode::Reflow, 40),
     // A `%` that trails `\begin{…}` on the same source line (the space-suppression
     // idiom) rides the `\begin` header instead of dropping to its own indented
     // line; a `%` the author put on its own line is left there.

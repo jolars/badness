@@ -368,6 +368,7 @@ fn format_root(
         in_dtx_doc_region: false,
         in_alignment_cell: false,
         absorbed_control_newline: None,
+        omitted_leading_comment: None,
         is_dtx: root
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
@@ -807,6 +808,10 @@ struct LowerCtx<'a> {
     /// while letting the existing structural [`Ir::hard_line`] spell its newline
     /// prevents a second, blank line before the closer (issue #141).
     absorbed_control_newline: Option<TextRange>,
+    /// A statement-leading [`SyntaxKind::DOC_COMMENT`] already emitted outside
+    /// the statement's hanging indent. Descending lowerers omit exactly this
+    /// node while retaining their ordinary command or conditional layout.
+    omitted_leading_comment: Option<TextRange>,
     /// Whether the document carries any `.dtx` documentation margin at all — the
     /// cheap short-circuit for the no-`.dtx` majority, so gates that would
     /// otherwise walk back to the start of a physical line
@@ -920,6 +925,11 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     // ranged path fall out of the one mechanism.
     if node.kind() != SyntaxKind::ROOT && cx.suppressed(node.text_range()) {
         return Ir::verbatim(node.text().to_string());
+    }
+    if node.kind() == SyntaxKind::DOC_COMMENT
+        && cx.omitted_leading_comment == Some(node.text_range())
+    {
+        return Ir::Nil;
     }
     if cx.is_dtx
         && node.kind() != SyntaxKind::ROOT
@@ -8180,24 +8190,73 @@ fn command_is_block(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// and what it connects, `at` and its coordinate, a coordinate and its
 /// operation, an operation and its argument — renders as a single space and
 /// never breaks, so a width wrap lands only at unit boundaries (idiomatically,
-/// before a path operator). The enclosing [`Ir::indent`] then hangs **every**
-/// continuation line — width wraps, post-comment lines, and block segments
-/// alike — one step under the statement head, so a wrapped `\node[…] at (2,3)`
-/// / `{…};` reads as a continuation rather than a sibling.
+/// before a path operator). The enclosing [`Ir::indent`] then hangs every
+/// continuation line after the statement head — width wraps, post-comment
+/// lines, and block segments alike — one step under it, so a wrapped
+/// `\node[…] at (2,3)` / `{…};` reads as a continuation rather than a sibling.
+/// A bound leading [`SyntaxKind::DOC_COMMENT`] is different: it documents the
+/// head rather than preceding it as statement content, so
+/// [`statement_leading_comment`] emits it outside the hang and the head remains
+/// at the body indentation (issue #158).
 ///
 /// Fixed point (Tier 1): the hang is *emitted*, never read. Statement extent
 /// re-derives from the terminating `;` on every parse, however the emitted
 /// layout breaks — an emitted wrap is leading line trivia to the next parse —
 /// and the interior reads only width, gluedness, comment presence, and
 /// non-trivia token text (the unit model), all preserved or content-derived.
+/// A peeled leading comment is re-emitted on its own line immediately above the
+/// head, so it rebinds as the same `DOC_COMMENT` on the next parse.
 /// So `fmt(fmt(x)) == fmt(x)` holds by structure, where the
 /// flush-continuation contract this replaces had to *forbid* the hang.
 fn lower_statement(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    Ir::indent(reflow_elements(
+    let Some(comment) = statement_leading_comment(node, cx) else {
+        return Ir::indent(reflow_elements(
+            node.children_with_tokens(),
+            cx,
+            ReflowKind::StatementInterior,
+        ));
+    };
+
+    let leading = comment
+        .children_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+        .filter(|token| token.kind() == SyntaxKind::COMMENT)
+        .map(|token| Ir::verbatim(token.text()));
+    let body_cx = LowerCtx {
+        omitted_leading_comment: Some(comment.text_range()),
+        ..cx
+    };
+    let body = reflow_elements(
         node.children_with_tokens(),
-        cx,
+        body_cx,
         ReflowKind::StatementInterior,
-    ))
+    );
+    Ir::concat([
+        Ir::join(Ir::hard_line(), leading),
+        Ir::hard_line(),
+        Ir::indent(body),
+    ])
+}
+
+/// The bound own-line comment at the front of a structural statement, if its
+/// enclosing construct is available to ordinary lowering. The parser keeps the
+/// comment inside the command or conditional it documents, and the statement
+/// correctly owns that construct; this positional read distinguishes that
+/// leading annotation from a genuine mid-statement comment. Its own-line status
+/// is a preserved predicate: [`lower_statement`] re-emits the separating hard
+/// line that makes it bind forward again.
+fn statement_leading_comment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<SyntaxNode> {
+    let construct = node.first_child()?;
+    if cx.suppressed(construct.text_range())
+        || cx.is_dtx && contains_indented_dtx_comment(&construct)
+    {
+        return None;
+    }
+    let comment = construct
+        .first_child()
+        .filter(|child| child.kind() == SyntaxKind::DOC_COMMENT)
+        .filter(|comment| comment.text_range().start() == node.text_range().start())?;
+    (!cx.suppressed(comment.text_range())).then_some(comment)
 }
 
 /// Pre-pass over a paragraph element stream: splice each `STATEMENT` wrapper's

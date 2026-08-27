@@ -18,6 +18,11 @@ pub(crate) enum Ir {
     Concat(Rc<[Ir]>),
     /// Flat mode: a single space. Break mode: newline + current indent.
     Line,
+    /// Flat mode: nothing. Break mode: newline + current indent. Fit measurement
+    /// conservatively reserves one column, like [`Ir::Line`], so changing a
+    /// whitespace-insensitive separator's visible flat style does not perturb
+    /// established break decisions.
+    TightLine,
     /// Flat mode: nothing. Break mode: newline + current indent.
     SoftLine,
     /// Always a newline + current indent, regardless of mode. Forces every
@@ -447,6 +452,10 @@ impl Ir {
         Ir::Line
     }
 
+    pub(crate) fn tight_line() -> Ir {
+        Ir::TightLine
+    }
+
     pub(crate) fn soft_line() -> Ir {
         Ir::SoftLine
     }
@@ -498,6 +507,7 @@ impl Ir {
             | Ir::ColumnZero(_)
             | Ir::ZeroWidth(_)
             | Ir::Line
+            | Ir::TightLine
             | Ir::SoftLine
             | Ir::IfBreak { .. }
             | Ir::Nil => false,
@@ -535,9 +545,13 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
     match ir {
         Ir::HardLine | Ir::EmptyLine => (true, None),
         Ir::Verbatim { force_break, .. } => (*force_break, None),
-        Ir::Text(_) | Ir::ColumnZero(_) | Ir::ZeroWidth(_) | Ir::Line | Ir::SoftLine | Ir::Nil => {
-            (false, None)
-        }
+        Ir::Text(_)
+        | Ir::ColumnZero(_)
+        | Ir::ZeroWidth(_)
+        | Ir::Line
+        | Ir::TightLine
+        | Ir::SoftLine
+        | Ir::Nil => (false, None),
         Ir::Concat(items) => {
             let (forced, rewritten) = saturate_slice(items);
             (forced.any, rewritten.map(Ir::Concat))
@@ -767,6 +781,7 @@ mod tests {
             | Ir::HardLine
             | Ir::EmptyLine
             | Ir::Line
+            | Ir::TightLine
             | Ir::SoftLine
             | Ir::Nil => {}
         }

@@ -877,9 +877,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // argument keyval (`ContentKind::Keyval`; `axis` via the CWL `%keyvals` mark).
     // The lexer ends a `WORD` at every control sequence, so `width=\figurewidth`
     // hands the splitter a word that *opens* with the comma closing that entry —
-    // it must still break there. A fitting bracket canonicalizes a glued comma
-    // to one space, matching the flat spelling of the newline emitted when it
-    // breaks; this keeps both spellings on the same width decision.
+    // it must still break there. A fitting bracket canonicalizes glued, spaced,
+    // and newline-separated commas without a space; every spelling therefore uses
+    // the same empty-flat/broken-newline separator and width decision.
     ("optional_keyval_splits_glued", WrapMode::Reflow, 80),
     // The mirror: a *textual* optional never gains a space, at any width. Compiling
     // both spellings shows `\item[red,green]`, a `\newcommand` default, and a
@@ -1325,9 +1325,9 @@ const PACKAGE_FIXTURES: &[(&str, &str)] = &[
     // A trailing comment on the explicit region-ending `\ExplSyntaxOff` remains
     // on that line instead of binding forward into the following definition.
     ("issue_132_expl_off_comment_definition", "sty"),
-    // A glued keyval comma must lower to the same flat separator that its broken
-    // rendering reparses as. Otherwise pass one can expand the bracket, while
-    // pass two sees the inserted newline as a space and collapses it (issue #121).
+    // A glued keyval comma and the newline emitted when it breaks must both
+    // normalize to the same empty-flat/broken-newline separator. Otherwise the
+    // two passes can disagree about whether the bracket fits (issue #121).
     ("issue_121_keyval_glued_fixed_point", "sty"),
     // expl3 code formatting, which the wrap mode never reaches:
     // inside an expl3 region (catcode-9 whitespace / catcode-10 `~`) the formatter

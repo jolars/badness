@@ -7658,11 +7658,12 @@ fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<I
 /// leave it on the generic inline path.
 ///
 /// The body is a plain Wadler group over its top-level comma-separated entries: flat
-/// when it fits the width, one key per line when it does not. The flat rendering is
-/// exactly the old collapsed form, so `\foo[a=1,\nb=2]` still formats as
-/// `\foo[a=1, b=2]` (issue #47) — a source line break inside `[…]` is incidental —
-/// while an over-long bracket now *expands* instead of silently overflowing, and the
-/// choice no longer depends on whether the author happened to break the line
+/// when it fits the width, one key per line when it does not. An unproven textual
+/// optional retains the collapsed gap, so `\foo[a=1,\nb=2]` formats as
+/// `\foo[a=1, b=2]` (issue #47). A proven keyval instead canonicalizes every flat
+/// separator without a space (`a=1,b=2`); either way, a source line break inside
+/// `[…]` is incidental. An over-long bracket *expands* instead of silently
+/// overflowing, and the choice no longer depends on where the author broke the line
 /// (`spans_multiple_lines` was the unsafe lone-newline predicate; see the
 /// trivia-invariant-layout section of `formatter.md`). The fit decision is this
 /// group's rest-aware measurement, so trailing same-line content (`]{c}`) counts
@@ -7819,7 +7820,7 @@ fn segment_delimited_body(
     open_kind: SyntaxKind,
     close_kind: SyntaxKind,
     cx: LowerCtx<'_>,
-    split_glued_commas: bool,
+    normalize_commas: bool,
 ) -> Option<GroupSegments> {
     let mut open = Ir::Nil;
     let mut close = Ir::Nil;
@@ -7856,7 +7857,11 @@ fn segment_delimited_body(
                     return None; // a blank-line `\par`: keep the block form
                 }
                 if open_entry && depth == 0 {
-                    parts.push(gap.separator());
+                    parts.push(if normalize_commas {
+                        tight_line()
+                    } else {
+                        gap.separator()
+                    });
                     splits += 1;
                     entry_open = false;
                 } else {
@@ -7869,7 +7874,7 @@ fn segment_delimited_body(
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::WORD && depth == 0 => {
-                splits += push_entry_word(t.text(), split_glued_commas, &mut parts, entry_open);
+                splits += push_entry_word(t.text(), normalize_commas, &mut parts, entry_open);
                 // A word ending in `,` closes its entry and opens an empty one.
                 open_entry = t.text().ends_with(',');
                 entry_open = !open_entry;
@@ -7893,10 +7898,10 @@ fn segment_delimited_body(
     // A trailing separator (`[a, b, ]`) would put the closing `]` two lines down.
     // Drop it — but an `Ir::Line` replaced authored whitespace above, and an
     // optional is textual, so that space token must survive as trailing padding
-    // (`[a, ]` and `[a,\n]` both keep it); a glued-comma `Ir::SoftLine` stood
+    // (`[a, ]` and `[a,\n]` both keep it); a normalized tight separator stood
     // for nothing and restores nothing.
     let mut dropped_gap = false;
-    while matches!(parts.last(), Some(Ir::Line | Ir::SoftLine)) {
+    while parts.last().is_some_and(is_segment_separator) {
         dropped_gap |= matches!(parts.last(), Some(Ir::Line));
         parts.pop();
         splits = splits.saturating_sub(1);
@@ -7913,7 +7918,7 @@ fn segment_delimited_body(
 }
 
 /// Push one body `WORD` onto `parts`, cutting it at each *interior* comma when
-/// `keyval` licenses it, and return how many separators were emitted. The comma
+/// `normalize_commas` licenses it, and return how many separators were emitted. The comma
 /// stays on the piece it terminates (`xmin=-5,` / `xmax=5,`), since it belongs to
 /// the key before it.
 ///
@@ -7923,19 +7928,19 @@ fn segment_delimited_body(
 /// a `WORD` at every control sequence, so a key list routinely hands us a word that
 /// opens with the comma closing the previous token's entry
 /// (`width=` `\figurewidth` `,xmin=-5,…`). Hence `entry_open`: whether the caller
-/// has already emitted content for the entry this word continues. A glued comma
-/// uses `Line`, not `SoftLine`: the broken spelling necessarily reparses its
-/// newline as a space gap, so using the same flat spelling before and after the
-/// break keeps width decisions at a fixed point (issue #121). The caller's
-/// whitespace-insensitivity proof (`Keyval` or `TokenList`) is what licenses
-/// introducing that otherwise-significant flat space.
+/// has already emitted content for the entry this word continues. Every proven
+/// whitespace-insensitive separator uses [`tight_line`]: it is empty when flat and
+/// an ordinary line break when broken. On the next pass that newline reaches the
+/// matching gap arm above and normalizes to the same conditional separator, keeping
+/// width decisions at a fixed point (issue #121). The caller's `Keyval` or
+/// `TokenList` proof is what licenses removing otherwise-significant whitespace.
 fn push_entry_word(
     text: &str,
-    split_glued_commas: bool,
+    normalize_commas: bool,
     parts: &mut Vec<Ir>,
     entry_open: bool,
 ) -> usize {
-    if !split_glued_commas || !text.contains(',') {
+    if !normalize_commas || !text.contains(',') {
         parts.push(Ir::verbatim(text));
         return 0;
     }
@@ -7949,7 +7954,7 @@ fn push_entry_word(
             continue; // an empty entry: let the comma ride on the next piece
         }
         if pushed > 0 {
-            parts.push(Ir::line());
+            parts.push(tight_line());
             splits += 1;
         }
         parts.push(Ir::verbatim(piece));
@@ -7959,12 +7964,25 @@ fn push_entry_word(
     }
     if start < text.len() {
         if pushed > 0 {
-            parts.push(Ir::line());
+            parts.push(tight_line());
             splits += 1;
         }
         parts.push(Ir::verbatim(&text[start..]));
     }
     splits
+}
+
+/// A comma-list separator that is glued in flat mode and breaks like an ordinary
+/// [`Ir::Line`] in break mode. Its conservative fit width preserves the surrounding
+/// layout's established break decisions while its rendering owns the no-space
+/// keyval style.
+fn tight_line() -> Ir {
+    Ir::tight_line()
+}
+
+/// Whether `ir` is a separator emitted by [`segment_delimited_body`].
+fn is_segment_separator(ir: &Ir) -> bool {
+    matches!(ir, Ir::Line | Ir::TightLine | Ir::SoftLine)
 }
 
 /// Whether `command`'s signature marks any argument the [`lower_command`] path
@@ -8347,7 +8365,7 @@ fn inline_token_list_atoms(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<Ir
                     let _ = peel_padding(&mut parts, Edge::Trailing);
                     atoms.last_mut().unwrap().push(open);
                     for part in parts {
-                        if matches!(part, Ir::Line | Ir::SoftLine) {
+                        if is_segment_separator(&part) {
                             atoms.push(Vec::new());
                         } else {
                             atoms.last_mut().unwrap().push(part);

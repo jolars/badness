@@ -538,6 +538,11 @@ impl Printer {
                     Mode::Flat | Mode::FlatPrefix => w.write_text(" "),
                     Mode::Break => w.newline(indent, prefix),
                 },
+                Ir::TightLine => {
+                    if mode == Mode::Break {
+                        w.newline(indent, prefix);
+                    }
+                }
                 Ir::SoftLine => {
                     if mode == Mode::Break {
                         w.newline(indent, prefix);
@@ -984,7 +989,7 @@ impl Printer {
                     }
                 }
                 Ir::HardLine | Ir::EmptyLine => return hug.then_some(col),
-                Ir::Line => {
+                Ir::Line | Ir::TightLine => {
                     col = col.saturating_add(1);
                     if measure != FlatMeasure::Footprint && col > self.line_width {
                         return None;
@@ -1285,7 +1290,7 @@ impl Printer {
                     }
                 }
                 Ir::HardLine | Ir::EmptyLine => return true,
-                Ir::Line => match mode {
+                Ir::Line | Ir::TightLine => match mode {
                     Mode::Flat | Mode::FlatPrefix => {
                         col += 1;
                         if col > self.line_width {
@@ -1402,6 +1407,26 @@ impl Printer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tight_line_renders_glued_but_keeps_the_line_fit_budget() {
+        let ir = Ir::group(Ir::concat([
+            Ir::text("aa"),
+            Ir::tight_line(),
+            Ir::text("b"),
+        ]));
+        let wide = Printer::new(FormatStyle {
+            line_width: 4,
+            ..FormatStyle::default()
+        });
+        let narrow = Printer::new(FormatStyle {
+            line_width: 3,
+            ..FormatStyle::default()
+        });
+
+        assert_eq!(wide.print(&ir), "aab");
+        assert_eq!(narrow.print(&ir), "aa\nb");
+    }
 
     /// A block that always breaks: `{`, an indented body, then `}`.
     fn block() -> Ir {

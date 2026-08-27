@@ -107,11 +107,11 @@ tasks:
       - ./scripts/aur_push.sh {{.CLI_ARGS}}
 
   check:
-    desc: Everything CI runs
+    desc: Core local checks, including the wasm build
     deps: [fmt-check, lint, test, smoke-scripts:test, wasm]
 
   wasm:
-    desc: Build the wasm-targeting crates for wasm32-unknown-unknown (embeddability guard, mirrors CI)
+    desc: Build the wasm-targeting crates for wasm32-unknown-unknown (local embeddability guard)
     cmds:
       - cargo build -p badness-parser -p badness-formatter -p badness-wasm --target wasm32-unknown-unknown
 

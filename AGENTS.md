@@ -39,15 +39,14 @@ Keep these boundaries intact:
 
 ## Development workflow
 
-- Prefer test-driven development.
-- Rust edition 2024 is used throughout. Keep the supported Rust 1.89 floor in
-  `workspace.package.rust-version`, its per-crate inheritance, and the MSRV CI
-  job in lockstep; `rust-toolchain.toml` separately pins the current development
-  and release compiler.
+- All crates in the main workspace use Rust edition 2024. Keep the supported
+  Rust 1.89 floor in `workspace.package.rust-version`, its per-crate inheritance,
+  and the MSRV CI job in lockstep; `rust-toolchain.toml` separately pins the
+  current development and release compiler.
 - Use `go-task` through `Taskfile.yml` for project tasks.
 - Run targeted tests while developing and `cargo fmt` before committing.
 - Keep Clippy warning-free. Run `task check` before handing off a substantial
-  change; it mirrors CI, including the wasm build.
+  change; it covers the core local checks, including a wasm build.
 - Keep fixture line endings aligned with `.gitattributes`, especially on
   Windows.
 
@@ -97,10 +96,8 @@ comparison, not a byte target.
 
 ### Cross-subsystem parser contracts
 
-- Keep `name_group` and `peek_end_name` aligned over the complete flat
-  environment name. Names may contain punctuation such as `@` and `*`, or span
-  lexer tokens at `_`, without changing environment pairing or formatter
-  framing.
+- Keep environment-name parsing and lookahead aligned over complete flat names;
+  punctuation and lexer-token boundaries must not affect pairing or framing.
 - Share expl3 toggle-name recognition with the formatter through
   `parser::lexer::expl_toggle`; the formatter owns positional layout gating.
 - Environment, conditional, and math pairing must preserve formatter safety and
@@ -138,8 +135,7 @@ comparison, not a byte target.
   edit generated artifacts by hand. `signatures.json`, `colors.json`, and
   `tikz_libraries.json` are curated data and may be edited directly.
 - When parser behavior changes, update tests, snapshots, losslessness checks,
-  these operational instructions when needed, and the parser rationale in
-  `docs/src/development/architecture.md`.
+  and the parser rationale in `docs/src/development/architecture.md`.
 
 ## Formatter
 
@@ -164,71 +160,30 @@ comparison, not a byte target.
   predicates are blank-line presence, comment presence or own-line status, and
   `.dtx` margin/guard structure.
 - Use normalized `Gap` APIs for width paths.
-- Keep colon-prefixed relations indivisible in math lowering, including when a
-  script makes the equals sign a separate structural atom; coalesce only across
-  a trivia-free boundary.
 - Intentional newline-shape reads are Tier 2 and require an explicit fixed-point
   argument and tests.
-- In `expand_inline_prose`, drop collapsible trivia before every matched argument
-  slot in ordinary prose and prose-argument reflow so a curated inline command's
-  argument chain stays glued; preserve it in code-like, preserve-mode, and
-  virtual `.dtx` margin streams, and keep a trailing comment as a hard barrier
-  because it consumes the following line end.
-- Keep paragraph-level sectioning commands paragraph-separated in
-  `reflow_elements`: emit one blank line before the whole command, including any
-  leading bound comment, and after any immediately following `\label` run. Keep
-  those labels directly below the heading; do not synthesize `\par` inside nested
-  argument or conditional structure.
-- In `lower_opaque_group`, preserve an authored newline immediately after a
-  `LINE_BREAK` only in a structurally plain, command-only text group; leave
-  inline, macro-like, same-line, and glued shapes on the ordinary fill. Keep
-  virtual `.dtx` documentation streams on their margin-owned path.
+- Treat comments as hard movement barriers when changing adjacent trivia; a
+  trailing comment consumes the following line ending.
 
 ### Reflow and structural safety
 
 - Make reflow safety structural and gate-driven; never use a file-kind default
   workaround.
-- Keep a complete Beamer `<overlay>` prefix glued to a list item's structural
-  marker in `item_overlay_marker_suffix`; the ordinary body still hangs from the
-  bare `\item ` column.
 - `.dtx` margin and guard escapes must fall back safely to preservation, and
   required `macrocode` framing bytes must remain literal.
 - Derive structural statement boundaries from parse structure under reflow.
-- In `reflow_elements`, make an environment close its line before following
-  prose; a trailing comment still rides the closer because moving it changes
-  TeX spacing and comment binding.
-- In `reflow_elements`, keep sibling environments on consecutive structural
-  frames without synthesizing a blank line; preserve authored paragraph breaks
-  and comments attached to a preceding closer.
-- In `reflow_elements`, make display math close its line before following prose
-  only under `Prose` and `ProseArg`; opaque argument paths must preserve a glued
-  suffix, and a trailing comment still rides the closer.
-- In `lower_environment`, keep commands after a completed `BEGIN` header in the
-  indented body, even when the author wrote them on the header line.
-- In `lower_begin`'s ordinary path, advance declared headers by positional
-  signature slots, not attached-node count; skip omitted optionals, but demote a
-  delimiter mismatch to ordinary glue boundaries so incomplete signatures
-  cannot reclassify text.
-- In `lower_begin`, route a declared `ContentKind::Keyval` slot through the
-  delimiter-appropriate segmented layout. Keep `tblr`/`longtblr`/`talltblr`
-  unmarked as `align`: their required group is a keyval list, not the raw column
-  specification that `column_alignments` reads; the structural ampersand router
-  still owns their grids.
-- In `lower_commented_begin`, match declared arguments by positional signature
-  slots: skipped optionals must not keep a completed header open, and
-  over-attached content after it returns as `BeginParts::tail` for body reflow.
-  Keep a genuinely pending mandatory argument after a trailing header comment
-  as an indented header continuation; never indent a following optional, where
-  whitespace can change argument recognition.
-- In `lower_environment`, keep an empty environment's `BEGIN` and `END` on
-  separate lines; collapsible body whitespace must not select another layout.
+- Close block-level environments and display math before following prose only
+  in prose-owned paths; opaque paths preserve glued suffixes, and trailing
+  comments stay attached to closers.
+- Match declared environment headers by positional signature slots, not
+  attached-node count. Skip omitted optionals; delimiter mismatches and content
+  beyond a completed header return to ordinary body layout.
+- Insert whitespace within an environment header only when positional matching
+  proves that argument recognition cannot change.
+- Route groups to meaning-specific layouts, such as keyval or alignment, only
+  with structural or curated-signature proof.
 - Keep interior statement wrapping unit-aware and meaning-safe. Underivable
   fallbacks may preserve authored lines but must remain idempotent.
-- Anchor a multiline environment used as a math atom at its rendered start
-  column with `Ir::align_current`; its closer must not fall back to the enclosing
-  display's base indentation.
-- In `render_alignment_rows`, pad terminated grid rows to the full grid width so
-  their `\\` markers align; leave unterminated rows unpadded.
 
 ### Formatter validation and linter boundary
 
@@ -338,6 +293,9 @@ comparison, not a byte target.
 ## Maintaining agent instructions
 
 - Keep this file action-oriented and below the 32 KiB project-instruction limit.
+- Update it only when a durable agent decision rule, cross-subsystem boundary,
+  or required validation workflow changes. A fixed regression alone belongs in
+  tests and does not warrant a new rule.
 - Do not turn it into a decision log, issue log, tutorial, or substitute for
   architecture documentation.
 - If a rule needs extended rationale, state the operational rule briefly here

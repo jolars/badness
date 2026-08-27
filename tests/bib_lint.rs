@@ -128,6 +128,25 @@ fn comment_directive_suppresses_following_entry() {
 }
 
 #[test]
+fn formatting_preserves_comment_directive_target_during_sort() {
+    let src = "\
+@comment{badness-lint skip unknown-field: intentional}
+@book{zulu, title={Z}, unknown={U}}
+@book{alpha, title={A}}
+";
+    let formatted = format(src).expect("formats");
+
+    assert!(
+        formatted.find("@book{zulu").unwrap() < formatted.find("@book{alpha").unwrap(),
+        "the directive target moved during formatting: {formatted}"
+    );
+    assert!(
+        !rules(&formatted).contains(&"unknown-field"),
+        "the directive no longer suppresses its target: {formatted}"
+    );
+}
+
+#[test]
 fn file_directive_suppresses_all() {
     let src = "\
 @comment{badness-lint skip-file: quiet}

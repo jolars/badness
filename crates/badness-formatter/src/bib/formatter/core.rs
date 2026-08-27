@@ -9,7 +9,8 @@
 //!   (BibTeX references them case-insensitively, so changing case is cosmetic).
 //! - **Layout:** one field per line, the field block indented one `indent_width`
 //!   step, the opening delimiter trailing the header and the closing delimiter
-//!   flush; exactly one blank line between top-level blocks.
+//!   flush; normally one blank line between top-level blocks. A structured lint
+//!   directive stays adjacent to the entry or region boundary it governs.
 //! - **`=` alignment:** field names are padded to the longest field name in the entry.
 //! - **Value delimiters:** in a regular field, a top-level `"…"` value piece is
 //!   rewritten to `{…}` when safe (balanced inner braces). A bare `LITERAL` (a macro
@@ -44,10 +45,12 @@ use std::collections::HashMap;
 
 use rowan::TextSize;
 
+use super::lint_directive_verb;
 use crate::bib::ast;
 use crate::bib::parse;
 use crate::bib::semantic::{BibFieldDb, FieldCategory, builtin};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
+use crate::directives::Verb;
 use crate::formatter::ir::Ir;
 use crate::formatter::printer::Printer;
 use crate::formatter::style::{FormatStyle, LineEnding, apply_line_ending, detect_line_ending};
@@ -159,15 +162,31 @@ struct Lower {
 }
 
 /// Lower the `ROOT`: each top-level block (entry / `@string` / `@preamble` /
-/// `@comment` / junk) on its own, separated by exactly one blank line. Bare ROOT
-/// trivia tokens are discarded — blank-line separation is re-emitted deterministically.
+/// `@comment` / junk) on its own, normally separated by exactly one blank line.
+/// A lint directive that opens or closes a node/region stays adjacent to the entry it
+/// governs. Bare ROOT trivia tokens are discarded — separation is re-emitted
+/// deterministically.
 fn lower_root(root: &SyntaxNode, cx: Lower) -> Ir {
     // Entries are sorted by cite key (within barrier-delimited segments); every other
     // block stays pinned. See `super::sort::sorted_blocks`.
-    let blocks = super::sort::sorted_blocks(root)
-        .into_iter()
-        .map(|node| lower_block(&node, cx));
-    Ir::join(Ir::empty_line(), blocks)
+    let blocks = super::sort::sorted_blocks(root);
+    let mut lowered = Vec::with_capacity(blocks.len().saturating_mul(2));
+    let mut previous_verb = None;
+    for (index, block) in blocks.iter().enumerate() {
+        let verb = lint_directive_verb(block);
+        if index > 0 {
+            let attached = matches!(previous_verb, Some(Verb::Skip | Verb::Off))
+                || matches!(verb, Some(Verb::On));
+            lowered.push(if attached {
+                Ir::hard_line()
+            } else {
+                Ir::empty_line()
+            });
+        }
+        lowered.push(lower_block(block, cx));
+        previous_verb = verb;
+    }
+    Ir::concat(lowered)
 }
 
 fn lower_block(node: &SyntaxNode, cx: Lower) -> Ir {

@@ -8,9 +8,11 @@
 
 use std::collections::HashMap;
 
+use super::lint_directive_verb;
 use crate::bib::ast;
 use crate::bib::semantic::{BibFieldDb, RequiredField};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
+use crate::directives::Verb;
 
 /// The `FIELD` children of `entry`, reordered into the canonical order for its entry
 /// type: the signature DB's **required-then-optional** sequence, with any field the DB
@@ -66,27 +68,52 @@ fn field_ranks<'a>(db: &'a BibFieldDb, etype: &str) -> HashMap<&'a str, usize> {
 /// barrier, it stays on the same side of every `@string` definition it began on, so
 /// defined-before-use is preserved, and `@preamble`/`@comment`/`JUNK` stay put.
 ///
+/// An entry targeted by a lint `skip` directive is pinned as another barrier. Moving
+/// another entry ahead of it would silently retarget the directive after formatting.
+///
 /// A segment containing any `crossref`/`xdata` field is left in source order — the
 /// conservative crossref guard (see [`segment_in_order`]).
 pub(super) fn sorted_blocks(root: &SyntaxNode) -> Vec<SyntaxNode> {
     let blocks: Vec<SyntaxNode> = root.children().collect();
+    let pinned = skip_targets(&blocks);
     let mut result: Vec<SyntaxNode> = Vec::with_capacity(blocks.len());
 
     let mut i = 0;
     while i < blocks.len() {
-        if blocks[i].kind() != SyntaxKind::ENTRY {
+        if blocks[i].kind() != SyntaxKind::ENTRY || pinned[i] {
             result.push(blocks[i].clone());
             i += 1;
             continue;
         }
         // Accumulate a maximal run of consecutive entries, then sort it.
         let start = i;
-        while i < blocks.len() && blocks[i].kind() == SyntaxKind::ENTRY {
+        while i < blocks.len() && blocks[i].kind() == SyntaxKind::ENTRY && !pinned[i] {
             i += 1;
         }
         result.extend(segment_in_order(&blocks[start..i]));
     }
     result
+}
+
+/// Mark regular entries targeted by lint `skip` directives. Every `@comment` entry is
+/// transparent to directive attachment, so multiple stacked directives—and even an
+/// ordinary structured comment between a directive and its target—lead to the same
+/// next meaningful block. Other block kinds are already fixed barriers and need no
+/// additional marker.
+fn skip_targets(blocks: &[SyntaxNode]) -> Vec<bool> {
+    let mut pinned = vec![false; blocks.len()];
+    let mut pending_skip = false;
+    for (index, block) in blocks.iter().enumerate() {
+        if block.kind() == SyntaxKind::COMMENT_ENTRY {
+            pending_skip |= matches!(lint_directive_verb(block), Some(Verb::Skip));
+            continue;
+        }
+        if pending_skip && block.kind() == SyntaxKind::ENTRY {
+            pinned[index] = true;
+        }
+        pending_skip = false;
+    }
+    pinned
 }
 
 /// One run of consecutive entries, sorted by cite key (case-insensitive, stable) —
@@ -196,6 +223,16 @@ mod tests {
         assert_eq!(ast::cite_key(&blocks[0]).unwrap().0, "zoo");
         assert_eq!(blocks[1].kind(), SyntaxKind::STRING_ENTRY);
         assert_eq!(ast::cite_key(&blocks[2]).unwrap().0, "apple");
+    }
+
+    #[test]
+    fn lint_skip_target_is_not_reordered() {
+        let keys = ordered_keys(
+            "@comment{badness-lint skip unknown-field}\n\
+             @misc{zulu, unknown = {U}}\n\
+             @misc{alpha, title = {A}}\n",
+        );
+        assert_eq!(keys, ["zulu", "alpha"]);
     }
 
     #[test]

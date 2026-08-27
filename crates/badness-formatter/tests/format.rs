@@ -806,6 +806,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("reflow_prose_arg_wraps", WrapMode::Reflow, 40),
     ("reflow_prose_arg_joins_short", WrapMode::Reflow, 80),
     ("reflow_prose_arg_optional_omitted", WrapMode::Reflow, 30),
+    ("inline_command_argument_glue", WrapMode::Reflow, 40),
     // Non-prose groups keep their *bytes* when they fit; width decides otherwise.
     // The over-width `\newcommand` body wraps at its authored gaps (the opener
     // stays glued — no break is invented at `{`), and the gapless `\label`

@@ -169,6 +169,11 @@ comparison, not a byte target.
   a trivia-free boundary.
 - Intentional newline-shape reads are Tier 2 and require an explicit fixed-point
   argument and tests.
+- In `expand_inline_prose`, drop collapsible trivia before every matched argument
+  slot in ordinary prose and prose-argument reflow so a curated inline command's
+  argument chain stays glued; preserve it in code-like, preserve-mode, and
+  virtual `.dtx` margin streams, and keep a trailing comment as a hard barrier
+  because it consumes the following line end.
 - Keep paragraph-level sectioning commands paragraph-separated in
   `reflow_elements`: emit one blank line before the whole command, including any
   leading bound comment, and after any immediately following `\label` run. Keep

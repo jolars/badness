@@ -1114,6 +1114,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             let flat = flatten_inline_prose(
                 flatten_statements(node.children_with_tokens().collect()),
                 cx,
+                false,
             );
             return Ir::concat(lower_prose_stream(flat.into_iter(), cx));
         }
@@ -2157,7 +2158,10 @@ fn reflow_elements_checked(
     } else {
         flatten_statements(elements)
     };
-    let elements: Vec<SyntaxElement> = flatten_inline_prose(elements, cx);
+    let glue_matched_args = !cx.in_dtx_doc_region
+        && !run_carries_doc_margin(&elements, cx)
+        && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg);
+    let elements: Vec<SyntaxElement> = flatten_inline_prose(elements, cx, glue_matched_args);
 
     // Inside one structural statement, gaps consult the TikZ unit model: a
     // unit-internal gap renders as a single space instead of a break
@@ -5970,7 +5974,7 @@ fn preserve_chunks(chunks: &[Vec<SyntaxElement>], cx: LowerCtx<'_>) -> Ir {
     let parts = chunks
         .iter()
         .map(|chunk| {
-            let flat = flatten_inline_prose(chunk.clone(), cx);
+            let flat = flatten_inline_prose(chunk.clone(), cx, false);
             let ir = Ir::concat(lower_prose_stream(flat.into_iter(), cx));
             let (_, ir) = peel_leading_break(ir);
             let (_, ir) = peel_trailing_break(ir);
@@ -8053,14 +8057,24 @@ fn flatten_statements(elements: Vec<SyntaxElement>) -> Vec<SyntaxElement> {
 /// `{`/`}` glue onto the adjacent words — so an inline footnote wraps as running
 /// text instead of exploding into a block. Non-prose arguments and the control
 /// word are kept verbatim; nested inline prose commands are expanded recursively.
-fn flatten_inline_prose(elements: Vec<SyntaxElement>, cx: LowerCtx<'_>) -> Vec<SyntaxElement> {
+/// `glue_matched_args` is enabled only in ordinary prose and prose-argument
+/// reflow. A code-like statement or preserve-mode stream keeps its
+/// argument-boundary trivia because flattening an inner command must not make an
+/// opaque parent group newly flat on the next pass. Virtual `.dtx` margin prose
+/// and other margin-carrying streams also keep it: the corpus gate shows that
+/// deleting the boundary there is not yet fixed-point stable.
+fn flatten_inline_prose(
+    elements: Vec<SyntaxElement>,
+    cx: LowerCtx<'_>,
+    glue_matched_args: bool,
+) -> Vec<SyntaxElement> {
     let mut out = Vec::new();
     for element in elements {
         match &element {
             SyntaxElement::Node(node)
                 if node.kind() == SyntaxKind::COMMAND && command_is_inline_prose(node, cx) =>
             {
-                expand_inline_prose(node, cx, &mut out);
+                expand_inline_prose(node, cx, glue_matched_args, &mut out);
             }
             _ => out.push(element),
         }
@@ -8070,15 +8084,30 @@ fn flatten_inline_prose(elements: Vec<SyntaxElement>, cx: LowerCtx<'_>) -> Vec<S
 
 /// Expand one inline prose command into `out` (see [`flatten_inline_prose`]): the
 /// control word and any non-prose argument are emitted verbatim, while each prose
-/// argument is spliced delimiter-and-body via [`splice_prose_group`]. Slot matching
-/// mirrors [`lower_command`] so an omitted optional does not misalign positions.
-fn expand_inline_prose(node: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<SyntaxElement>) {
+/// argument is spliced delimiter-and-body via [`splice_prose_group`]. At
+/// prose-reflow altitude, collapsible trivia before a matched argument slot is
+/// dropped: TeX's undelimited argument scanner already ignores it, and retaining
+/// it would let an authored space versus newline choose the command's layout. A
+/// comment remains a barrier because the line ending it consumes cannot be
+/// removed. Slot matching mirrors [`lower_command`] so an omitted optional does
+/// not misalign positions.
+fn expand_inline_prose(
+    node: &SyntaxNode,
+    cx: LowerCtx<'_>,
+    glue_matched_args: bool,
+    out: &mut Vec<SyntaxElement>,
+) {
     let Some(sig) = command_name(node).and_then(|name| cx.signatures.command(&name)) else {
         out.push(SyntaxElement::Node(node.clone()));
         return;
     };
     let mut slot = 0usize;
+    let mut pending_trivia = Vec::new();
     for child in node.children_with_tokens() {
+        if is_collapsible_trivia_element(&child) {
+            pending_trivia.push(child);
+            continue;
+        }
         match child {
             SyntaxElement::Node(group)
                 if matches!(group.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL) =>
@@ -8089,28 +8118,41 @@ fn expand_inline_prose(node: &SyntaxNode, cx: LowerCtx<'_>, out: &mut Vec<Syntax
                 } else {
                     ArgKind::Brace
                 };
-                let prose = match_arg_slot(&sig.args, &mut slot, kind)
-                    .is_some_and(|spec| spec.content == ContentKind::Prose);
+                let spec = match_arg_slot(&sig.args, &mut slot, kind);
+                let follows_comment = out.last().is_some_and(
+                    |element| matches!(element, SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT),
+                );
+                if spec.is_none() || follows_comment || !glue_matched_args {
+                    out.append(&mut pending_trivia);
+                } else {
+                    pending_trivia.clear();
+                }
+                let prose = spec.is_some_and(|spec| spec.content == ContentKind::Prose);
                 if prose {
                     let (open, close) = if is_bracket {
                         (SyntaxKind::L_BRACKET, SyntaxKind::R_BRACKET)
                     } else {
                         (SyntaxKind::L_BRACE, SyntaxKind::R_BRACE)
                     };
-                    splice_prose_group(&group, open, close, cx, out);
+                    splice_prose_group(&group, open, close, cx, glue_matched_args, out);
                 } else {
                     out.push(SyntaxElement::Node(group));
                 }
             }
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::VERB => {
+                out.append(&mut pending_trivia);
                 if token.text().starts_with('{') {
                     match_verbatim_arg_slot(&sig.args, &mut slot);
                 }
                 out.push(SyntaxElement::Token(token));
             }
-            other => out.push(other),
+            other => {
+                out.append(&mut pending_trivia);
+                out.push(other);
+            }
         }
     }
+    out.append(&mut pending_trivia);
 }
 
 /// Splice a prose group's delimiters and body into `out` (see
@@ -8134,6 +8176,7 @@ fn splice_prose_group(
     open_kind: SyntaxKind,
     close_kind: SyntaxKind,
     cx: LowerCtx<'_>,
+    glue_matched_args: bool,
     out: &mut Vec<SyntaxElement>,
 ) {
     let mut open: Option<SyntaxElement> = None;
@@ -8159,7 +8202,7 @@ fn splice_prose_group(
     if let Some(open) = open {
         out.push(open);
     }
-    out.extend(flatten_inline_prose(body, cx));
+    out.extend(flatten_inline_prose(body, cx, glue_matched_args));
     if let Some(close) = close {
         out.push(close);
     }

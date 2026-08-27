@@ -37,6 +37,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Formatter
 
+- [ ] **Extend inline-command argument glue to `.dtx` margin prose.** The
+  `inline_command_argument_glue` rule deliberately preserves pre-argument trivia
+  in margin-carrying and virtual documentation streams. Enabling it there adds
+  idempotency and trivia failures for `bm.dtx` and `longtable.dtx`; reduce those
+  interactions and fix the structural margin boundary before widening the rule.
+
 - [ ] **Decide whether math control-word spacing should use the lexer's ASCII
   alphabet.** The formatter's `is_control_word_letter` (`formatter/core.rs`)
   uses `char::is_alphabetic`, while the lexer uses `is_ascii_alphabetic`, so
@@ -88,12 +94,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   **source** forcing one-key-per-line) stays declined too — content steering
   layout conflicts with the formatter-is-sole-authority tenet.
 
-- [ ] Widen the prose-argument table (CWL ingest could feed it); consider gluing
-  a prose arg onto its command line when a source break separates them. (The
-  block half of the signature widening landed as `CommandSig::block`; the
-  gluing clause is now a proposal to narrow the *residue* of the
-  command-only-line rule — `docs/src/development/architecture.md` §
-  *Trivia-invariant layout*.)
+- [ ] Widen the prose-argument table (CWL ingest could feed it). The block half
+  of the signature widening landed as `CommandSig::block`; the inline half now
+  glues every matched argument slot in ordinary prose and prose-argument reflow
+  in `expand_inline_prose`, independent of whether the author used spaces or
+  newlines
+  (`inline_command_argument_glue`). CWL ingest could still broaden the table.
 
 - [ ] **Key-value continuation indent in an expl3 fallback statement (open scope
   call).** A key whose value continues on the next line should indent the value
@@ -281,7 +287,7 @@ sources below are missing.
   out — that is where our rule is usually wrong. Run it at default settings
   (`latexindent probe.tex`, no `-s`) on a hand-authored probe; the committed
   `*-mod*.tex` files are one YAML stack's answer with `-m` on, not its own
-  judgment. Measured gaps against the 277 existing
+  judgment. Measured gaps against the 280 existing
   slugs: `items` (157 files) and bare/named brace groups are no longer thin;
   re-measure before trusting any gap list here. Beamer item
   overlays are covered by `list_item_overlay_prefix`. `mand-args` /
@@ -311,6 +317,9 @@ sources below are missing.
   mandatory inner specification segments at top-level commas under width while
   nested commas stay sealed and comment-bearing groups take the shared keyval
   block fallback;
+  `inline_command_argument_glue` pins that collapsible trivia before matched
+  arguments of a curated inline prose command is removed under ordinary prose
+  and prose-argument reflow, while a trailing comment remains a hard barrier;
   the remaining environment and argument shapes are still open.
   Sectioning/`headings` is done (two slugs, and the Tier-1 lone-newline
   bug that lived there). `ifelsefi` (402 files) is done too, via the

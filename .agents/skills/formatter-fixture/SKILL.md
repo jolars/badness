@@ -218,7 +218,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 277 existing fixture slugs. **Re-measure before trusting
+Measured against the 280 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -387,6 +387,19 @@ column. The current Beamer manual settled the spelling after the first proposal
 treated the overlay as body text: its grammar and every example use
 `\item<2->`, so latexindent preserving that glue was meaningful evidence, not
 merely no opinion about intra-line whitespace.
+
+Done: matched arguments of curated inline prose commands
+(`inline_command_argument_glue`) — in ordinary prose and prose-argument reflow,
+collapsible trivia before every matched slot is removed, so spaces and authored
+newlines both canonicalize to a glued argument chain; code-like, preserve-mode,
+and virtual `.dtx` margin streams keep their argument-boundary trivia so an
+inner rewrite cannot make an opaque parent newly flat on pass two and a margin
+rewrite cannot expose a later fixed-point defect. A trailing comment remains a hard
+barrier because it consumes the following line end. The rule closes the gluing
+half of the prose-argument TODO while leaving signature-table widening open.
+Default latexindent preserved the authored breaks (explained divergence: it
+does not remove breaks), had no opinion on an inline space, and corroborated the
+comment barrier.
 
 Skip constructs whose corpus family is currently a known failure until the
 underlying bug lands (`oneSentencePerLine` and `commands/figureValign` both wait

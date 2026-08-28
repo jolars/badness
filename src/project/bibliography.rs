@@ -69,11 +69,12 @@ fn resolve_plain_search_path(
 
 fn has_kpathsea_syntax(path: &Path) -> bool {
     let text = path.as_os_str().to_string_lossy();
+    // Kpathsea expands only a leading tilde; internal tildes occur in Windows short names.
     text.contains("//")
         || text.contains('{')
         || text.contains('}')
         || text.contains('$')
-        || text.contains('~')
+        || text.starts_with('~')
         || text.starts_with("!!")
 }
 
@@ -121,6 +122,19 @@ mod tests {
                 Some(dir.path()),
                 OsStr::new("bibliographies"),
             ),
+            Some(bib_dir.join("shared.bib"))
+        );
+    }
+
+    #[test]
+    fn plain_search_path_allows_nonleading_tilde() {
+        let dir = tempfile::tempdir().unwrap();
+        let bib_dir = dir.path().join("RUNNER~1");
+        std::fs::create_dir(&bib_dir).unwrap();
+        std::fs::write(bib_dir.join("shared.bib"), "@article{key}\n").unwrap();
+
+        assert_eq!(
+            resolve_plain_search_path(Path::new("shared.bib"), None, bib_dir.as_os_str()),
             Some(bib_dir.join("shared.bib"))
         );
     }

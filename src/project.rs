@@ -14,6 +14,7 @@
 // reserved device name on Windows and git refuses to check out such a path.
 #[path = "project/auxfile.rs"]
 pub mod aux;
+pub mod bibliography;
 pub mod citations;
 pub mod graph;
 pub mod include;

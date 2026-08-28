@@ -701,7 +701,7 @@ warning: undefined-ref
 
 ## `undefined-citation`
 
-Flag a `\cite`-family key matching no entry in the document's bibliography -- the bibliographic analog of `undefined-ref`. Sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file, and suppressed entirely by a `\nocite{*}` wildcard (which marks every key as used). Inert without cross-file citation resolution. No autofix.
+Flag a `\cite`-family key matching no entry in the document's bibliography -- the bibliographic analog of `undefined-ref`. Sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file; resource lookup honors BibTeX's `BIBINPUTS`/`TEXBIB` search path. Suppressed entirely by a `\nocite{*}` wildcard (which marks every key as used). Inert without cross-file citation resolution. No autofix.
 
 A citation of a key that matches no bibliography entry:
 

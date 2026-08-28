@@ -136,12 +136,12 @@ use crate::formatter::{
     format_node_range_with_signatures_sentence, format_node_with_signatures_sentence,
     format_with_declarations_sentence,
 };
-use crate::incremental::{Analysis, IncrementalDatabase, IncrementalDb};
+use crate::incremental::{Analysis, IncrementalDatabase, IncrementalDb, file_cite_facts};
 use crate::linter::{RuleSelection, Severity, lint_document};
 use crate::parser::{Edit, parse, parse_with_declarations};
 use crate::project::aux::AuxData;
 use crate::project::texmf::{TexmfConfig, TexmfIndex};
-use crate::project::{PackageGraph, ResolvedCitations, ResolvedLabels};
+use crate::project::{BibTarget, PackageGraph, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{
     DefSiteKind, OutlineItem, OutlineSymbol, SemanticModel, SignatureDb, outline,
     scan_definition_sites,
@@ -2945,6 +2945,7 @@ fn spawn_worker(
                 inflight: None,
                 pending: HashMap::new(),
                 seeded_dirs: HashSet::new(),
+                bib_lookups: HashMap::new(),
             };
             worker.run(&job_rx, &done_rx);
         })
@@ -2971,6 +2972,71 @@ struct Worker {
     /// Directories already walked for on-disk `.tex`/`.bib` siblings, so each is
     /// seeded at most once (the membership-discovery hot-path guard).
     seeded_dirs: HashSet<PathBuf>,
+    /// Cached bibliography search-path lookups, including misses. The server's
+    /// inherited environment is fixed for its lifetime, and local file creation
+    /// reaches the database through watched-file events, so repeating a failed
+    /// `kpsewhich` process on every keystroke would buy nothing.
+    bib_lookups: HashMap<PathBuf, Option<PathBuf>>,
+}
+
+/// Load bibliography resources referenced by tracked LaTeX files but located
+/// outside ordinary sibling discovery. `resolve` owns all environment/filesystem
+/// search policy; the database receives only explicit files and aliases, keeping
+/// salsa queries deterministic.
+fn seed_bibliographies_with(
+    db: &mut IncrementalDatabase,
+    lookups: &mut HashMap<PathBuf, Option<PathBuf>>,
+    mut resolve: impl FnMut(&Path, Option<&Path>) -> Option<PathBuf>,
+) -> bool {
+    let mut grew = false;
+    let tracked = db.tracked_files();
+    for (source_path, source_file) in tracked {
+        if !file_kind_or_tex(&source_path).is_latex() {
+            continue;
+        }
+        let targets = file_cite_facts(db, source_file).bib_targets.clone();
+        let base_dir = source_path.parent();
+        for target in targets {
+            let BibTarget::Path(requested) = target else {
+                continue;
+            };
+            if db.lookup_file(&requested).is_some() {
+                continue;
+            }
+            if let Some(actual) = db.bibliography_alias(&requested).map(Path::to_path_buf)
+                && db.lookup_file(&actual).is_some()
+            {
+                continue;
+            }
+
+            let actual = match lookups.get(&requested) {
+                Some(cached) => cached.clone(),
+                None => {
+                    let found = resolve(&requested, base_dir);
+                    lookups.insert(requested.clone(), found.clone());
+                    found
+                }
+            };
+            let Some(actual) = actual else {
+                continue;
+            };
+
+            let already_tracked = db.lookup_file(&actual).is_some();
+            if !already_tracked {
+                let Ok(text) = std::fs::read_to_string(&actual) else {
+                    lookups.insert(requested, None);
+                    continue;
+                };
+                let file = db.upsert_file(&actual, text);
+                db.reparse_stage_edits(file, None);
+                grew = true;
+            }
+            if actual != requested {
+                grew |= db.set_bibliography_alias(&requested, &actual);
+            }
+        }
+    }
+    grew
 }
 
 impl Worker {
@@ -3050,7 +3116,13 @@ impl Worker {
                 // Lazily pull the rest of the project off disk so cross-file rules
                 // can fire. If this grows the member set, every open document's
                 // resolution may have changed — re-lint them all.
-                if self.seed_dir(&path, &exclude) {
+                let mut membership_grew = self.seed_dir(&path, &exclude);
+                membership_grew |= seed_bibliographies_with(
+                    &mut self.db,
+                    &mut self.bib_lookups,
+                    crate::project::bibliography::resolve_bibliography_file,
+                );
+                if membership_grew {
                     let _ = self.out_tx.send(Outbound::RelintAll);
                 }
                 self.enqueue(AnalyzeRequest {
@@ -7345,6 +7417,40 @@ fn diff_to_edits(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bibliography_seeding_publishes_external_path_alias() {
+        let project = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let main_path = project.path().join("main.tex");
+        let actual_bib = external.path().join("shared.bib");
+        std::fs::write(&actual_bib, "@article{present, title={Present}}\n").unwrap();
+
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(
+            &main_path,
+            "\\documentclass{article}\n\\bibliography{shared}\n\\cite{present}\n".to_string(),
+        );
+        let requested = project.path().join("shared.bib");
+        let mut lookups = HashMap::new();
+        let grew = seed_bibliographies_with(&mut db, &mut lookups, |path, base| {
+            assert_eq!(path, requested);
+            assert_eq!(base, Some(project.path()));
+            Some(actual_bib.clone())
+        });
+
+        assert!(grew);
+        let citations = crate::project::resolved_citations(&db);
+        assert!(citations.is_defined(&main_path, "present"));
+        assert!(citations.is_closed(&main_path));
+        assert_eq!(citations.bib_definers(&main_path), &[actual_bib]);
+
+        assert!(!seed_bibliographies_with(
+            &mut db,
+            &mut lookups,
+            |_, _| panic!("a published alias must not be looked up again")
+        ));
+    }
 
     fn uri(s: &str) -> Uri {
         s.parse().unwrap()

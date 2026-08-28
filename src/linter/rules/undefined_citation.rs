@@ -11,8 +11,8 @@
 //! - **no `\nocite{*}`** — a wildcard pulls in the entire bibliography, so every
 //!   key is "used" and nothing can be undefined.
 //!
-//! Inert when no [`ResolvedCitations`] is available (stdin, or the language server
-//! today). `Severity::Warning`, conservative like `undefined-ref`.
+//! Inert when no [`ResolvedCitations`] is available (for example, an unanchored
+//! stdin fragment). `Severity::Warning`, conservative like `undefined-ref`.
 //!
 //! [`ResolvedCitations`]: crate::project::ResolvedCitations
 
@@ -42,9 +42,10 @@ impl Rule for UndefinedCitation {
         "Flag a `\\cite`-family key matching no entry in the document's \
          bibliography -- the bibliographic analog of `undefined-ref`. Sound only \
          over a **closed, rooted** namespace where every `.bib` resource \
-         resolves to an analyzed file, and suppressed entirely by a `\\nocite{*}` \
-         wildcard (which marks every key as used). Inert without cross-file \
-         citation resolution. No autofix."
+         resolves to an analyzed file; resource lookup honors BibTeX's \
+         `BIBINPUTS`/`TEXBIB` search path. Suppressed entirely by a \
+         `\\nocite{*}` wildcard (which marks every key as used). Inert without \
+         cross-file citation resolution. No autofix."
     }
 
     fn examples(&self) -> &'static [Example] {

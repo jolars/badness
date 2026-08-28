@@ -26,8 +26,8 @@ use smol_str::SmolStr;
 use crate::bib::semantic::Model as BibModel;
 use crate::file_discovery::FileKind;
 use crate::incremental::{
-    IncrementalDb, QueryKind, QueryLogEntry, file_cite_facts, file_cite_names,
-    file_is_document_root,
+    BibliographyAliasesInput, IncrementalDb, QueryKind, QueryLogEntry, file_cite_facts,
+    file_cite_names, file_is_document_root,
 };
 use crate::project::graph::{IncludeGraph, project_graph};
 use crate::project::include::BibTarget;
@@ -94,6 +94,19 @@ impl ResolvedCitations {
         graph: &IncludeGraph,
         bib_keys: &HashMap<PathBuf, Vec<SmolStr>>,
     ) -> Self {
+        Self::build_with_aliases(files, graph, bib_keys, &HashMap::new())
+    }
+
+    /// Resolve citations with an explicit mapping from the project-local path a
+    /// document names to the actual file found through BibTeX's search path.
+    /// Keeping this mapping as data preserves the pure resolver and lets
+    /// navigation retain the real bibliography path.
+    pub fn build_with_aliases(
+        files: &[CiteFileFacts],
+        graph: &IncludeGraph,
+        bib_keys: &HashMap<PathBuf, Vec<SmolStr>>,
+        bib_aliases: &HashMap<PathBuf, PathBuf>,
+    ) -> Self {
         let mut paths: Vec<&Path> = files.iter().map(|f| f.path.as_path()).collect();
         paths.sort_unstable();
         paths.dedup();
@@ -140,16 +153,23 @@ impl ResolvedCitations {
             for target in &facts.bib_targets {
                 match target {
                     BibTarget::Dynamic => comp.closed = false,
-                    BibTarget::Path(path) => match bib_keys.get(path) {
-                        Some(keys) => {
-                            comp.keys
-                                .extend(keys.iter().map(|k| SmolStr::from(k.to_lowercase())));
-                            // Record the analyzed `.bib` so go-to-def can search it.
-                            comp.bib_paths.push(path.clone());
+                    BibTarget::Path(path) => {
+                        let resolved_path = bib_keys
+                            .contains_key(path)
+                            .then_some(path)
+                            .or_else(|| bib_aliases.get(path));
+                        match resolved_path.and_then(|path| bib_keys.get_key_value(path)) {
+                            Some(keys) => {
+                                let (path, keys) = keys;
+                                comp.keys
+                                    .extend(keys.iter().map(|k| SmolStr::from(k.to_lowercase())));
+                                // Record the analyzed `.bib` so go-to-def can search it.
+                                comp.bib_paths.push(path.clone());
+                            }
+                            // A `.bib` we never analyzed: the real key set may be larger.
+                            None => comp.closed = false,
                         }
-                        // A `.bib` we never analyzed: the real key set may be larger.
-                        None => comp.closed = false,
-                    },
+                    }
                 }
             }
         }
@@ -314,7 +334,12 @@ pub fn resolved_citations(db: &dyn IncrementalDb) -> ResolvedCitations {
         }
     }
 
-    ResolvedCitations::build(&cite_facts, graph, &bib_keys)
+    let bib_aliases = BibliographyAliasesInput::get(db)
+        .aliases(db)
+        .iter()
+        .cloned()
+        .collect();
+    ResolvedCitations::build_with_aliases(&cite_facts, graph, &bib_keys, &bib_aliases)
 }
 
 /// A minimal union-find (disjoint-set) with path halving and union by size. A copy
@@ -435,6 +460,31 @@ mod tests {
         let bib = HashMap::new(); // refs.bib not analyzed
         let r = ResolvedCitations::build(&[facts("/p/main.tex", &["/p/refs.bib"], true)], &g, &bib);
         assert!(!r.is_closed(Path::new("/p/main.tex")));
+    }
+
+    #[test]
+    fn search_path_alias_uses_the_actual_bibliography() {
+        let g = graph(&[("/p/main.tex", &[])]);
+        let mut bib = HashMap::new();
+        bib.insert(PathBuf::from("/shared/refs.bib"), keys(&["knuth1984"]));
+        let aliases = HashMap::from([(
+            PathBuf::from("/p/refs.bib"),
+            PathBuf::from("/shared/refs.bib"),
+        )]);
+
+        let r = ResolvedCitations::build_with_aliases(
+            &[facts("/p/main.tex", &["/p/refs.bib"], true)],
+            &g,
+            &bib,
+            &aliases,
+        );
+
+        assert!(r.is_defined(Path::new("/p/main.tex"), "knuth1984"));
+        assert!(r.is_closed(Path::new("/p/main.tex")));
+        assert_eq!(
+            r.bib_definers(Path::new("/p/main.tex")),
+            &[PathBuf::from("/shared/refs.bib")]
+        );
     }
 
     #[test]

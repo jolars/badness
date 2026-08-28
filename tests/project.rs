@@ -240,6 +240,28 @@ fn resolved_citations_unions_referenced_bib_keys() {
 }
 
 #[test]
+fn resolved_citations_uses_published_bibliography_alias() {
+    let mut db = IncrementalDatabase::default();
+    let main = db.upsert_file(
+        Path::new("/proj/main.tex"),
+        "\\documentclass{article}\n\\bibliography{refs}\n\\cite{knuth}\n".to_string(),
+    );
+    db.upsert_file(
+        Path::new("/shared/refs.bib"),
+        "@article{knuth, title={x}}\n".to_string(),
+    );
+    assert!(db.set_bibliography_alias(Path::new("/proj/refs.bib"), Path::new("/shared/refs.bib")));
+
+    let resolved = resolved_citations(&db);
+    assert!(resolved.is_defined(&fpath(&db, main), "knuth"));
+    assert!(resolved.is_closed(&fpath(&db, main)));
+    assert_eq!(
+        resolved.bib_definers(&fpath(&db, main)),
+        &[PathBuf::from("/shared/refs.bib")]
+    );
+}
+
+#[test]
 fn cite_set_preserving_edit_does_not_rebuild_resolved_citations() {
     // The cite firewall: adding a `@string` to refs.bib changes its bib model (so
     // `file_cite_names` re-executes) but not its cite-key set — so `file_cite_names`

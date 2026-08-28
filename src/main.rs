@@ -41,9 +41,9 @@ use badness::cli::{
 use badness::parser::{LexConfig, parse_with_declarations, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
-    CiteFileFacts, FileFacts, IncludeGraph, PackageOptionFacts, ResolvedCitations, ResolvedLabels,
-    ResolvedPackageOptions, collect_bib_resource_targets, collect_include_edge_keys,
-    package_option_facts,
+    BibTarget, CiteFileFacts, FileFacts, IncludeGraph, PackageOptionFacts, ResolvedCitations,
+    ResolvedLabels, ResolvedPackageOptions, collect_bib_resource_targets,
+    collect_include_edge_keys, package_option_facts,
 };
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
@@ -577,6 +577,12 @@ fn run_explain(id: &str) -> ExitCode {
 /// on success, or the `(path, error)` to report on failure.
 type ReadResult = Result<(PathBuf, String, FileKind), (PathBuf, std::io::Error)>;
 
+#[derive(Default)]
+struct SupplementalBibliographies {
+    sources: Vec<(PathBuf, String)>,
+    aliases: HashMap<PathBuf, PathBuf>,
+}
+
 enum FileAnalysis {
     Bib {
         diagnostics: Vec<Diagnostic>,
@@ -687,6 +693,50 @@ fn analyze_source(
     }
 }
 
+/// Load literal bibliography resources that were not among the user's lint
+/// inputs. These files feed citation resolution but are not themselves lint
+/// targets, so a system-wide database cannot unexpectedly add standalone
+/// BibTeX findings to `badness lint doc.tex`.
+fn supplemental_bibliographies(
+    sources: &[(PathBuf, String, FileKind)],
+    declared: &ResolvedDeclarations,
+) -> SupplementalBibliographies {
+    let mut out = SupplementalBibliographies::default();
+    let mut loaded: BTreeSet<PathBuf> = sources.iter().map(|(path, _, _)| path.clone()).collect();
+
+    for (path, content, kind) in sources {
+        if !kind.is_latex() {
+            continue;
+        }
+        let parsed = parse_with_declarations(content, kind.lex_config(), declared);
+        let root = SyntaxNode::new_root(parsed.green);
+        let base_dir = path.parent().filter(|base| !base.as_os_str().is_empty());
+        for target in collect_bib_resource_targets(&root, path.parent()) {
+            let BibTarget::Path(requested) = target else {
+                continue;
+            };
+            if loaded.contains(&requested) {
+                continue;
+            }
+            let Some(actual) =
+                badness::project::bibliography::resolve_bibliography_file(&requested, base_dir)
+            else {
+                continue;
+            };
+            if actual != requested {
+                out.aliases.insert(requested, actual.clone());
+            }
+            if !loaded.insert(actual.clone()) {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&actual) {
+                out.sources.push((actual, content));
+            }
+        }
+    }
+    out
+}
+
 /// Lint each path (or stdin), rendering parse diagnostics. Exits non-zero if
 /// any diagnostics are reported or any file fails to read. With `fix`, safe
 /// autofixes (plus unsafe ones when `unsafe_fixes` is set) are applied in place
@@ -787,7 +837,9 @@ fn run_lint(
     // Phases 1–3 (parse+analyze, cross-file resolution, resolution-aware lint) live
     // in `collect_project_diagnostics` so the `--fix` cross-file pass shares the
     // exact same pipeline — CLI report and CLI fix can never drift.
-    let mut diagnostics = collect_project_diagnostics(&sources, declared);
+    let supplemental = supplemental_bibliographies(&sources, declared);
+    let mut diagnostics =
+        collect_project_diagnostics_with_bibliographies(&sources, declared, &supplemental);
 
     // Drop findings from rules the config/CLI deselected. Parse diagnostics
     // (`rule == "parse"`) are always kept (see `RuleSelection::is_active`).
@@ -845,6 +897,18 @@ fn collect_project_diagnostics(
     sources: &[(PathBuf, String, FileKind)],
     declared: &ResolvedDeclarations,
 ) -> Vec<Diagnostic> {
+    collect_project_diagnostics_with_bibliographies(
+        sources,
+        declared,
+        &SupplementalBibliographies::default(),
+    )
+}
+
+fn collect_project_diagnostics_with_bibliographies(
+    sources: &[(PathBuf, String, FileKind)],
+    declared: &ResolvedDeclarations,
+    supplemental: &SupplementalBibliographies,
+) -> Vec<Diagnostic> {
     // Phase 1 — parse + analyze every source in parallel. Each task is pure and
     // returns only `Send` data (`analyze_source`); rayon preserves input order.
     let analyses: Vec<FileAnalysis> = sources
@@ -890,12 +954,29 @@ fn collect_project_diagnostics(
             }
         }
     }
+    for (path, content) in &supplemental.sources {
+        let parsed = badness::bib::parse(content);
+        let model = badness::bib::semantic::Model::build(&parsed.syntax());
+        bib_keys.insert(
+            path.clone(),
+            model
+                .entries()
+                .iter()
+                .map(|entry| entry.key.clone())
+                .collect(),
+        );
+    }
 
     // Phase 2 — cross-file resolution: a serial barrier (needs the whole analyzed
     // set) over the collected facts. Pure graph work, no re-parsing.
     let graph = IncludeGraph::build(&facts, None);
     let resolved = ResolvedLabels::build(&label_inputs, &graph);
-    let resolved_citations = ResolvedCitations::build(&cite_facts, &graph, &bib_keys);
+    let resolved_citations = ResolvedCitations::build_with_aliases(
+        &cite_facts,
+        &graph,
+        &bib_keys,
+        &supplemental.aliases,
+    );
     let resolved_packages = ResolvedPackageOptions::build(option_facts);
 
     // Phase 3 — lint every analyzed file in parallel, sharing the resolution by

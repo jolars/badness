@@ -25,6 +25,10 @@ fn repo_dir() -> TempDir {
 }
 
 fn lint(dir: &Path, args: &[&str], stdin: Option<&str>) -> Output {
+    lint_with_env(dir, args, stdin, &[])
+}
+
+fn lint_with_env(dir: &Path, args: &[&str], stdin: Option<&str>, env: &[(&str, &Path)]) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_badness"));
     cmd.arg("lint")
         .args(args)
@@ -32,6 +36,9 @@ fn lint(dir: &Path, args: &[&str], stdin: Option<&str>) -> Output {
         .env_remove("BADNESS_CONFIG")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (name, value) in env {
+        cmd.env(name, value);
+    }
     if stdin.is_some() {
         cmd.stdin(Stdio::piped());
     }
@@ -333,5 +340,89 @@ fn lint_honors_declared_citation_commands() {
             .any(|finding| finding["rule"] == "undefined-citation"),
         "{}",
         String::from_utf8_lossy(&declared.stdout)
+    );
+}
+
+#[test]
+fn undefined_citation_resolves_bibinputs_bibliography() {
+    let project = repo_dir();
+    let bibliographies = TempDir::new().unwrap();
+    std::fs::write(
+        project.path().join("doc.tex"),
+        "\\documentclass{article}\n\\bibliography{shared}\n\\begin{document}\n\\cite{present,missing}\n\\end{document}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        bibliographies.path().join("shared.bib"),
+        "@article{present, title = {Present}}\n",
+    )
+    .unwrap();
+
+    let output = lint_with_env(
+        project.path(),
+        &["--output=json", "doc.tex"],
+        None,
+        &[("BIBINPUTS", bibliographies.path())],
+    );
+
+    let findings: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    let undefined: Vec<_> = findings
+        .as_array()
+        .expect("array")
+        .iter()
+        .filter(|finding| finding["rule"] == "undefined-citation")
+        .collect();
+    assert_eq!(
+        undefined.len(),
+        1,
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        undefined[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn undefined_citation_follows_symlinked_bibliography() {
+    use std::os::unix::fs::symlink;
+
+    let project = repo_dir();
+    let bibliography = TempDir::new().unwrap();
+    std::fs::write(
+        project.path().join("doc.tex"),
+        "\\documentclass{article}\n\\addbibresource{shared.bib}\n\\begin{document}\n\\cite{present,missing}\n\\end{document}\n",
+    )
+    .unwrap();
+    let target = bibliography.path().join("shared.bib");
+    std::fs::write(&target, "@article{present, title = {Present}}\n").unwrap();
+    symlink(&target, project.path().join("shared.bib")).unwrap();
+
+    let output = lint(project.path(), &["--output=json", "."], None);
+
+    let findings: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    let undefined: Vec<_> = findings
+        .as_array()
+        .expect("array")
+        .iter()
+        .filter(|finding| finding["rule"] == "undefined-citation")
+        .collect();
+    assert_eq!(
+        undefined.len(),
+        1,
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        undefined[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing")
     );
 }

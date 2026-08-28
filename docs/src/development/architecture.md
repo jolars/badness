@@ -1744,6 +1744,16 @@ chains, with freshness keyed by mtime and length so a recompile is picked up
 without a watcher. This powers label hover and document-symbol number
 enrichment. A test guards that the formatter never reads the aux file.
 
+**Bibliography resource lookup** (`project::bibliography`) keeps static command
+extraction pure, then resolves missing literal `.bib` paths at the filesystem
+boundary. A project-local file wins; plain `BIBINPUTS`/`TEXBIB` entries provide
+a no-subprocess fallback, and `kpsewhich --progname=bibtex --format=bib` handles
+the full Kpathsea grammar when available. The CLI loads the result only as a
+citation dependency, while the language server publishes the written-to-actual
+path alias as an explicit salsa input. Parser shape and citation queries
+therefore remain independent of ambient environment state, and navigation
+retains the real file location.
+
 Citation completion returns the entire bibliography namespace rather than
 prefix-filtering server-side, with each item carrying a `filterText` of key,
 title, and authors so the client matches on any of those fields. That is

@@ -116,6 +116,16 @@ pub struct ProjectFiles {
     pub files: Vec<SourceFile>,
 }
 
+/// Bibliography paths as written by documents mapped to the real files found
+/// through BibTeX's external search path. The filesystem-owning CLI/LSP layer
+/// publishes these aliases explicitly so citation queries never read ambient
+/// environment or filesystem state.
+#[salsa::input(singleton)]
+pub struct BibliographyAliasesInput {
+    #[returns(ref)]
+    pub aliases: Vec<(PathBuf, PathBuf)>,
+}
+
 /// The parse-facing half of the project's declarations — the environment
 /// signature tier ([`ResolvedDeclarations::parse_tier`]).
 ///
@@ -966,6 +976,9 @@ impl Default for IncrementalDatabase {
         let _ = ProjectFiles::builder(Vec::new())
             .files_durability(salsa::Durability::MEDIUM)
             .new(&db);
+        let _ = BibliographyAliasesInput::builder(Vec::new())
+            .aliases_durability(salsa::Durability::MEDIUM)
+            .new(&db);
         db
     }
 }
@@ -1090,6 +1103,36 @@ impl IncrementalDatabase {
             .with_durability(salsa::Durability::HIGH)
             .to(declared);
         true
+    }
+
+    /// Publish one bibliography search-path resolution. Paths are normalized to
+    /// the same lexical absolute form as [`upsert_file`](Self::upsert_file), and
+    /// the sorted vector keeps the salsa input deterministic.
+    pub fn set_bibliography_alias(&mut self, requested: &Path, actual: &Path) -> bool {
+        let requested = normalize_path(requested);
+        let actual = normalize_path(actual);
+        let input = BibliographyAliasesInput::get(self);
+        let mut aliases = input.aliases(self).clone();
+        match aliases.binary_search_by(|(path, _)| path.cmp(&requested)) {
+            Ok(index) if aliases[index].1 == actual => return false,
+            Ok(index) => aliases[index].1 = actual,
+            Err(index) => aliases.insert(index, (requested, actual)),
+        }
+        input
+            .set_aliases(self)
+            .with_durability(salsa::Durability::MEDIUM)
+            .to(aliases);
+        true
+    }
+
+    /// The real file already published for `requested`, if any.
+    pub fn bibliography_alias(&self, requested: &Path) -> Option<&Path> {
+        let requested = normalize_path(requested);
+        let aliases = BibliographyAliasesInput::get(self).aliases(self);
+        aliases
+            .binary_search_by(|(path, _)| path.cmp(&requested))
+            .ok()
+            .map(|index| aliases[index].1.as_path())
     }
 
     /// Insert or update the input for `path`, reusing the existing `SourceFile`

@@ -1,6 +1,6 @@
 ---
 name: bench
-description: Use when the user wants to (re)run the formatter/linter speed benchmark, compare LSP memory with texlab, or refresh the docs benchmark page — "run the benchmark", "task bench", "task bench:memory", "memory vs texlab", "update the benchmark numbers", "refresh benchmarks". Regenerates the requested committed JSON artifact that feeds docs/src/reference/benchmarks.md, then fact-checks that page against the code.
+description: Use when the user wants to (re)run the formatter/linter speed benchmark, compare LSP speed or memory with texlab, or refresh the docs benchmark page — "run the benchmark", "task bench", "task bench:lsp", "LSP vs texlab", "update the benchmark numbers", "refresh benchmarks". Regenerates the requested committed JSON artifact that feeds docs/src/reference/benchmarks.md, then fact-checks that page against the code.
 ---
 
 # bench
@@ -31,15 +31,17 @@ mdbook-build time or in CI—the docs page only renders the committed JSON.
    task bench:download
    ```
 
-2. **Run the requested benchmark.** The speed task rewrites
-   `benches/benchmark_results.json`; the Linux-only memory task runs three fresh
+2. **Run the requested benchmark.** The CLI speed task rewrites
+   `benches/benchmark_results.json`; the Linux-only LSP task runs three fresh
    Badness and TexLab language-server sessions and rewrites
    `benches/memory_results.json`:
 
    ```sh
    task bench
-   task bench:memory
+   task bench:lsp
    ```
+
+   `task bench:memory` remains an alias for `task bench:lsp`.
 
    Best results need `tex-fmt`, `latexindent`, `lacheck`, `chktex`, `hyperfine`,
    and `jq` on `PATH` (without hyperfine+jq it falls back to a mean-only shell
@@ -47,7 +49,7 @@ mdbook-build time or in CI—the docs page only renders the committed JSON.
    documents `badness` cannot format yet (parser diagnostics) are skipped with a
    note. `lacheck` and `chktex` are shipped with TeX Live.
 
-   The memory task requires `texlab`, Python, and readable `/proc/smaps_rollup`.
+   The LSP task requires `texlab`, Python, and readable `/proc/smaps_rollup`.
    It fails on a protocol error, server exit, or 60-second settle timeout rather
    than committing a partial comparison.
 
@@ -86,12 +88,16 @@ mdbook-build time or in CI—the docs page only renders the committed JSON.
      run-dependent, and a cross-tool difference is not a same-job speed verdict
      (the tools do different work). Don't reintroduce "quality gate"-style meta
      commentary.
-   - The **memory comparison** starts `badness lsp` and `texlab run` three fresh
+   - The **LSP comparison** starts `badness lsp` and `texlab run` three fresh
      times each against the complete pinned thesis workspace. It opens the five
-     paths declared by `compare_lsp_memory.sh`, runs diagnostics plus document
-     symbols and meaningful hovers, samples whole-process-tree RSS/PSS at 150 ms,
-     and records baseline/settled/peak after CPU-based quiescence. It is an
-     editor-session cost comparison, not a feature-equivalence claim.
+     paths declared by `compare_lsp_memory.sh`, runs diagnostics, primes document
+     symbols and meaningful hovers, and waits for CPU-based quiescence. It then
+     times document symbols and hovers across three files plus definition,
+     references, and rename at the pinned cross-file `Aup91` citation. Each
+     target gets two warmups and 20 measured rounds per fresh session; the
+     artifact records median/p95 latency and returned work. Whole-process-tree
+     RSS/PSS is sampled every 150 ms and records baseline/settled/peak. This is
+     an editor-session comparison, not a feature-equivalence claim.
 
 4. **Sanity-check rendering** (optional but recommended):
 
@@ -102,8 +108,8 @@ mdbook-build time or in CI—the docs page only renders the committed JSON.
 
    Confirm `docs/book/reference/benchmarks.html` shows the tables and no literal
    `{{ benchmark-results }}` / `{{ benchmark-meta }}` / `{{ lint-benchmark-results }}`
-   / `{{ lint-benchmark-meta }}` markers remain, and that both the formatter and
-   linter charts render.
+   / `{{ lint-benchmark-meta }}` / `{{ lsp-benchmark-results }}` markers remain,
+   and that both the formatter and linter charts render.
 
 ## How the page is wired
 
@@ -117,6 +123,6 @@ mdbook-build time or in CI—the docs page only renders the committed JSON.
   `{{ lint-benchmark-meta }}` markers in `docs/src/reference/benchmarks.md`.
 - `benches/compare_lsp_memory.sh --out benches/memory_results.json` drives the
   external sessions through `benches/lsp_memory_compare.py`; `memory.rs` in the
-  docs preprocessor renders its setup and result markers.
+  docs preprocessor renders its setup, speed, and memory result markers.
 - The companion in-process micro-bench / flamegraph workflow lives in
   `benches/README.md` and is **out of scope** for this skill.

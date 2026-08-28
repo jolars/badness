@@ -43,7 +43,7 @@ fetch phd_dissertation.tex     tests/phd_dissertation/source/phd_dissertation.te
 # --- Multi-file project corpus (folder / whole-project benchmark) -------------
 #
 # A real, pinned multi-file LaTeX thesis (kks32/phd-thesis-template). The full
-# checkout is the workspace for the external LSP memory benchmark, including
+# checkout is the workspace for the external LSP speed and memory benchmark, including
 # its class, style, bibliography, and image assets. `compare_format.sh` stages
 # its own explicit `.tex` subset so expanding this checkout cannot silently
 # change the formatter speed corpus.

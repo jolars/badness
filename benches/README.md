@@ -2,14 +2,14 @@
 
 Six complementary tools, measuring different things:
 
-  | Tool                                                  | What it measures                                  | Includes startup floor?       |
-  | ----------------------------------------------------- | ------------------------------------------------- | ----------------------------- |
-  | `benches/compare_format.sh` (`task bench`)            | wall-clock CLI speed vs tex-fmt/latexindent       | **yes** (whole process)       |
-  | `benches/compare_lsp_memory.sh` (`task bench:memory`) | process-tree RSS/PSS vs TexLab                    | **yes** (whole process tree)  |
-  | `benches/formatting.rs` (`task bench:micro`)          | in-process per-byte cost, split parse/format/full | **no** (library entry points) |
-  | `benches/keystroke.rs` (`task bench:keystroke`)       | what one editor keystroke costs through salsa     | **no** (library entry points) |
-  | `benches/reparse.rs` (`task bench:reparse`)           | what one incremental reparse costs, per tier      | **no** (library entry points) |
-  | `benches/lsp_memory.rs` (`task bench:lsp-memory`)     | live heap retained across LSP history             | **no** (in-process server)    |
+  | Tool                                               | What it measures                                  | Includes startup floor?       |
+  | -------------------------------------------------- | ------------------------------------------------- | ----------------------------- |
+  | `benches/compare_format.sh` (`task bench`)         | wall-clock CLI speed vs tex-fmt/latexindent       | **yes** (whole process)       |
+  | `benches/compare_lsp_memory.sh` (`task bench:lsp`) | LSP latency and process-tree RSS/PSS vs TexLab    | **yes** (whole process tree)  |
+  | `benches/formatting.rs` (`task bench:micro`)       | in-process per-byte cost, split parse/format/full | **no** (library entry points) |
+  | `benches/keystroke.rs` (`task bench:keystroke`)    | what one editor keystroke costs through salsa     | **no** (library entry points) |
+  | `benches/reparse.rs` (`task bench:reparse`)        | what one incremental reparse costs, per tier      | **no** (library entry points) |
+  | `benches/lsp_memory.rs` (`task bench:lsp-memory`)  | live heap retained across LSP history             | **no** (in-process server)    |
 
 The CLI script answers "how fast is the `badness` binary"; the formatting bench
 answers "where does the per-byte work go, with no process startup in the way."
@@ -22,12 +22,13 @@ edit*. The keystroke bench times the whole composition (`didChange` splice →
 is the only place the tier a scenario reaches is observable. Both have their own
 sections below, and both carry a **gate** (`task bench:gate`).
 
-The two memory harnesses answer different questions. The external comparison
-measures the operating-system cost of ordinary, fresh Badness and TexLab editor
-sessions—whole-process-tree RSS and PSS—over a complete pinned thesis workspace.
-The in-process harness asks whether Badness retains *history* after arriving at
-the same current project state. Its counting allocator excludes free pages the
-allocator has not returned to the operating system.
+The two LSP memory harnesses answer different questions. The external comparison
+measures warm request latency and the operating-system cost of ordinary, fresh
+Badness and TexLab editor sessions—whole-process-tree RSS and PSS—over a
+complete pinned thesis workspace. The in-process harness asks whether Badness
+retains *history* after arriving at the same current project state. Its counting
+allocator excludes free pages the allocator has not returned to the operating
+system.
 
 ## The gates
 
@@ -76,8 +77,8 @@ task bench:download
 # benchmark page, docs/src/reference/benchmarks.md)
 task bench
 
-# Whole-process-tree LSP memory vs TexLab → benches/memory_results.json
-task bench:memory
+# LSP speed and whole-process-tree memory vs TexLab → benches/memory_results.json
+task bench:lsp
 
 # In-process micro-bench (parse vs format vs full pipeline, throughput)
 task bench:micro
@@ -181,30 +182,41 @@ BADNESS_BENCH_DOC=phd_dissertation.tex cargo bench --bench keystroke
 BADNESS_BENCH_OUTPUT_JSON=/tmp/head.json cargo bench --bench keystroke
 ```
 
-## The LSP memory harness
+## The external LSP harness
 
 `benches/compare_lsp_memory.sh` starts three fresh sessions each of
 `badness lsp` and `texlab run`. Both see the complete pinned
 `kks32/phd-thesis-template` workspace and open the same five documents. The
-Python driver performs initialization, diagnostics, document-symbol, and hover
-requests, then samples every descendant process from Linux `/proc` at 150 ms
-intervals. Baseline and settled readings require five seconds below 5% of one
-CPU core; a phase that has not settled after 60 seconds fails the run. The
-committed artifact reports the median baseline, settled, and peak RSS/PSS while
-retaining every raw run.
+Python driver performs initialization and diagnostics, then primes document
+symbols and citation/reference hovers. Once the session settles, it measures
+warm document symbols, hover, go to definition, find references, and rename. The
+three navigation operations use the pinned `Aup91` citation, whose BibTeX entry
+lives in another file. Rename constructs but does not apply its edit.
+
+Every request target gets two warmups and 20 measured rounds per fresh session.
+The artifact aggregates median and p95 latency across the sessions and records
+the symbols, locations, edits, files, and serialized payload returned. It also
+samples every descendant process from Linux `/proc` at 150 ms intervals.
+Baseline and settled readings require five seconds below 5% of one CPU core; a
+phase that has not settled after 60 seconds fails the run. The committed
+artifact reports median readiness and memory milestones while retaining each raw
+run's summary.
 
 ```bash
-task bench:memory
+task bench:lsp
 
 # Useful only when investigating an unusually slow indexing run.
-SETTLE_TIMEOUT=120 task bench:memory
+SETTLE_TIMEOUT=120 task bench:lsp
+
+# Shorten request sampling while debugging the harness.
+LSP_LATENCY_RUNS=2 LSP_LATENCY_WARMUPS=0 task bench:lsp
 ```
 
-This is an external resident-memory comparison, not a feature-equivalence claim.
-TexLab and Badness analyze different things, and RSS is machine- and
-allocator-dependent. The complete workspace is intentional: even though only
-five buffers are open, each server may discover supporting `.cls`, `.sty`, and
-`.bib` files.
+This is an external editor-session comparison, not a feature-equivalence claim.
+TexLab and Badness analyze different things, and both latency and RSS are
+machine-dependent. The complete workspace is intentional: even though only five
+buffers are open, each server may discover supporting `.cls`, `.sty`, and `.bib`
+files.
 
 ### Retained-history harness
 

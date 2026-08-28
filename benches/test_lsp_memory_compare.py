@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Unit tests for the external language-server memory harness."""
+"""Unit tests for the external language-server speed and memory harness."""
 
 import io
 import sys
@@ -53,15 +52,26 @@ class ProtocolTests(unittest.TestCase):
 class SummaryTests(unittest.TestCase):
     def test_server_summary_uses_medians_and_badness_ratio(self):
         runs = [
-            self._run(10, 20, 24, 9, 18),
-            self._run(12, 22, 28, 11, 20),
-            self._run(11, 21, 26, 10, 19),
+            self._run(10, 20, 24, 9, 18, 0.01, 0.10, 0.20, [1.0, 2.0]),
+            self._run(12, 22, 28, 11, 20, 0.03, 0.30, 0.40, [3.0, 4.0]),
+            self._run(11, 21, 26, 10, 19, 0.02, 0.20, 0.30, [5.0, 6.0]),
         ]
         summary = memory.summarize_runs(runs)
         self.assertEqual(summary["baseline_rss_mb"], 11)
         self.assertEqual(summary["settled_rss_mb"], 21)
         self.assertEqual(summary["settled_pss_mb"], 19)
         self.assertEqual(summary["peak_rss_mb"], 26)
+        self.assertEqual(summary["initialize_seconds"], 0.02)
+        self.assertEqual(summary["workspace_ready_seconds"], 0.2)
+        self.assertEqual(summary["documents_ready_seconds"], 0.3)
+        latency = summary["request_latencies"][0]
+        self.assertEqual(latency["median_ms"], 3.5)
+        self.assertEqual(latency["p95_ms"], 6.0)
+        self.assertEqual(latency["result_count_min"], 1)
+        self.assertEqual(latency["result_count_median"], 2.0)
+        self.assertEqual(latency["result_count_max"], 3)
+        self.assertEqual(latency["result_files_min"], 1)
+        self.assertEqual(latency["payload_bytes_median"], 150)
 
         records = [
             {"key": "badness", "summary": summary},
@@ -71,17 +81,85 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(records[0]["summary"]["relative_to_badness"], 1.0)
         self.assertEqual(records[1]["summary"]["relative_to_badness"], 2.0)
 
-    def test_quiet_window_covers_the_requested_duration(self):
+    def test_quiet_window_covers_the_requested_duration_and_phase_start(self):
         sampler = memory.Sampler(1, interval=0.15)
         idle = memory.ProcessSample(rss_kb=1, pss_kb=1, cpu_ticks=0, processes=1)
         sampler.samples = [(0.0, idle), (2.5, idle), (4.0, idle)]
-        self.assertFalse(sampler.is_quiet(5.0))
+        self.assertIsNone(sampler.quiet_since(5.0))
 
         sampler.samples.append((5.0, idle))
-        self.assertTrue(sampler.is_quiet(5.0))
+        self.assertEqual(sampler.quiet_since(5.0), 0.0)
+        self.assertIsNone(sampler.quiet_since(5.0, not_before=1.0))
+
+    def test_navigation_target_finds_pinned_citation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            chapter = project / "Chapter1" / "chapter1.tex"
+            chapter.parent.mkdir()
+            chapter.write_text(
+                "Prelude\nLorem Ipsum~\\citep{Aup91} has been the industry's\n"
+            )
+
+            target = memory.navigation_target(project, [chapter])
+
+        self.assertEqual(target["file"], "Chapter1/chapter1.tex")
+        self.assertEqual(target["symbol"], "Aup91")
+        self.assertEqual(target["position"], {"line": 1, "character": 19})
+
+    def test_result_summaries_count_nested_and_cross_file_work(self):
+        symbols = [
+            {"name": "chapter", "children": [{"name": "section"}]},
+            {"name": "figure"},
+        ]
+        locations = [
+            {"uri": "file:///chapter.tex", "range": {}},
+            {"targetUri": "file:///references.bib", "targetRange": {}},
+        ]
+        edit = {
+            "changes": {"file:///chapter.tex": [{}, {}]},
+            "documentChanges": [
+                {
+                    "textDocument": {"uri": "file:///references.bib"},
+                    "edits": [{}],
+                }
+            ],
+        }
+        self.assertEqual(memory.document_symbol_summary(symbols), (3, None))
+        self.assertEqual(memory.location_summary(locations), (2, 2))
+        self.assertEqual(memory.workspace_edit_summary(edit), (3, 2))
+
+    def test_hover_targets_prefer_reference_keys_across_documents(self):
+        documents = [
+            ("file:///main.tex", "\\documentclass{book}\n"),
+            ("file:///one.tex", "See~\\ref{section-one}.\n"),
+            ("file:///two.tex", "Read~\\citep{Aup91}.\n"),
+        ]
+        self.assertEqual(
+            memory.hover_targets(documents, limit=2),
+            [
+                (
+                    "file:///one.tex",
+                    {"line": 0, "character": 9},
+                ),
+                (
+                    "file:///two.tex",
+                    {"line": 0, "character": 12},
+                ),
+            ],
+        )
 
     @staticmethod
-    def _run(baseline_rss, settled_rss, peak_rss, baseline_pss, settled_pss):
+    def _run(
+        baseline_rss,
+        settled_rss,
+        peak_rss,
+        baseline_pss,
+        settled_pss,
+        initialize_seconds,
+        workspace_ready_seconds,
+        documents_ready_seconds,
+        latencies,
+    ):
         return {
             "milestones": {
                 "baseline": {
@@ -97,6 +175,24 @@ class SummaryTests(unittest.TestCase):
                 "peak": {"rss_mb": peak_rss, "pss_mb": settled_pss},
             },
             "settled_seconds": 3.0,
+            "initialize_seconds": initialize_seconds,
+            "workspace_ready_seconds": workspace_ready_seconds,
+            "documents_ready_seconds": documents_ready_seconds,
+            "request_latencies": [
+                {
+                    "key": "definition",
+                    "label": "Go to definition",
+                    "samples": len(latencies),
+                    "failures": 0,
+                    "empty_results": 0,
+                    "targets": 1,
+                    "result_unit": "location",
+                    "_latencies_ms": latencies,
+                    "_result_counts": [1, 2, 3],
+                    "_result_files": [1, 2, 2],
+                    "_payload_bytes": [100, 150, 200],
+                }
+            ],
         }
 
 

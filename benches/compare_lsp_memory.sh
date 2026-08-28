@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Compare whole-process-tree RSS and PSS for fresh Badness and TexLab language
-# server sessions. The committed JSON artifact feeds the benchmark docs page.
+# Compare speed and whole-process-tree RSS/PSS for fresh Badness and TexLab
+# language-server sessions. The committed JSON artifact feeds the docs page.
 
 set -euo pipefail
 
@@ -15,6 +15,8 @@ RUNS="${RUNS:-3}"
 SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-0.15}"
 QUIET_SECONDS="${QUIET_SECONDS:-5}"
 SETTLE_TIMEOUT="${SETTLE_TIMEOUT:-60}"
+LSP_LATENCY_RUNS="${LSP_LATENCY_RUNS:-20}"
+LSP_LATENCY_WARMUPS="${LSP_LATENCY_WARMUPS:-2}"
 JSON_OUT="$REPO_ROOT/benches/memory_results.json"
 
 while [[ $# -gt 0 ]]; do
@@ -26,7 +28,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "$(uname -s)" != "Linux" ] || [ ! -r /proc/self/smaps_rollup ]; then
-    echo "error: the memory benchmark requires Linux with readable /proc smaps_rollup" >&2
+    echo "error: the LSP benchmark requires Linux with readable /proc smaps_rollup" >&2
     exit 1
 fi
 for tool in cargo git python3 texlab; do
@@ -74,6 +76,8 @@ python3 "$REPO_ROOT/benches/lsp_memory_compare.py" \
     --sample-interval "$SAMPLE_INTERVAL" \
     --quiet-seconds "$QUIET_SECONDS" \
     --settle-timeout "$SETTLE_TIMEOUT" \
+    --latency-runs "$LSP_LATENCY_RUNS" \
+    --latency-warmups "$LSP_LATENCY_WARMUPS" \
     --stderr-dir "$BENCH_TMP/stderr" \
     --scratch-dir "$BENCH_TMP/scratch" \
     --badness-version "$BADNESS_VERSION" \
@@ -83,6 +87,6 @@ python3 "$REPO_ROOT/benches/lsp_memory_compare.py" \
     --corpus-commit "$PROJECT_COMMIT" \
     --out "$BENCH_TMP/memory_results.json"
 
-install -D "$BENCH_TMP/memory_results.json" "$JSON_OUT"
+install -Dm 0644 "$BENCH_TMP/memory_results.json" "$JSON_OUT"
 
 echo ">> Wrote $JSON_OUT"

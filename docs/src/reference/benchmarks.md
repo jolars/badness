@@ -112,41 +112,66 @@ folder benchmark—they would have no counterpart to measure against.
 
 {{ lint-benchmark-results }}
 
-## Language-server memory
+## Language-server speed and memory
 
-### How memory is measured
+### How the language servers are measured
 
-This comparison measures the resident cost of an ordinary editor session—not
-retained Rust allocations inside one implementation. The harness starts three
-fresh processes each of `badness lsp` and `texlab run` against the complete,
-pinned [`kks32/phd-thesis-template`] workspace. It opens the same five documents
-in each session, obtains diagnostics using the server's advertised pull or push
-model, and requests document symbols and a hover at a real control word in every
-open document.
+The harness starts three fresh processes each of `badness lsp` and `texlab run`
+against the complete, pinned [`kks32/phd-thesis-template`] workspace. Each
+session initializes the server, waits for background work to settle, opens the
+same five documents, obtains diagnostics using the server's advertised pull or
+push model, primes document symbols and meaningful citation/reference hovers,
+and waits for the editor workload to settle. It then times warm document-symbol,
+hover, definition, references, and rename requests.
+
+The readiness measurements divide that session into three user-visible waits:
+
+- **Initialize** is the `initialize` request round trip from a fresh process.
+- **Workspace ready** runs from process start to the beginning of the final
+  quiet window after initialization and background indexing.
+- **Open files ready** runs from the burst of `didOpen` notifications through
+  diagnostics and the beginning of the next quiet window.
+
+Warm document-symbol and hover requests span the same three chapter files,
+selected for real citation or reference keys. Definition, references, and rename
+use the `Aup91` citation in `Chapter1/chapter1.tex`; its definition is in
+`References/references.bib`. References include the declaration, and rename
+constructs a `WorkspaceEdit` without applying it.
+
+Each target gets two unmeasured warmup rounds and 20 measured rounds in every
+fresh session. The tables report the median and p95 over all samples. They also
+show serialized result size and the range of symbols, locations, or edits each
+server returns, including the number of files involved. Those counts expose
+cases in which two fast responses did different amounts of work.
 
 On Linux, the harness samples the complete descendant process tree every 150 ms
 from `/proc`. **RSS** is the resident memory commonly reported by process
 monitors; it counts shared pages once in every process. **PSS** divides shared
 pages among the processes that map them, which better estimates how much
 physical memory the session occupies. The baseline is recorded after
-initialization settles, the settled value after the editor workload settles, and
-the peak is the largest sample at any time. A phase is settled after five
-seconds below 5% of one CPU core and fails after 60 seconds. The table reports
-the median of three fresh runs; the JSON artifact retains every raw run.
+initialization settles, the settled value after the open-file workload settles,
+and the peak is the largest sample through the timed requests. A phase is
+settled after five seconds below 5% of one CPU core and fails after 60 seconds.
+The memory table reports the median of three fresh runs; the JSON artifact
+retains each run's measurements.
 
 The servers do not provide identical features or analysis, so this compares the
-user-visible cost rather than efficiency at the same work. Resident memory also
-depends on the operating system, allocator, and tool versions; read the absolute
-figures together with the setup below.
+user-visible latency, returned work, and resident cost rather than efficiency at
+the same work. Results also depend on the operating system, allocator, machine,
+and tool versions; read the absolute figures together with the setup below.
 
-Regenerate this section with `task bench:memory`. The committed
-`benches/memory_results.json` artifact is only read while building the site—the
-benchmark never runs in CI or during an mdBook build.
+Regenerate this section with `task bench:lsp` (`task bench:memory` remains an
+alias). The committed `benches/memory_results.json` artifact is only read while
+building the site—the benchmark never runs in CI or during an mdBook build.
 
 ### Setup
 
 {{ memory-benchmark-meta }}
 
-### Results
+### Speed
+
+{{ lsp-benchmark-results }}
+
+### Memory
 
 {{ memory-benchmark-results }}

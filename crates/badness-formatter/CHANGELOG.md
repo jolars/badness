@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.1](https://github.com/jolars/badness/compare/badness-formatter-v0.8.0...badness-formatter-v0.8.1) (2026-08-28)
+
+### Bug Fixes
+- **formatter:** drop root block indentation ([`aad72e8`](https://github.com/jolars/badness/commit/aad72e87c593241beef4169ea9e06fc543815df1)), fixes [#162](https://github.com/jolars/badness/issues/162)
+- **formatter:** align macro statement prefixes ([`4e7efa5`](https://github.com/jolars/badness/commit/4e7efa558386c94be8ba5da640b01a1d8dd35866)), fixes [#158](https://github.com/jolars/badness/issues/158)
+- **formatter:** prioritize math breakpoints ([`9f85294`](https://github.com/jolars/badness/commit/9f852940dc914f6a589c1dd484cc78ba3fe0f47c))
+- **formatter:** preserve postfix limit signs ([`658ef51`](https://github.com/jolars/badness/commit/658ef51b417d6af26e78d0ec839b050186998bfc))
+
+### Dependencies
+- updated crates/badness-parser to v0.8.0
+
 ## [0.8.0](https://github.com/jolars/badness/compare/badness-formatter-v0.7.0...badness-formatter-v0.8.0) (2026-08-27)
 
 ### Features

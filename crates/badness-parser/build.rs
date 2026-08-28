@@ -217,6 +217,7 @@ impl RawCommand {
 enum RawOutlineKind {
     Float,
     Theorem,
+    Frame,
 }
 
 #[derive(Deserialize, Default)]
@@ -249,6 +250,7 @@ impl RawEnvironment {
         let outline = match self.outline {
             Some(RawOutlineKind::Float) => "Some(OutlineKind::Float)",
             Some(RawOutlineKind::Theorem) => "Some(OutlineKind::Theorem)",
+            Some(RawOutlineKind::Frame) => "Some(OutlineKind::Frame)",
             None => "None",
         };
         format!(

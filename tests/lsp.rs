@@ -860,14 +860,17 @@ fn lsp_document_symbol_outline() {
     let (client, server_thread) = start_server(None);
     let uri: Uri = "file:///outline.tex".parse().unwrap();
 
-    // A section containing a figure (with a label) and a theorem.
+    // A section containing a figure (with a label), a theorem, and a Beamer frame.
     let doc = "\\section{Intro}\n\
         \\begin{figure}\n\
         \\label{fig:one}\n\
         \\end{figure}\n\
         \\begin{theorem}\n\
         x\n\
-        \\end{theorem}\n";
+        \\end{theorem}\n\
+        \\begin{frame}[plain]{Summary}\n\
+        \\label{frame:summary}\n\
+        \\end{frame}\n";
     did_open(&client, &uri, 1, doc);
     let diags = recv_diagnostics(&client);
     assert!(diags.diagnostics.is_empty(), "clean doc → no diagnostics");
@@ -891,14 +894,14 @@ fn lsp_document_symbol_outline() {
         panic!("expected a nested documentSymbol response");
     };
 
-    // One root section; the figure and theorem nest under it.
+    // One root section; the figure, theorem, and frame nest under it.
     assert_eq!(symbols.len(), 1);
     let section = &symbols[0];
     assert_eq!(section.name, "Intro");
     assert_eq!(section.kind, SymbolKind::MODULE);
     let children = section.children.as_deref().unwrap_or_default();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, vec!["figure", "theorem"]);
+    assert_eq!(names, vec!["figure", "theorem", "Summary"]);
 
     // The figure carries its label as a leaf.
     let figure = &children[0];
@@ -909,6 +912,11 @@ fn lsp_document_symbol_outline() {
     assert_eq!(figure_kids[0].kind, SymbolKind::CONSTANT);
 
     assert_eq!(children[1].kind, SymbolKind::CLASS);
+    assert_eq!(children[2].kind, SymbolKind::CLASS);
+    assert_eq!(
+        children[2].children.as_deref().unwrap_or_default()[0].name,
+        "frame:summary"
+    );
 
     shutdown(&client, server_thread);
 }

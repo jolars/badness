@@ -224,15 +224,18 @@ pub struct CommandSig {
 }
 
 /// How an environment appears in the document-symbol outline, if at all. A small
-/// curated category over the `block` environments: only floats and theorem-likes
-/// earn an outline entry, so layout environments (`center`, `quote`, `frame`, …)
-/// stay out of the symbol tree. Drives `SymbolKind` selection in the LSP layer.
+/// curated category over the `block` environments: floats, theorem-likes, and
+/// titled Beamer frames earn outline entries, while ordinary layout environments
+/// (`center`, `quote`, …) stay out of the symbol tree. Drives `SymbolKind`
+/// selection in the LSP layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutlineKind {
     /// A float (`figure`, `table`, and their starred forms).
     Float,
     /// A theorem-like environment (`theorem`, `lemma`, `proof`, …).
     Theorem,
+    /// A Beamer `frame`; it earns an entry only when its source supplies a title.
+    Frame,
 }
 
 /// The signature of an environment.
@@ -324,9 +327,10 @@ pub struct EnvironmentSig {
     /// space (`figure`, `center`, verbatim, …). Math, list, and no-indent
     /// environments are inherently block-level and are included by [`Self::block`].
     pub block_explicit: bool,
-    /// `Some(_)` for an environment that earns a document-symbol outline entry — a
-    /// float or a theorem-like. `None` for everything else. Only meaningful to the
-    /// language server's `documentSymbol`; the parser and formatter ignore it.
+    /// `Some(_)` for an environment that can earn a document-symbol outline entry —
+    /// a float, a theorem-like, or a titled Beamer frame. `None` for everything
+    /// else. Only meaningful to the language server's `documentSymbol`; the parser
+    /// and formatter ignore it.
     pub outline: Option<OutlineKind>,
 }
 
@@ -976,13 +980,14 @@ impl From<RawCommand> for CommandSig {
     }
 }
 
-/// An environment's outline category as written in the JSON: `"float"` or
-/// `"theorem"` (absent → `None`, no outline entry).
+/// An environment's outline category as written in the JSON: `"float"`,
+/// `"theorem"`, or `"frame"` (absent → `None`, no outline entry).
 #[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 enum RawOutlineKind {
     Float,
     Theorem,
+    Frame,
 }
 
 impl From<RawOutlineKind> for OutlineKind {
@@ -990,6 +995,7 @@ impl From<RawOutlineKind> for OutlineKind {
         match raw {
             RawOutlineKind::Float => OutlineKind::Float,
             RawOutlineKind::Theorem => OutlineKind::Theorem,
+            RawOutlineKind::Frame => OutlineKind::Frame,
         }
     }
 }
@@ -1136,6 +1142,10 @@ mod tests {
         assert_eq!(
             db.environment("theorem").unwrap().outline,
             Some(OutlineKind::Theorem)
+        );
+        assert_eq!(
+            db.environment("frame").unwrap().outline,
+            Some(OutlineKind::Frame)
         );
         assert_eq!(db.environment("center").unwrap().outline, None);
     }

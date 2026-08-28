@@ -571,6 +571,7 @@ pub(super) fn render_environment(
     match sig.outline {
         Some(OutlineKind::Float) => facts.push("float".to_string()),
         Some(OutlineKind::Theorem) => facts.push("theorem-like".to_string()),
+        Some(OutlineKind::Frame) => facts.push("Beamer frame".to_string()),
         None => {}
     }
     if sig.math {

@@ -1,6 +1,7 @@
 //! Build a document-symbol outline from the CST: the sectioning hierarchy
-//! (`\part` … `\subparagraph`), with float/theorem environments, `\label`s, and a
-//! `.dtx`'s documented macros/environments (via [`doc_associations`]) as leaves.
+//! (`\part` … `\subparagraph`), with titled Beamer frames, float/theorem
+//! environments, `\label`s, and a `.dtx`'s documented macros/environments (via
+//! [`doc_associations`]) as leaves.
 //! LSP-agnostic by design (byte ranges, no `lsp_types`) so it is
 //! unit-testable without the language server; the `lsp` module converts the
 //! [`OutlineItem`] tree into `lsp_types::DocumentSymbol`.
@@ -13,14 +14,14 @@
 //! two-tier [`signature::Signatures`].
 //!
 //! Two passes. [`collect`] walks the CST in document order into a flat list of
-//! `(level, item)` pairs: sectioning commands carry their level, while floats,
-//! theorems, and labels carry `None`. Non-outline environments (`document`,
-//! `itemize`, …) are *transparent* — their contents splice into the parent stream
-//! so a `\label` inside `itemize` still surfaces. [`nest_sections`] then folds the
-//! flat list into the hierarchy with a level stack (sectioning commands are CST
-//! siblings; nesting is implied by level, not tree shape), attaching each
-//! non-section item to the deepest open section and stretching each section's
-//! range to where it closes.
+//! `(level, item)` pairs: sectioning commands carry their level, while frames,
+//! floats, theorems, and labels carry `None`. Non-outline environments
+//! (`document`, `itemize`, …), along with untitled frames, are *transparent* —
+//! their contents splice into the parent stream so a `\label` inside `itemize`
+//! still surfaces. [`nest_sections`] then folds the flat list into the hierarchy
+//! with a level stack (sectioning commands are CST siblings; nesting is implied by
+//! level, not tree shape), attaching each non-section item to the deepest open
+//! section and stretching each section's range to where it closes.
 
 use rowan::{TextRange, TextSize};
 
@@ -41,6 +42,8 @@ pub enum OutlineSymbol {
     Float,
     /// A theorem-like environment (`theorem`, `lemma`, `proof`, …).
     Theorem,
+    /// A titled Beamer frame.
+    Frame,
     /// A `\label{…}` definition.
     Label,
     /// A documented `.dtx` macro: a `macro` environment or `\DescribeMacro`.
@@ -123,11 +126,30 @@ fn collect(node: &SyntaxNode) -> Vec<Raw> {
     out
 }
 
-/// Emit a sectioning or `\label` item for a `COMMAND` node, if it is one.
+/// Emit a sectioning, command-form Beamer frame, or `\label` item for a `COMMAND`
+/// node, if it is one.
 fn collect_command(command: &SyntaxNode, out: &mut Vec<Raw>) {
     let Some(name) = command_name(command) else {
         return;
     };
+
+    // `\frame{\frametitle{…} …}` is Beamer's command form. Requiring the nested
+    // title keeps LaTeX's unrelated box-drawing `\frame{…}` command out.
+    if name == "frame"
+        && let Some((title, selection_range)) = frametitle_command(command)
+    {
+        out.push(Raw {
+            level: None,
+            item: OutlineItem {
+                name: title,
+                kind: OutlineSymbol::Frame,
+                range: command.text_range(),
+                selection_range,
+                children: nest_sections(collect(command), command.text_range().end()),
+            },
+        });
+        return;
+    }
 
     // Curated [`signature::builtin`] only — never the bulk CWL tier: the symbol
     // outline is a curated judgment, and CWL's sectioning classifications are not
@@ -171,8 +193,8 @@ fn collect_command(command: &SyntaxNode, out: &mut Vec<Raw>) {
     }
 }
 
-/// Emit a float/theorem item for an `ENVIRONMENT` node, or splice its contents in
-/// transparently when it is not outline-worthy.
+/// Emit a frame/float/theorem item for an `ENVIRONMENT` node, or splice its
+/// contents in transparently when it is not outline-worthy.
 fn collect_environment(env: &SyntaxNode, out: &mut Vec<Raw>) {
     // The name lives in the `\begin{name}` (`BEGIN` node), not on `ENVIRONMENT`.
     let begin = Environment::cast(env.clone()).and_then(|e| e.begin());
@@ -190,25 +212,52 @@ fn collect_environment(env: &SyntaxNode, out: &mut Vec<Raw>) {
     };
 
     let name = name.unwrap_or_default();
-    let selection = begin
+    let begin_selection = begin
         .as_ref()
         .map(|b| b.syntax().text_range())
         .unwrap_or_else(|| env.text_range());
+    let (display_name, symbol, selection) = match kind {
+        OutlineKind::Float => (name, OutlineSymbol::Float, begin_selection),
+        OutlineKind::Theorem => (name, OutlineSymbol::Theorem, begin_selection),
+        OutlineKind::Frame => {
+            let Some((title, selection)) = frame_title(env, begin.as_ref()) else {
+                // An untitled frame contributes no useful navigation target, but
+                // its labels and other outline constructs must still surface.
+                out.extend(collect(env));
+                return;
+            };
+            (title, OutlineSymbol::Frame, selection)
+        }
+    };
     out.push(Raw {
         level: None,
         item: OutlineItem {
-            name,
-            kind: match kind {
-                OutlineKind::Float => OutlineSymbol::Float,
-                OutlineKind::Theorem => OutlineSymbol::Theorem,
-            },
+            name: display_name,
+            kind: symbol,
             range: env.text_range(),
             selection_range: selection,
-            // An inner `\label`/nested environment nests under the float; nest the
-            // body independently against the environment's end.
+            // Inner labels and nested outline environments belong to this
+            // container; nest its body independently against the environment's end.
             children: nest_sections(collect(env), env.text_range().end()),
         },
     });
+}
+
+/// A Beamer frame's long title and its source range. The environment shorthand
+/// (`\begin{frame}[opts]{Title}`) is checked first; an absent or empty shorthand
+/// falls through to an explicit `\frametitle[short]{Long}` in the body.
+fn frame_title(env: &SyntaxNode, begin: Option<&Begin>) -> Option<(String, TextRange)> {
+    begin
+        .and_then(|begin| title_argument(begin.syntax(), 0))
+        .or_else(|| frametitle_command(env))
+}
+
+/// Find the first `\frametitle` below `node` and return its long-title argument.
+fn frametitle_command(node: &SyntaxNode) -> Option<(String, TextRange)> {
+    node.descendants()
+        .filter(|descendant| descendant.kind() == SyntaxKind::COMMAND)
+        .find(|command| command_name(command).as_deref() == Some("frametitle"))
+        .and_then(|command| title_argument(&command, 0))
 }
 
 /// Fold the flat `(level, item)` stream into the sectioning hierarchy. `end_bound`
@@ -258,12 +307,18 @@ fn attach(roots: &mut Vec<OutlineItem>, stack: &mut [(u8, OutlineItem)], item: O
 /// source when the title holds nested macros, and to `None` when there is no title
 /// group at all (the caller substitutes the command name).
 fn section_title(command: &SyntaxNode) -> Option<String> {
-    let group = nth_group(command, 0)?;
-    let text = nth_group_text(command, 0)
+    title_argument(command, 0).map(|(title, _)| title)
+}
+
+/// A trimmed, nonempty title from the `n`-th braced argument, retaining nested
+/// macro source when the group is not flat, together with the group range.
+fn title_argument(node: &SyntaxNode, n: usize) -> Option<(String, TextRange)> {
+    let group = nth_group(node, n)?;
+    let text = nth_group_text(node, n)
         .map(|text| text.to_string())
         .unwrap_or_else(|| group_inner_source(&group));
     let text = text.trim().to_owned();
-    (!text.is_empty()).then_some(text)
+    (!text.is_empty()).then(|| (text, group.text_range()))
 }
 
 /// What a `\label` at some offset labels: the classification driving label
@@ -324,6 +379,7 @@ pub fn label_context(root: &SyntaxNode, offset: TextSize) -> Option<LabelContext
                                 env: name,
                             });
                         }
+                        Some(OutlineKind::Frame) => {}
                         None => {
                             if sig.math {
                                 return Some(LabelContext::Equation);
@@ -477,6 +533,67 @@ mod tests {
         assert_eq!(items[0].children.len(), 1);
         assert_eq!(items[0].children[0].kind, OutlineSymbol::Float);
         assert_eq!(items[0].children[0].name, "table");
+    }
+
+    #[test]
+    fn titled_beamer_frames_nest_inside_sections() {
+        let src = "\\section{Talk}\n\
+            \\begin{frame}[fragile]\n\
+            \\frametitle[Short]{First \\emph{slide}}\n\
+            \\label{frame:first}\n\
+            \\end{frame}\n\
+            \\begin{frame}[plain]{Second slide}\n\
+            body\n\
+            \\end{frame}\n";
+        let items = outline_of(src);
+
+        assert_eq!(items.len(), 1);
+        let frames = &items[0].children;
+        assert_eq!(
+            frames
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["First \\emph{slide}", "Second slide"]
+        );
+        assert!(frames.iter().all(|item| item.kind == OutlineSymbol::Frame));
+        assert_eq!(
+            &src[usize::from(frames[0].selection_range.start())
+                ..usize::from(frames[0].selection_range.end())],
+            "{First \\emph{slide}}"
+        );
+        assert_eq!(frames[0].children.len(), 1);
+        assert_eq!(frames[0].children[0].name, "frame:first");
+        assert_eq!(
+            &src[usize::from(frames[1].selection_range.start())
+                ..usize::from(frames[1].selection_range.end())],
+            "{Second slide}"
+        );
+    }
+
+    #[test]
+    fn untitled_beamer_frame_remains_transparent() {
+        let items =
+            outline_of("\\section{Talk}\n\\begin{frame}\n\\label{frame:untitled}\n\\end{frame}\n");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].children.len(), 1);
+        assert_eq!(items[0].children[0].kind, OutlineSymbol::Label);
+        assert_eq!(items[0].children[0].name, "frame:untitled");
+    }
+
+    #[test]
+    fn command_form_beamer_frame_uses_frametitle() {
+        let items = outline_of(
+            "\\section{Talk}\n\\frame{\\frametitle{Command slide}\\label{frame:command}body}\n",
+        );
+
+        assert_eq!(items.len(), 1);
+        let frame = &items[0].children[0];
+        assert_eq!(frame.kind, OutlineSymbol::Frame);
+        assert_eq!(frame.name, "Command slide");
+        assert_eq!(frame.children.len(), 1);
+        assert_eq!(frame.children[0].name, "frame:command");
     }
 
     #[test]

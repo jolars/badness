@@ -255,8 +255,8 @@ fn server_capabilities(
             more_trigger_character: None,
         }),
         document_symbol_provider: Some(OneOf::Left(true)),
-        // Aggregate the per-file outline (sections, labels, floats, theorems,
-        // macros, environments) across every tracked project file. No lazy
+        // Aggregate the per-file outline (sections, frames, labels, floats,
+        // theorems, macros, environments) across every tracked project file. No lazy
         // `resolve`, so each result carries its full `Location`.
         workspace_symbol_provider: Some(OneOf::Left(true)),
         // Surface linter autofixes and syntax-aware refactorings. `Simple(true)`
@@ -4983,6 +4983,7 @@ fn document_aux(
 fn outline_symbol_kind(kind: OutlineSymbol) -> SymbolKind {
     match kind {
         OutlineSymbol::Section => SymbolKind::MODULE,
+        OutlineSymbol::Frame => SymbolKind::CLASS,
         OutlineSymbol::Float => SymbolKind::OBJECT,
         OutlineSymbol::Theorem => SymbolKind::CLASS,
         OutlineSymbol::Label => SymbolKind::CONSTANT,
@@ -5027,7 +5028,7 @@ fn to_document_symbol(
                     .find(|c| c.kind == OutlineSymbol::Label)
                     .and_then(|label| aux.labels.get(label.name.as_str()).cloned());
             }
-            OutlineSymbol::Macro | OutlineSymbol::Environment => {}
+            OutlineSymbol::Frame | OutlineSymbol::Macro | OutlineSymbol::Environment => {}
         }
     }
     let children: Vec<DocumentSymbol> = item

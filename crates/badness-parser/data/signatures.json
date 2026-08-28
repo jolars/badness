@@ -197,7 +197,7 @@
     "verse": { "block": true },
     "abstract": { "block": true },
     "titlepage": { "block": true },
-    "frame": { "block": true, "labelKey": true },
+    "frame": { "block": true, "labelKey": true, "outline": "frame" },
 
     "tikzpicture": { "args": [{ "kind": "opt", "content": "keyval" }], "block": true, "statementBody": true },
     "pgfpicture": { "block": true, "statementBody": true },

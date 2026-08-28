@@ -1275,19 +1275,24 @@ per line — two statements on one authored line split, one authored across line
 joins when it fits — and **every continuation line hangs one indent step under
 its head**, so a wrapped `\node[…] at (2,3)` / `{…};` reads as a continuation
 rather than a sibling. The statement's interior reflows under
-`ReflowKind::ProseArg` (a lone newline is a plain atom boundary the width fill
-re-decides; a comment still rides and ends its line; a `{label}` block hangs as
-its own segment with a glued `;` riding its last line), and the whole lowering
-is Tier 1: the hang is emitted, never read, and the node re-derives from its `;`
-however the emitted layout breaks, so the hanging indent is idempotent by
-structure — the property whose absence had deferred it (the expl3 call unit is
-the same move made from the semantic side). A **glued** statement boundary
-(`…;\draw` with no gap) is never split; the statement rides the previous line,
-the glued-divider principle. Content no `;` terminates — a `\tikzset` line, a
-lone `\foreach` header — keeps the authored-line rule: its own logical line,
-flush width wraps, the Tier-2 fixed-point argument unchanged. Every non-`Reflow`
-path splices the wrappers out (`flatten_statements`) and behaves
-byte-identically to the pre-statement layout.
+`ReflowKind::StatementInterior` (a lone newline is a plain atom boundary the
+width fill re-decides; a comment still rides and ends its line; a `{label}`
+block hangs as its own segment with a glued `;` riding its last line), and the
+whole lowering is Tier 1: the hang is emitted, never read, and the node
+re-derives from its `;` however the emitted layout breaks, so the hanging indent
+is idempotent by structure — the property whose absence had deferred it (the
+expl3 call unit is the same move made from the semantic side). A bound leading
+documentation comment and a maximal leading run of comment-terminated
+command-only macro invocations stay outside the hang at body indentation. Both
+gates read comment presence rather than authored newline shape, and their forced
+comment breaks reproduce the same prefix on the next pass; after non-command
+statement content begins, a post-comment tail remains a hanging continuation. A
+**glued** statement boundary (`…;\draw` with no gap) is never split; the
+statement rides the previous line, the glued-divider principle. Content no `;`
+terminates — a `\tikzset` line, a lone `\foreach` header — keeps the
+authored-line rule: its own logical line, flush width wraps, the Tier-2
+fixed-point argument unchanged. Every non-`Reflow` path splices the wrappers out
+(`flatten_statements`) and behaves byte-identically to the pre-statement layout.
 
 Breaks *inside* a statement come from the **TikZ unit model**
 (`semantic::tikz::statement_glue`) — the vocabulary the extent node cannot

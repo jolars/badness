@@ -8194,10 +8194,14 @@ fn command_is_block(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// continuation line after the statement head — width wraps, post-comment
 /// lines, and block segments alike — one step under it, so a wrapped
 /// `\node[…] at (2,3)` / `{…};` reads as a continuation rather than a sibling.
-/// A bound leading [`SyntaxKind::DOC_COMMENT`] is different: it documents the
-/// head rather than preceding it as statement content, so
-/// [`statement_leading_comment`] emits it outside the hang and the head remains
-/// at the body indentation (issue #158).
+/// Two leading shapes remain outside that hang: a bound
+/// [`SyntaxKind::DOC_COMMENT`], which documents the head, and a maximal run of
+/// comment-terminated command-only lines before the eventual TikZ statement.
+/// [`statement_leading_comment`] and
+/// [`statement_leading_command_comment_prefix`] identify those shapes so their
+/// commands and the statement head all remain at the body indentation (issue
+/// #158). Once non-command statement content begins, a post-comment tail remains
+/// a genuine hanging continuation.
 ///
 /// Fixed point (Tier 1): the hang is *emitted*, never read. Statement extent
 /// re-derives from the terminating `;` on every parse, however the emitted
@@ -8205,37 +8209,97 @@ fn command_is_block(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// and the interior reads only width, gluedness, comment presence, and
 /// non-trivia token text (the unit model), all preserved or content-derived.
 /// A peeled leading comment is re-emitted on its own line immediately above the
-/// head, so it rebinds as the same `DOC_COMMENT` on the next parse.
+/// head, so it rebinds as the same `DOC_COMMENT` on the next parse. A peeled
+/// command prefix retains each trailing comment, and therefore each forced line
+/// boundary, so the same maximal prefix is recognized on the next pass.
 /// So `fmt(fmt(x)) == fmt(x)` holds by structure, where the
 /// flush-continuation contract this replaces had to *forbid* the hang.
 fn lower_statement(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
-    let Some(comment) = statement_leading_comment(node, cx) else {
+    let comment = statement_leading_comment(node, cx);
+    let body_cx = LowerCtx {
+        omitted_leading_comment: comment
+            .as_ref()
+            .map(SyntaxNode::text_range)
+            .or(cx.omitted_leading_comment),
+        ..cx
+    };
+    let elements: Vec<SyntaxElement> = node.children_with_tokens().collect();
+    let prefix_end = statement_leading_command_comment_prefix(&elements, body_cx);
+
+    if comment.is_none() && prefix_end == 0 {
         return Ir::indent(reflow_elements(
-            node.children_with_tokens(),
+            elements.into_iter(),
             cx,
             ReflowKind::StatementInterior,
         ));
-    };
+    }
 
-    let leading = comment
-        .children_with_tokens()
-        .filter_map(SyntaxElement::into_token)
-        .filter(|token| token.kind() == SyntaxKind::COMMENT)
-        .map(|token| Ir::verbatim(token.text()));
-    let body_cx = LowerCtx {
-        omitted_leading_comment: Some(comment.text_range()),
-        ..cx
-    };
+    let mut leading = Vec::new();
+    if let Some(comment) = comment {
+        leading.push(Ir::join(
+            Ir::hard_line(),
+            comment
+                .children_with_tokens()
+                .filter_map(SyntaxElement::into_token)
+                .filter(|token| token.kind() == SyntaxKind::COMMENT)
+                .map(|token| Ir::verbatim(token.text())),
+        ));
+    }
+    if prefix_end > 0 {
+        if !leading.is_empty() {
+            leading.push(Ir::hard_line());
+        }
+        leading.push(reflow_elements(
+            elements[..prefix_end].iter().cloned(),
+            body_cx,
+            ReflowKind::StatementInterior,
+        ));
+    }
     let body = reflow_elements(
-        node.children_with_tokens(),
+        elements[prefix_end..].iter().cloned(),
         body_cx,
         ReflowKind::StatementInterior,
     );
-    Ir::concat([
-        Ir::join(Ir::hard_line(), leading),
-        Ir::hard_line(),
-        Ir::indent(body),
-    ])
+    Ir::concat([Ir::concat(leading), Ir::hard_line(), Ir::indent(body)])
+}
+
+/// The maximal statement prefix made of comment-terminated command-only lines.
+/// The trailing comment is the structural boundary: it forces the line break
+/// and preserves this positional classification across passes without
+/// consulting authored newline shape. Non-command content before a comment ends
+/// the prefix, so a genuine path tail such as `\draw (0,0) % note` remains
+/// hanging-indented. This is only a layout gate; it makes no claim about what an
+/// arbitrary macro expands to.
+fn statement_leading_command_comment_prefix(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> usize {
+    let mut prefix_end = 0;
+    let mut saw_command = false;
+    for (idx, element) in elements.iter().enumerate() {
+        match element {
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::WHITESPACE => {}
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::NEWLINE => {
+                if saw_command {
+                    return prefix_end;
+                }
+            }
+            SyntaxElement::Node(node)
+                if node.kind() == SyntaxKind::COMMAND
+                    && !cx.suppressed(node.text_range())
+                    && !(cx.is_dtx && contains_indented_dtx_comment(node)) =>
+            {
+                saw_command = true;
+            }
+            SyntaxElement::Token(token)
+                if token.kind() == SyntaxKind::COMMENT
+                    && saw_command
+                    && !cx.suppressed(token.text_range()) =>
+            {
+                prefix_end = idx + 1;
+                saw_command = false;
+            }
+            _ => return prefix_end,
+        }
+    }
+    prefix_end
 }
 
 /// The bound own-line comment at the front of a structural statement, if its

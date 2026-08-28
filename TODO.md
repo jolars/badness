@@ -49,6 +49,26 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `\alphaβ` becomes `\alpha β`. Unlike the mode-specific `@`, `_`, and `:`
   mismatch, this is a readability judgment rather than a defect.
 
+- [ ] **Preserve postfix left-limit signs in math.** Badness currently rewrites
+  `N(t-)` and `S(T_i-)` as `N(t - )` and `S(T_i - )`, spelling a postfix
+  one-sided-limit marker as a binary operator before the closing delimiter.
+  Cover inline math, display math, and aligned grids. This also occurs in the
+  `nielsrhansen/RwR` corpus at commit
+  `2fd0219f562f5fa28b286a3c05065eee24f87f93`.
+
+- [ ] **Avoid isolated operators when breaking free display math.** At the
+  default width of 80, the RwR generalized-linear-model confidence interval
+  breaks `\pm z` onto a line by itself before placing the `\cdot` term on the
+  following line. Improve breakpoint selection for special operators such as
+  `\pm`, `\cdot`, and `\mid`, and add the AUC and confidence-interval examples
+  from the RwR corpus as regressions.
+
+- [ ] **Make aligned math layout respect the configured line width.** Alignment
+  padding and unbroken row bodies can exceed the width substantially; a
+  two-row `align` reproducer formatted at width 40 emits a 64-column row. Add
+  a width ceiling or layout-badness assertion using a long aligned display from
+  `13_interval.qmd` in the RwR corpus.
+
 - [ ] **Widen mandatory-keyval admission (follow-up to the `{…}` segmentation).**
   `ContentKind::Keyval` on a *mandatory* group is now consumed
   (`lower_segmented_group`; fixture `keyval_group_splits_entries`), so the setters

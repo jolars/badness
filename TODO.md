@@ -49,13 +49,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `\alphaβ` becomes `\alpha β`. Unlike the mode-specific `@`, `_`, and `:`
   mismatch, this is a readability judgment rather than a defect.
 
-- [ ] **Preserve postfix left-limit signs in math.** Badness currently rewrites
-  `N(t-)` and `S(T_i-)` as `N(t - )` and `S(T_i - )`, spelling a postfix
-  one-sided-limit marker as a binary operator before the closing delimiter.
-  Cover inline math, display math, and aligned grids. This also occurs in the
-  `nielsrhansen/RwR` corpus at commit
-  `2fd0219f562f5fa28b286a3c05065eee24f87f93`.
-
 - [ ] **Avoid isolated operators when breaking free display math.** At the
   default width of 80, the RwR generalized-linear-model confidence interval
   breaks `\pm z` onto a line by itself before placing the `\cdot` term on the

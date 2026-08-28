@@ -8992,6 +8992,15 @@ enum MathRole {
     /// A relation (`=`, `\leq`, `\to`, …). The first one anchors the alignment;
     /// a later one is also a break point.
     Relation,
+    /// A one-sided-limit `-` immediately before a closing delimiter. It is an
+    /// ordinary postfix atom, so both adjacent boundaries stay tight.
+    PostfixLeftLimit,
+}
+
+impl MathRole {
+    fn is_operand_like(self) -> bool {
+        matches!(self, Self::Operand | Self::PostfixLeftLimit)
+    }
 }
 
 /// Source-spacing policy for a math list. Script arguments use TeX's compact
@@ -9031,6 +9040,7 @@ struct MathSurfaceAtom {
     control_word_operator: bool,
     starts_control_word_letter: bool,
     ends_control_word: bool,
+    postfix_left_limit: bool,
 }
 
 /// Lower one CST element into the semantic atoms that its source surface
@@ -9065,6 +9075,7 @@ fn lower_math_atoms(
             control_word_operator,
             starts_control_word_letter,
             ends_control_word,
+            postfix_left_limit: false,
         }];
     };
     if token.kind() != SyntaxKind::WORD {
@@ -9091,6 +9102,7 @@ fn lower_math_atoms(
             control_word_operator,
             starts_control_word_letter,
             ends_control_word,
+            postfix_left_limit: false,
         }];
     }
 
@@ -9137,7 +9149,26 @@ fn lower_math_atoms(
             control_word_operator: false,
             starts_control_word_letter: text.chars().next().is_some_and(is_control_word_letter),
             ends_control_word: false,
+            postfix_left_limit: text == "-",
         });
+    }
+    let following_token_closes = || {
+        let mut next = token.next_token();
+        while next
+            .as_ref()
+            .is_some_and(|token| is_collapsible_trivia(token.kind()))
+        {
+            next = next.and_then(|token| token.next_token());
+        }
+        next.and_then(|token| math_atoms(&SyntaxElement::Token(token)).next())
+            .is_some_and(|atom| atom.delimiter == Some(DelimiterRole::Close))
+    };
+    for index in 0..surface.len() {
+        let followed_by_closer = surface
+            .get(index + 1)
+            .is_some_and(|next| next.delimiter == Some(DelimiterRole::Close))
+            || index + 1 == surface.len() && following_token_closes();
+        surface[index].postfix_left_limit &= followed_by_closer;
     }
     // Anticipate the gap the sequencer will add before a following operator;
     // otherwise that gap makes only the next pass recognize the slash as spaced.
@@ -9209,9 +9240,18 @@ fn element_ends_control_word(element: &SyntaxElement) -> bool {
 /// `+`/`-` (or any binary operator) with no operand to its left — either the first
 /// atom, one after a binary, large operator, relation, opener, or punctuation —
 /// is unary, so it glues to its operand and is *not* a break point, degrading to
-/// an [`MathRole::Operand`]. The full class is needed here because [`MathRole`]
+/// an [`MathRole::Operand`]. A structurally proven postfix left-limit sign gets
+/// its own tight role. The full class is needed here because [`MathRole`]
 /// deliberately collapses operators and punctuation into `Operand`.
-fn math_atom_role(class: MathClass, prev_class: MathClass, prev_opener: bool) -> MathRole {
+fn math_atom_role(
+    class: MathClass,
+    prev_class: MathClass,
+    prev_opener: bool,
+    postfix_left_limit: bool,
+) -> MathRole {
+    if postfix_left_limit {
+        return MathRole::PostfixLeftLimit;
+    }
     let raw = match class {
         MathClass::Bin => MathRole::Binary,
         MathClass::Rel => MathRole::Relation,
@@ -9257,7 +9297,12 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK => return None,
             other => {
                 for atom in lower_math_atoms(other, cx, MathSpacing::Normal) {
-                    let role = math_atom_role(atom.class, prev_class, prev_opener);
+                    let role = math_atom_role(
+                        atom.class,
+                        prev_class,
+                        prev_opener,
+                        atom.postfix_left_limit,
+                    );
                     let completes_colon_relation = !pending_space
                         && pieces
                             .last()
@@ -9302,10 +9347,10 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
     // operator-created slash gaps symmetric before building either layout.
     for index in 0..pieces.len() {
         if pieces[index].slash
-            && (index > 0 && pieces[index - 1].role != MathRole::Operand
+            && (index > 0 && !pieces[index - 1].role.is_operand_like()
                 || pieces
                     .get(index + 1)
-                    .is_some_and(|next| next.role != MathRole::Operand))
+                    .is_some_and(|next| !next.role.is_operand_like()))
         {
             pieces[index].spaced_slash = true;
         }
@@ -9358,6 +9403,10 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     let space_sep = |k: usize| -> Ir {
         if pieces[k].spaced_slash || pieces[k - 1].spaced_slash {
             Ir::verbatim(" ")
+        } else if pieces[k].role == MathRole::PostfixLeftLimit
+            || pieces[k - 1].role == MathRole::PostfixLeftLimit
+        {
+            Ir::Nil
         } else if pieces[k].role != MathRole::Operand
             || pieces[k - 1].role != MathRole::Operand
             || pieces[k].space_before
@@ -9576,10 +9625,15 @@ fn lower_math_seq(
                         out[prev_atom_ir_index] =
                             Ir::concat([Ir::verbatim(" "), out[prev_atom_ir_index].clone()]);
                     }
-                    let role = math_atom_role(atom.class, prev_class, prev_opener);
+                    let role = math_atom_role(
+                        atom.class,
+                        prev_class,
+                        prev_opener,
+                        atom.postfix_left_limit,
+                    );
                     let spaced_slash = atom.spaced_slash
                         || atom.slash
-                            && (spacing == MathSpacing::Normal && prev_role != MathRole::Operand
+                            && (spacing == MathSpacing::Normal && !prev_role.is_operand_like()
                                 || spacing == MathSpacing::Script && prev_control_word_operator);
                     let touches_spaced_slash = prev_spaced_slash || spaced_slash;
                     let delimiter_edge = matches!(
@@ -9594,6 +9648,8 @@ fn lower_math_seq(
                     let script_operator_spacing =
                         atom.control_word_operator || prev_control_word_operator;
                     let normal_spacing = spacing == MathSpacing::Normal
+                        && role != MathRole::PostfixLeftLimit
+                        && prev_role != MathRole::PostfixLeftLimit
                         && (role != MathRole::Operand
                             || prev_role != MathRole::Operand
                             || pending_space);

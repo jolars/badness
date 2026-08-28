@@ -1030,6 +1030,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // slash reaches its symmetric layout in the same pass (issue #143).
     // Scientific notation (`1e-5`) is deliberately not special-cased.
     ("math_op_spacing", WrapMode::Preserve, 80),
+    // A minus immediately before a closing delimiter is a postfix one-sided-limit
+    // marker, not an infix operator. Keep it glued in inline math, free display
+    // math, and alignment-grid cells.
+    ("math_postfix_left_limit", WrapMode::Preserve, 80),
     // TeX demotes a binary operator to an ordinary atom after punctuation and
     // large operators too. The sign therefore stays glued to its operand in both
     // the ordinary sequencer and the display breaker; in particular, it is not a

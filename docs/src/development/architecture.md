@@ -1247,7 +1247,12 @@ panache, resolved from `[format] lang` and `[format.no-break-abbreviations]`.
 
 Display math has its own knob, `MathWrap`, scoped to single-formula display
 bodies. Its default resolves against the effective `WrapMode`, so one `wrap`
-setting carries over to math for free.
+setting carries over to math for free. Under `Break`, the operator layout is
+precedence-aware where TeX's `Bin` and `Rel` classes are too coarse: additive
+operators such as `\pm` remain continuation points, `\cdot` stays with its
+multiplicative term, and a top-level `\mid` keeps the following condition's
+relations out of the equation-chain alignment. This may leave a cohesive term a
+few columns over width rather than strand a short operator fragment.
 
 ### Statement bodies
 

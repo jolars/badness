@@ -1093,6 +1093,12 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // column like `=` (issue #42: unrecognized, it let an interior relation
     // anchor instead, producing a bizarre deep alignment column).
     ("math_display_break_coloneq", WrapMode::Preserve, 80),
+    // Breakpoints follow operator precedence: an additive `\pm` may start a
+    // continuation, while the following multiplicative `\cdot` stays with its
+    // term. A conditional `\mid` does not turn the condition's `=` signs into
+    // an equation chain. These are the confidence-interval and AUC cases from
+    // the RwR corpus.
+    ("math_display_operator_precedence", WrapMode::Preserve, 80),
     // Escaped-brace and named delimiters count toward bracket depth, so a
     // relation or operator inside a set-builder `\{ … \}` is interior: no anchor,
     // no break point. A body whose only break opportunities sit inside delimiters

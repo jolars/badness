@@ -49,13 +49,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `\alphaβ` becomes `\alpha β`. Unlike the mode-specific `@`, `_`, and `:`
   mismatch, this is a readability judgment rather than a defect.
 
-- [ ] **Avoid isolated operators when breaking free display math.** At the
-  default width of 80, the RwR generalized-linear-model confidence interval
-  breaks `\pm z` onto a line by itself before placing the `\cdot` term on the
-  following line. Improve breakpoint selection for special operators such as
-  `\pm`, `\cdot`, and `\mid`, and add the AUC and confidence-interval examples
-  from the RwR corpus as regressions.
-
 - [ ] **Make aligned math layout respect the configured line width.** Alignment
   padding and unbroken row bodies can exceed the width substantially; a
   two-row `align` reproducer formatted at width 40 emits a 64-column row. Add

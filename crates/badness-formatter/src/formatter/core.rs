@@ -9015,6 +9015,10 @@ enum MathSpacing {
 struct MathPiece {
     ir: Ir,
     role: MathRole,
+    /// Whether this operator may start a continuation line. Multiplicative
+    /// operators stay attached to the factor on their left, so a short
+    /// additive term is not stranded between two breaks.
+    break_before: bool,
     colon_relation_prefix: bool,
     spaced_slash: bool,
     slash: bool,
@@ -9032,6 +9036,7 @@ struct MathPiece {
 struct MathSurfaceAtom {
     ir: Ir,
     class: MathClass,
+    break_kind: MathBreakKind,
     delimiter: Option<DelimiterRole>,
     colon_relation_prefix: bool,
     starts_equals_relation: bool,
@@ -9041,6 +9046,54 @@ struct MathSurfaceAtom {
     starts_control_word_letter: bool,
     ends_control_word: bool,
     postfix_left_limit: bool,
+}
+
+/// Formatter-owned precedence for the few math operators whose TeX atom class
+/// alone is too coarse for readable line breaking.
+#[derive(Clone, Copy, PartialEq)]
+enum MathBreakKind {
+    /// Use the ordinary [`MathClass`] binary/relation behavior.
+    Class,
+    /// A low-precedence additive operator, retained as an explicit break point.
+    Additive,
+    /// A multiplicative operator, kept with the surrounding term.
+    Multiplicative,
+    /// A conditional relation, kept inline and used to protect its condition's
+    /// relation operators from equation-chain alignment.
+    Conditional,
+}
+
+fn math_break_kind(element: &SyntaxElement) -> MathBreakKind {
+    let SyntaxElement::Node(node) = element else {
+        return match element.as_token().map(|token| token.text()) {
+            Some("+" | "-") => MathBreakKind::Additive,
+            _ => MathBreakKind::Class,
+        };
+    };
+    if node.kind() == SyntaxKind::SCRIPTED {
+        return node
+            .children_with_tokens()
+            .find(|element| {
+                !matches!(
+                    element.kind(),
+                    SyntaxKind::WHITESPACE
+                        | SyntaxKind::NEWLINE
+                        | SyntaxKind::SUBSCRIPT
+                        | SyntaxKind::SUPERSCRIPT
+                )
+            })
+            .as_ref()
+            .map_or(MathBreakKind::Class, math_break_kind);
+    }
+    if node.kind() != SyntaxKind::COMMAND {
+        return MathBreakKind::Class;
+    }
+    match crate::ast::command_name(node).as_deref() {
+        Some("pm" | "mp") => MathBreakKind::Additive,
+        Some("cdot") => MathBreakKind::Multiplicative,
+        Some("mid") => MathBreakKind::Conditional,
+        _ => MathBreakKind::Class,
+    }
 }
 
 /// Lower one CST element into the semantic atoms that its source surface
@@ -9054,6 +9107,7 @@ fn lower_math_atoms(
     spacing: MathSpacing,
 ) -> Vec<MathSurfaceAtom> {
     let atoms: Vec<_> = math_atoms(&el).collect();
+    let break_kind = math_break_kind(&el);
     let SyntaxElement::Token(token) = &el else {
         let starts_control_word_letter = element_starts_control_word_letter(&el);
         let ends_control_word = element_ends_control_word(&el);
@@ -9067,6 +9121,7 @@ fn lower_math_atoms(
         return vec![MathSurfaceAtom {
             ir: lower_math_element(el, cx, spacing),
             class: atom.class,
+            break_kind,
             delimiter: atom.delimiter,
             colon_relation_prefix: false,
             starts_equals_relation: atom.class == MathClass::Rel && starts_with_equals,
@@ -9094,6 +9149,7 @@ fn lower_math_atoms(
         return vec![MathSurfaceAtom {
             ir: lower_math_element(el, cx, spacing),
             class: atom.class,
+            break_kind,
             delimiter: atom.delimiter,
             colon_relation_prefix: false,
             starts_equals_relation: false,
@@ -9132,6 +9188,10 @@ fn lower_math_atoms(
         surface.push(MathSurfaceAtom {
             ir: Ir::verbatim(text),
             class: atom.class,
+            break_kind: match text {
+                "+" | "-" => MathBreakKind::Additive,
+                _ => MathBreakKind::Class,
+            },
             delimiter: atom.delimiter,
             colon_relation_prefix: atom.class == MathClass::Punct && text == ":",
             starts_equals_relation: false,
@@ -9281,6 +9341,8 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
     // and glues to its operand rather than becoming a break point — e.g. `-x`.
     let mut prev_class = MathClass::Rel;
     let mut prev_opener = false;
+    let mut bracket_depth = 0_i32;
+    let mut conditional_at_top_level = false;
     let mut pending_space = false;
     let mut iter = strip_virtual_dtx_framing(elements.iter().cloned(), cx)
         .into_iter()
@@ -9332,12 +9394,21 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
                     pieces.push(MathPiece {
                         ir: atom.ir,
                         role,
+                        break_before: !matches!(
+                            atom.break_kind,
+                            MathBreakKind::Multiplicative | MathBreakKind::Conditional
+                        ) && !(role == MathRole::Relation
+                            && conditional_at_top_level),
                         colon_relation_prefix: atom.colon_relation_prefix,
                         spaced_slash: atom.spaced_slash,
                         slash: atom.slash,
                         space_before: pending_space,
                         bracket_delta,
                     });
+                    if atom.break_kind == MathBreakKind::Conditional && bracket_depth == 0 {
+                        conditional_at_top_level = true;
+                    }
+                    bracket_depth += bracket_delta;
                     pending_space = false;
                 }
             }
@@ -9359,19 +9430,20 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
 }
 
 /// Lower a display-math `MATH` body, additionally letting a too-long body *break*
-/// before its top-level binary/relation operators (amsmath style). The layout is
-/// two-level: every top-level *relation* aligns in a single column (a chain of
-/// `=` reads as a stack, the second `=` under the first), and a *binary* operator
-/// hangs one relation-width deeper, under the first term of its right-hand side (a
-/// `+`-chain tucks under the first summand). The left-hand side and the first
-/// relation stay flat on the opening line. The whole body is one [`Ir::group`], so
-/// it stays on a single line whenever it fits — degrading to [`lower_math_body`]
-/// otherwise. Each segment's right-hand side is its own nested group: breaking
-/// the body at its relations does not also break a segment at its binary
-/// operators unless that segment overflows its own line. If the LHS-derived
-/// relation column would make a continuation overflow, the printer breaks before
-/// the first relation and hangs the relation stack at the display body's base
-/// indent instead.
+/// before its eligible top-level binary/relation operators (amsmath style). The
+/// layout is two-level: equation-chain *relations* align in a single column (a
+/// chain of `=` reads as a stack, the second `=` under the first), and a breakable
+/// *binary* operator hangs one relation-width deeper, under the first term of its
+/// right-hand side (a `+`-chain tucks under the first summand). Multiplicative and
+/// conditional operators use the narrower policy in [`math_break_kind`]. The
+/// left-hand side and the first relation stay flat on the opening line. The whole
+/// body is one [`Ir::group`], so it stays on a single line whenever it fits —
+/// degrading to [`lower_math_body`] otherwise. Each segment's right-hand side is
+/// its own nested group: breaking the body at its relations does not also break a
+/// segment at its binary operators unless that segment overflows its own line. If
+/// the LHS-derived relation column would make a continuation overflow, the
+/// printer breaks before the first relation and hangs the relation stack at the
+/// display body's base indent instead.
 fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     let Some(pieces) = collect_math_pieces(elements, cx) else {
         return lower_math_seq(elements.iter().cloned(), cx, MathSpacing::Normal, false);
@@ -9416,20 +9488,23 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
             Ir::Nil
         }
     };
-    // Whether a break may be inserted before atom `k`: a top-level binary
-    // operator with an operand to its left (a genuine infix `+`, not a unary
-    // sign, and not one nested in parentheses).
+    // Whether a break may be inserted before atom `k`: an eligible top-level
+    // binary operator with an operand to its left (a genuine infix `+`, not a
+    // unary sign, a multiplicative join, or one nested in parentheses).
     let breakable = |k: usize| -> bool {
-        pieces[k].role == MathRole::Binary
+        pieces[k].break_before
+            && pieces[k].role == MathRole::Binary
             && pieces[k - 1].role == MathRole::Operand
             && depth_before[k] == 0
     };
-    // The first top-level relation (a relation nested in parentheses does not
-    // anchor the alignment or split a segment).
-    let is_anchor = |k: usize| pieces[k].role == MathRole::Relation && depth_before[k] == 0;
+    // The first eligible top-level relation (a relation nested in parentheses or
+    // protected by a conditional bar does not anchor or split a segment).
+    let is_anchor = |k: usize| {
+        pieces[k].break_before && pieces[k].role == MathRole::Relation && depth_before[k] == 0
+    };
 
-    // With no top-level relation, continuation lines hang at the base indent: the
-    // body simply breaks before each top-level binary operator.
+    // With no eligible top-level relation, continuation lines hang at the base
+    // indent: the body breaks before each eligible top-level binary operator.
     let Some(anchor) = (0..pieces.len()).find(|&k| is_anchor(k)) else {
         let mut parts: Vec<Ir> = Vec::with_capacity(pieces.len() * 2);
         for (i, piece) in pieces.iter().enumerate() {

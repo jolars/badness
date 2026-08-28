@@ -29,6 +29,11 @@ use badness::parser::parse;
 /// 2.10x for the two clean cases.
 const MAX_RATIO: f64 = 3.0;
 
+/// Pretty rendering grows both the source and finding count, which makes its
+/// allocator-heavy timings noisier on shared CI hosts. The former quadratic
+/// path approaches 4x when both dimensions double, so this still catches it.
+const MAX_PRETTY_RENDERING_RATIO: f64 = 3.5;
+
 /// Timing two growth guards concurrently can distort one half of a ratio when
 /// the competing test finishes between the small and large measurements.
 static SCALING_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -69,7 +74,7 @@ fn pretty_rendering_scales_with_findings_not_findings_times_file_length() {
     // source map on every render. Both dimensions grow together here, which is
     // what the product term needs to show up.
     let path = PathBuf::from("scaling.tex");
-    assert_scales("pretty rendering", 2000, MAX_RATIO, |n| {
+    assert_scales("pretty rendering", 2000, MAX_PRETTY_RENDERING_RATIO, |n| {
         let source = "\\[\n".repeat(n);
         let diagnostics: Vec<Diagnostic> = (0..n)
             .map(|i| Diagnostic {

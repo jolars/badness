@@ -2640,6 +2640,23 @@ fn no_indent_environment_keeps_body_flush() {
     );
 }
 
+/// A document-level environment starts at the margin even when the first source
+/// line carries indentation. Its body still uses the configured indent width.
+#[test]
+fn root_environment_drops_leading_indentation() {
+    let input = "\t\\begin{equation}\n               \\label{a}\n    a = b\n\\end{equation}\n";
+    let style = FormatStyle {
+        wrap: WrapMode::Preserve,
+        math_wrap: MathWrap::Preserve,
+        indent_width: 4,
+        ..FormatStyle::default()
+    };
+    let expected = "\\begin{equation}\n    \\label{a}\n    a = b\n\\end{equation}\n";
+
+    assert_eq!(format_with_style(input, style).expect("formats"), expected);
+    assert_format_invariants_with_style(input, style);
+}
+
 /// The appendix-package `appendix` environment shares `document`'s `noIndent`
 /// flag: it is a sectioning-level container whose body is whole sections, so it
 /// sits flush against the surrounding indentation rather than nesting a level.

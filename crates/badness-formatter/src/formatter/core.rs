@@ -1292,9 +1292,27 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
                 return ir;
             }
         }
+        SyntaxKind::ROOT => return lower_root(node, cx),
         _ => {}
     }
     Ir::concat(lower_element_stream(node.children_with_tokens(), cx))
+}
+
+/// Lower a complete document, discarding indentation before its first top-level
+/// block. Indentation after a newline is normally absorbed into that newline's
+/// [`Gap`], but the first physical line has no preceding boundary to own it, so
+/// its padding otherwise survives as verbatim text. Only direct `ROOT` trivia is
+/// removed—leading whitespace inside a paragraph remains under that paragraph's
+/// wrap policy—and a formatter-suppressed prefix stays byte-exact.
+fn lower_root(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let mut elements = node.children_with_tokens().peekable();
+    while let Some(SyntaxElement::Token(token)) = elements.peek() {
+        if token.kind() != SyntaxKind::WHITESPACE || cx.suppressed(token.text_range()) {
+            break;
+        }
+        elements.next();
+    }
+    Ir::concat(lower_element_stream(elements, cx))
 }
 
 /// Lower a [`SyntaxKind::PARAGRAPH`] under [`WrapMode::Reflow`]: greedily wrap its

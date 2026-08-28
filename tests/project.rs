@@ -246,7 +246,7 @@ fn resolved_citations_uses_published_bibliography_alias() {
         Path::new("/proj/main.tex"),
         "\\documentclass{article}\n\\bibliography{refs}\n\\cite{knuth}\n".to_string(),
     );
-    db.upsert_file(
+    let bib = db.upsert_file(
         Path::new("/shared/refs.bib"),
         "@article{knuth, title={x}}\n".to_string(),
     );
@@ -255,10 +255,7 @@ fn resolved_citations_uses_published_bibliography_alias() {
     let resolved = resolved_citations(&db);
     assert!(resolved.is_defined(&fpath(&db, main), "knuth"));
     assert!(resolved.is_closed(&fpath(&db, main)));
-    assert_eq!(
-        resolved.bib_definers(&fpath(&db, main)),
-        &[PathBuf::from("/shared/refs.bib")]
-    );
+    assert_eq!(resolved.bib_definers(&fpath(&db, main)), &[fpath(&db, bib)]);
 }
 
 #[test]

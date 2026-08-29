@@ -34,8 +34,8 @@ pub use mode::{Mode, ModeIndex, argument_domain};
 pub use outline::{LabelContext, OutlineItem, OutlineSymbol, label_context, outline};
 pub use pkgmeta::{NeedsFormatDecl, OptionDecl, ProvidesDecl, ProvidesKind};
 pub use signature::{
-    ArgKind, ArgSpec, ArgumentDomain, CommandSig, ContentKind, EnvironmentSig, SignatureDb,
-    Signatures, match_arg_slot, match_arg_slot_index, match_verbatim_arg_slot,
+    ArgKind, ArgSpec, ArgumentDomain, CitationPlacement, CommandSig, ContentKind, EnvironmentSig,
+    SignatureDb, Signatures, match_arg_slot, match_arg_slot_index, match_verbatim_arg_slot,
 };
 
 use std::collections::BTreeSet;

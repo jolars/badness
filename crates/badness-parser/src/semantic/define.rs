@@ -631,6 +631,7 @@ fn scan_newcommand(
             verbatim_delimited: false,
             rule: false,
             inline: false,
+            citation: None,
             // Never inferred for a scanned definition: block-ness is
             // undecidable without meaning, so scanned commands stay with the
             // formatter's residual authored-break rule.
@@ -681,6 +682,7 @@ fn scan_def(
             verbatim_delimited: false,
             rule: false,
             inline: false,
+            citation: None,
             // Never inferred for a scanned definition: block-ness is
             // undecidable without meaning, so scanned commands stay with the
             // formatter's residual authored-break rule.
@@ -824,6 +826,7 @@ fn scan_xparse_command(
             verbatim_delimited: false,
             rule: false,
             inline: false,
+            citation: None,
             // Never inferred for a scanned definition: block-ness is
             // undecidable without meaning, so scanned commands stay with the
             // formatter's residual authored-break rule.

@@ -182,6 +182,14 @@ contextual abbreviation whose following word signals that the sentence continues
 profile is chosen by [`lang`](#lang) and extended by
 [`no-break-abbreviations`](#no-break-abbreviations).
 
+In `sentence` mode, citation commands follow their grammatical role.
+Parenthetical and other postpositive forms, such as `\parencite`, `\citep`, and
+`\autocite`, stay with the preceding sentence—even when an authored line break
+has stranded one on the next line. Textual forms, such as `\textcite` and
+`\citet`, may begin the next sentence. Plain `\cite` is package- and
+style-dependent, so the formatter follows the source: it attaches on the same
+line but preserves an authored line break.
+
 `semantic` additionally *preserves the author's own line breaks* on top of the
 sentence breaks (the [sembr](https://sembr.org) convention). It does not detect
 clause boundaries itself—a break after a comma or `and` survives only where the

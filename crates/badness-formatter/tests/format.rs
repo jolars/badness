@@ -1268,6 +1268,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("sentence_list_items", WrapMode::Sentence, 80),
     ("sentence_caption", WrapMode::Sentence, 80),
     ("sentence_long_no_width_break", WrapMode::Sentence, 20),
+    // Issue #163: postpositive citations belong to the preceding sentence, even
+    // across an authored break; textual citations begin the next sentence. Plain
+    // `\cite` is source-directed because its behavior depends on the citation
+    // system: it attaches on the same line and preserves an authored break.
+    ("issue_163_sentence_citations", WrapMode::Sentence, 80),
     // Semantic wrap (`WrapMode::Semantic`, sembr): the sentence breaks above *plus*
     // preserving the author's own soft line breaks. An authored break after a comma
     // clause survives (`semantic_preserve_authored_break`), and a run-on sentence on

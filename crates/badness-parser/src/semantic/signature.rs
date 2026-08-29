@@ -101,6 +101,21 @@ pub enum ContentKind {
     Keyval,
 }
 
+/// How a citation command participates in sentence grammar. This is a curated
+/// formatter fact, independent of the command's key-list argument shape:
+/// `\textcite` and `\citet` are grammatical text, `\parencite` and `\citep`
+/// are postpositive citations, while plain `\cite` changes behavior across
+/// LaTeX citation systems and must follow the author's source layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CitationPlacement {
+    /// The command is integrated into prose and may begin a sentence.
+    Textual,
+    /// The command cites the preceding sentence or clause.
+    Postpositive,
+    /// The command's placement depends on the active package or citation style.
+    Ambiguous,
+}
+
 /// One argument slot in a command/environment signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArgSpec {
@@ -204,6 +219,11 @@ pub struct CommandSig {
     /// (`\section`, `\caption`) leave this `false`. Only meaningful to the formatter;
     /// the parser ignores it.
     pub inline: bool,
+    /// The command's grammatical citation role, when curated. The CWL and
+    /// scanned-definition tiers never infer this: argument shape alone cannot
+    /// distinguish `\textcite` from `\parencite`, and plain `\cite` is
+    /// package-dependent. Only meaningful to the formatter.
+    pub citation: Option<CitationPlacement>,
     /// `true` for *block-level* commands that conventionally own their physical
     /// line (`\usepackage`, `\newcommand`, `\maketitle`, …): package/class
     /// loading, preamble machinery, definitions, and document structure. Prose
@@ -383,6 +403,8 @@ pub(crate) const fn command(generated: GeneratedCommand) -> CommandSig {
         verbatim_delimited: false,
         rule: generated.rule,
         inline: generated.inline,
+        // Citation grammar is curated meaning, never a mechanical CWL fact.
+        citation: None,
         // Curated-only facet, like the delimiter one: block-ness never comes
         // from the codegen (CWL) tier.
         block: false,
@@ -871,6 +893,24 @@ enum RawContentKind {
     Keyval,
 }
 
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum RawCitationPlacement {
+    Textual,
+    Postpositive,
+    Ambiguous,
+}
+
+impl From<RawCitationPlacement> for CitationPlacement {
+    fn from(raw: RawCitationPlacement) -> Self {
+        match raw {
+            RawCitationPlacement::Textual => CitationPlacement::Textual,
+            RawCitationPlacement::Postpositive => CitationPlacement::Postpositive,
+            RawCitationPlacement::Ambiguous => CitationPlacement::Ambiguous,
+        }
+    }
+}
+
 #[derive(Deserialize, Clone, Copy, Default)]
 #[serde(rename_all = "lowercase")]
 enum RawArgumentDomain {
@@ -963,6 +1003,8 @@ struct RawCommand {
     #[serde(default)]
     inline: bool,
     #[serde(default)]
+    citation: Option<RawCitationPlacement>,
+    #[serde(default)]
     block: bool,
 }
 
@@ -975,6 +1017,7 @@ impl From<RawCommand> for CommandSig {
             verbatim_delimited: raw.verbatim_delimited,
             rule: raw.rule,
             inline: raw.inline,
+            citation: raw.citation.map(CitationPlacement::from),
             block: raw.block,
         }
     }
@@ -1219,6 +1262,45 @@ mod tests {
         assert_eq!(kv[1].content, ContentKind::Opaque);
         let list = &db.command("list").unwrap().args;
         assert_eq!(list[0].content, ContentKind::TokenList);
+    }
+
+    #[test]
+    fn citation_placement_is_curated() {
+        let db = builtin();
+        assert_eq!(
+            db.command("textcite").unwrap().citation,
+            Some(CitationPlacement::Textual)
+        );
+        assert_eq!(
+            db.command("citet").unwrap().citation,
+            Some(CitationPlacement::Textual)
+        );
+        assert_eq!(
+            db.command("parencite").unwrap().citation,
+            Some(CitationPlacement::Postpositive)
+        );
+        assert_eq!(
+            db.command("citep").unwrap().citation,
+            Some(CitationPlacement::Postpositive)
+        );
+        assert_eq!(
+            db.command("cite").unwrap().citation,
+            Some(CitationPlacement::Ambiguous)
+        );
+        assert_eq!(db.command("ref").unwrap().citation, None);
+
+        for name in db.command_names() {
+            let sig = db.command(name).unwrap();
+            if sig.citation.is_some() {
+                assert!(sig.inline, "citation `\\{name}` is not inline");
+                assert!(
+                    sig.args
+                        .iter()
+                        .any(|arg| arg.content == ContentKind::TokenList),
+                    "citation `\\{name}` has no token-list argument"
+                );
+            }
+        }
     }
 
     #[test]

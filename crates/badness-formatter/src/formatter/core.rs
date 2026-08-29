@@ -23,8 +23,9 @@ use crate::parser::{LatexFlavor, parse_with_declarations, parse_with_flavor};
 use crate::semantic::expl3::{StatementMap, segment_expl_statements};
 use crate::semantic::tikz::statement_glue;
 use crate::semantic::{
-    ArgKind, ArgSpec, ArgumentDomain, ContentKind, DelimiterRole, MathClass, SignatureDb,
-    Signatures, expl3, match_arg_slot, match_verbatim_arg_slot, math_atoms, scan_definitions,
+    ArgKind, ArgSpec, ArgumentDomain, CitationPlacement, ContentKind, DelimiterRole, MathClass,
+    SignatureDb, Signatures, expl3, match_arg_slot, match_verbatim_arg_slot, math_atoms,
+    scan_definitions,
 };
 use crate::syntax::{
     SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, is_collapsible_trivia, is_param_digit,
@@ -1829,9 +1830,20 @@ const DTX_DOC_MARGIN: &str = "% ";
 /// source `text`, retained so the [`WrapMode::Sentence`]/[`WrapMode::Semantic`]
 /// renderer can run sentence-boundary detection over the words. Under
 /// [`WrapMode::Reflow`]/[`WrapMode::Stable`] only the layout fields are used.
+#[derive(Clone, Copy)]
+struct CitationSuffix {
+    start: usize,
+    placement: CitationPlacement,
+}
+
 struct RunAtom {
     ir: Ir,
     text: String,
+    /// Byte offset at which a suffix of structurally recognized inline citation
+    /// commands begins. `Some(0)` means the whole atom is a citation chain;
+    /// `Some(n)` means the citations directly abut preceding prose. Ordinary
+    /// content appended after the chain clears the marker.
+    trailing_citation: Option<CitationSuffix>,
     /// Whether the gap immediately before this atom was a source newline. False
     /// for the first atom and for ordinary inter-word whitespace.
     preferred_break_before: bool,
@@ -1861,18 +1873,56 @@ enum RunRender<'a> {
 fn render_sentences(run: Vec<RunAtom>, profile: ResolvedProfile<'_>) -> Ir {
     let n = run.len();
     // Break decisions for the n-1 internal gaps, read before the run is consumed.
-    let break_after: Vec<bool> = (0..n)
-        .map(|i| {
-            i + 1 < n
-                && is_sentence_boundary_text(
-                    &run[i].text,
-                    Some(run[i + 1].text.as_str()),
+    let mut break_after = vec![false; n];
+    for i in 0..n.saturating_sub(1) {
+        let boundary_at_end = is_sentence_boundary_text(
+            &run[i].text,
+            Some(run[i + 1].text.as_str()),
+            true,
+            false,
+            profile,
+        );
+        let boundary_before_glued_citation = run[i]
+            .trailing_citation
+            .filter(|suffix| suffix.start > 0)
+            .is_some_and(|suffix| {
+                // A TeX tie is an explicit nonbreaking attachment to the
+                // citation, not part of the word whose terminal punctuation
+                // determines the sentence boundary.
+                let before_citation = run[i].text[..suffix.start]
+                    .strip_suffix('~')
+                    .unwrap_or(&run[i].text[..suffix.start]);
+                is_sentence_boundary_text(
+                    before_citation,
+                    Some(&run[i].text[suffix.start..]),
                     true,
                     false,
                     profile,
                 )
-        })
-        .collect();
+            });
+        if !(boundary_at_end || boundary_before_glued_citation) {
+            continue;
+        }
+
+        // A postpositive citation belongs to the preceding sentence even when an
+        // earlier formatter stranded it on the next line. An ambiguous citation
+        // follows the author's source layout; textual citations never carry a
+        // suffix marker and therefore remain on the following sentence.
+        let mut sentence_end = i;
+        while run.get(sentence_end + 1).is_some_and(|atom| {
+            atom.trailing_citation.is_some_and(|suffix| {
+                suffix.start == 0
+                    && match suffix.placement {
+                        CitationPlacement::Postpositive => true,
+                        CitationPlacement::Ambiguous => !atom.preferred_break_before,
+                        CitationPlacement::Textual => false,
+                    }
+            })
+        }) {
+            sentence_end += 1;
+        }
+        break_after[sentence_end] = sentence_end + 1 < n;
+    }
 
     let mut sentences: Vec<Ir> = Vec::new();
     let mut current: Vec<Ir> = Vec::new();
@@ -1900,6 +1950,7 @@ struct LineBuilder<'a> {
     /// Glued pieces of the atom in progress (its [`Ir`] and its source text).
     atom: Vec<Ir>,
     atom_text: String,
+    atom_trailing_citation: Option<CitationSuffix>,
     /// Source-newline preference to attach to the next committed atom.
     preferred_break_before_next: bool,
     /// Atoms of the current run (the current logical line).
@@ -1940,6 +1991,7 @@ impl<'a> LineBuilder<'a> {
         Self {
             atom: Vec::new(),
             atom_text: String::new(),
+            atom_trailing_citation: None,
             preferred_break_before_next: false,
             run: Vec::new(),
             lines: Vec::new(),
@@ -1964,6 +2016,19 @@ impl<'a> LineBuilder<'a> {
     fn push_atom_piece(&mut self, ir: Ir, text: &str) {
         self.atom.push(ir);
         self.atom_text.push_str(text);
+        self.atom_trailing_citation = None;
+    }
+
+    /// Append a structurally recognized inline citation while retaining the
+    /// start of a trailing citation chain. Unlike an ordinary atom piece, another
+    /// directly abutting citation extends the same chain.
+    fn push_trailing_citation(&mut self, ir: Ir, text: &str, placement: CitationPlacement) {
+        self.atom_trailing_citation.get_or_insert(CitationSuffix {
+            start: self.atom_text.len(),
+            placement,
+        });
+        self.atom.push(ir);
+        self.atom_text.push_str(text);
     }
 
     /// Commit the atom in progress (if any) as one atom of the current run.
@@ -1982,6 +2047,7 @@ impl<'a> LineBuilder<'a> {
             self.run.push(RunAtom {
                 ir,
                 text,
+                trailing_citation: self.atom_trailing_citation.take(),
                 preferred_break_before: std::mem::take(&mut self.preferred_break_before_next),
             });
         }
@@ -2324,9 +2390,12 @@ fn reflow_elements_checked(
                         b.end_line();
                     } else {
                         b.flush_atom();
-                        if cx.wrap == WrapMode::Stable {
-                            b.prefer_next_break();
-                        }
+                        // Stable uses this as a soft layout preference; sentence
+                        // mode uses it to distinguish a citation intentionally
+                        // starting the next source line from one following the
+                        // preceding sentence on the same line. The resulting
+                        // boundary reproduces itself on the next pass.
+                        b.prefer_next_break();
                     }
                     line_all_commands = true;
                     line_has_content = false;
@@ -2758,6 +2827,11 @@ fn reflow_elements_checked(
                         // block's last physical line rides it.
                         b.append_to_last_line(ride_after_block(ir, after_block_gap));
                         prev_was_block = true;
+                    } else if child.kind() == SyntaxKind::COMMAND
+                        && let Some(placement) = command_citation_placement(child, cx)
+                        && placement != CitationPlacement::Textual
+                    {
+                        b.push_trailing_citation(ir, &child.text().to_string(), placement);
                     } else {
                         b.push_atom_piece(ir, &child.text().to_string());
                     }
@@ -8223,6 +8297,24 @@ fn command_is_inline(command: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     command_name(command)
         .and_then(|name| cx.signatures.command(&name))
         .is_some_and(|sig| sig.inline)
+}
+
+/// Return the curated grammatical role of an inline citation whose key argument
+/// is a token list. The content flag is the structural proof that distinguishes
+/// citations from other inline commands such as `\ref` or `\emph`; a local
+/// redefinition shadows the built-in signature and therefore withdraws the role.
+fn command_citation_placement(command: &SyntaxNode, cx: LowerCtx<'_>) -> Option<CitationPlacement> {
+    command_name(command)
+        .and_then(|name| cx.signatures.command(&name))
+        .and_then(|sig| {
+            (sig.inline
+                && sig
+                    .args
+                    .iter()
+                    .any(|spec| spec.content == ContentKind::TokenList))
+            .then_some(sig.citation)
+            .flatten()
+        })
 }
 
 /// Whether `command` is a *sectioning* command (`\part` … `\subparagraph`), per the

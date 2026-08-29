@@ -5573,8 +5573,11 @@ struct BeginParts {
 /// Each declared argument is also matched to its signature slot ([`match_arg_slot`],
 /// mirroring [`lower_command`]) so a [`ContentKind::Keyval`] argument reaches the
 /// delimiter-appropriate segmented layout: `[…]` for `axis`/`tikzpicture`, and
-/// `{…}` for tabularray's inner specification. Every other content kind lowers
-/// exactly as the generic path would.
+/// `{…}` for tabularray's inner specification. The argument is nested one step
+/// beneath the environment header, so a multiline argument's closing delimiter
+/// aligns with the surrounding environment body and its content sits one level
+/// deeper. Its first line stays attached to `\begin{…}`, and every other content
+/// kind lowers exactly as the generic path would.
 fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
     let sig = cx.signatures.environment_at(begin);
     let mut has_comment = false;
@@ -5692,7 +5695,12 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
                     ),
                     _ => unreachable!("argument kind checked above"),
                 });
-                head.push(segmented.flatten().unwrap_or_else(|| lower_node(child, cx)));
+                let argument = segmented.flatten().unwrap_or_else(|| lower_node(child, cx));
+                head.push(if spec.is_some() {
+                    Ir::indent(argument)
+                } else {
+                    argument
+                });
                 i += 1;
             }
             // The `\begin` control word, the `{name}` group, and anything the
@@ -5727,7 +5735,8 @@ fn attached_arg_kind(element: &SyntaxElement) -> Option<ArgKind> {
 /// never removed because the comment consumes the rest of its line; suppressed
 /// gaps likewise remain byte-exact. Virtual `.dtx` margin streams preserve every
 /// boundary because an inner rewrite can otherwise change the enclosing margin
-/// region's parse shape on the next pass.
+/// region's parse shape on the next pass. Declared argument nodes receive the
+/// same header-relative nesting as the ordinary [`lower_begin`] path.
 fn lower_commented_header_stream(
     elements: &[SyntaxElement],
     declared: &[bool],
@@ -5743,13 +5752,13 @@ fn lower_commented_header_stream(
     while i < elements.len() {
         let SyntaxElement::Token(token) = &elements[i] else {
             previous_was_comment = false;
-            filtered.push(elements[i].clone());
+            filtered.push((elements[i].clone(), declared[i]));
             i += 1;
             continue;
         };
         if !is_collapsible_trivia(token.kind()) {
             previous_was_comment = token.kind() == SyntaxKind::COMMENT;
-            filtered.push(elements[i].clone());
+            filtered.push((elements[i].clone(), declared[i]));
             i += 1;
             continue;
         }
@@ -5770,10 +5779,30 @@ fn lower_commented_header_stream(
         if followed_by_declared && !previous_was_comment && !suppressed {
             continue;
         }
-        filtered.extend(elements[start..i].iter().cloned());
+        filtered.extend(
+            elements[start..i]
+                .iter()
+                .cloned()
+                .zip(declared[start..i].iter().copied()),
+        );
     }
 
-    Ir::concat(lower_element_stream(filtered.into_iter(), cx))
+    let mut lowered = Vec::new();
+    let mut generic = Vec::new();
+    for (element, is_declared) in filtered {
+        if !is_declared {
+            generic.push(element);
+            continue;
+        }
+
+        lowered.extend(lower_element_stream(generic.drain(..), cx));
+        let node = element
+            .into_node()
+            .expect("declared environment argument must be a syntax node");
+        lowered.push(Ir::indent(lower_node(&node, cx)));
+    }
+    lowered.extend(lower_element_stream(generic.into_iter(), cx));
+    Ir::concat(lowered)
 }
 
 /// Lower a declared `\begin` header containing a comment without letting the

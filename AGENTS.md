@@ -178,6 +178,10 @@ comparison, not a byte target.
 - Match declared environment headers by positional signature slots, not
   attached-node count. Skip omitted optionals; delimiter mismatches and content
   beyond a completed header return to ordinary body layout.
+- Match environment argument slots on the outer `GROUP` or `OPTIONAL`; escaped
+  delimiters inside them do not affect arity. Keep pre-slot gap normalization in
+  `lower_begin` and `lower_commented_begin` aligned, while preserving comment
+  barriers and virtual `.dtx` margin boundaries.
 - Insert whitespace within an environment header only when positional matching
   proves that argument recognition cannot change.
 - Route groups to meaning-specific layouts, such as keyval or alignment, only

@@ -549,6 +549,14 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // body content out of ordinary body reflow. A genuinely pending mandatory
     // argument remains an indented header continuation.
     ("environment_argument_comment_slots", WrapMode::Reflow, 80),
+    // Slot matching reads only each outer argument delimiter. Escaped braces and
+    // display-math brackets inside an argument cannot end or create slots, and a
+    // later header comment does not preserve earlier collapsible argument gaps.
+    (
+        "environment_argument_escaped_delimiters",
+        WrapMode::Reflow,
+        80,
+    ),
     // Locally defined delimiter aliases inherit the target environment's list
     // and math-grid layout, nest structurally, and stay ordinary commands when
     // no closer proves the pair.

@@ -138,14 +138,13 @@ drives fixtures from explicit tables in
 - `MATH_WRAP_FIXTURES`, `DTX_FIXTURES`, `DTX_REFLOW_FIXTURES`,
   `PACKAGE_FIXTURES`, `INS_FIXTURES` — the specialized ones
 
-**There is no orphan guard.** A fixture directory absent from every table
-silently never runs, and has shipped that way before
-(`expl_relation_slot_statement` sat unregistered across a commit). Each table is
-driven by *one* looping test, so a slug is not a test name — filtering by it
-(`cargo test … <slug>`) reports `0 tests` whether or not the fixture is
-registered, and proves nothing. To confirm it really runs, corrupt
-`expected.tex`, watch `formatter_fixtures_match_expected` (or the table's own
-test) fail naming your slug, then restore it.
+`every_formatter_fixture_is_registered_once` now catches directories missing
+from every table and duplicate registrations. Each table is still driven by
+*one* looping test, so a slug is not a test name — filtering by it (`cargo test …
+<slug>`) reports `0 tests` whether or not the fixture is registered, and proves
+nothing about which looping test exercised it. Confirm that by corrupting
+`expected.tex`, watching `formatter_fixtures_match_expected` (or the table's own
+test) fail naming the slug, then restoring it.
 
 **Corrupt one slug at a time.** The looping test asserts *inside* the loop, so it
 aborts at the first mismatch and never reaches the rest of the table. Corrupting
@@ -218,7 +217,7 @@ including the slug count, which the next session reads as fact.
 
 ## Coverage gaps (ranked starter backlog)
 
-Measured against the 283 existing fixture slugs. **Re-measure before trusting
+Measured against the 287 existing fixture slugs. **Re-measure before trusting
 this list** — it has gone stale twice: `items` and brace groups were listed as
 thin at one and four fixtures and were actually at 11 and 33; `specials` and
 `diacritics` sat at the top of the list for two sessions and turned out not to be
@@ -232,10 +231,10 @@ Candidates not yet checked against a fresh count:
 1. **`environments`** (293), **`mand-args`** (202), **`opt-args`** (217) —
    partly mined (see `begin_tail_is_body` and
    `environment_leading_body_command` and
-   `environment_keyval_group_splits_entries` under Done); 39 and 26 slugs now
+   `environment_keyval_group_splits_entries` under Done); 40 and 27 slugs now
    match `env`/`arg`, so verify against current slugs before picking. The next
-   distinct surveyed argument shape is an escaped delimiter (`\{…\}` or
-   `\[…\]`) inside a declared environment argument.
+   distinct surveyed argument shape is a comment glued to an argument's opening
+   or closing delimiter (`{%` or `]%`) inside a declared environment header.
 
 `items` and bare/named brace groups are no longer thin; re-measure before
 returning either family to the ranked backlog.
@@ -251,6 +250,18 @@ Off the list, on their content rather than their quality:
 - **`diacritics`** — two files and two directories with non-ASCII *names*; the
   `.tex` content is a plain nested-environment document. It tests UTF-8 path
   handling, which is a CLI concern with no `expected.tex` to write.
+
+Done: escaped delimiters inside declared environment arguments
+(`environment_argument_escaped_delimiters`) — positional matching reads only the
+outer `GROUP` or `OPTIONAL`, so inner `\{…\}` control symbols and `\[…\]`
+display math neither end nor create slots. The ordinary and commented `\begin`
+paths both remove collapsible pre-slot gaps; a post-comment gap remains because
+the comment consumes its line, and virtual `.dtx` margin streams preserve their
+boundaries. Default latexindent corroborated the flat outer grouping and body
+indent, preserved authored argument and display-math breaks (explained
+divergence from formatter-owned reflow), used its two-level argument indentation
+on an expanded control (explained divergence from Badness's shared group frame),
+and had no opinion on intra-line spacing. No unexplained divergence surfaced.
 
 Done: `environment_empty_body` — an environment's structural frame stays
 multiline when its lowered body is empty; collapsible whitespace between

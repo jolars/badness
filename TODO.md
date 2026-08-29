@@ -293,7 +293,7 @@ sources below are missing.
   out — that is where our rule is usually wrong. Run it at default settings
   (`latexindent probe.tex`, no `-s`) on a hand-authored probe; the committed
   `*-mod*.tex` files are one YAML stack's answer with `-m` on, not its own
-  judgment. Measured gaps against the 281 existing
+  judgment. Measured gaps against the 287 existing
   slugs: `items` (157 files) and bare/named brace groups are no longer thin;
   re-measure before trusting any gap list here. Beamer item
   overlays are covered by `list_item_overlay_prefix`. `mand-args` /
@@ -315,6 +315,10 @@ sources below are missing.
   optionals do not keep a completed commented header open, its greedy tail joins
   ordinary body reflow, and a genuinely pending mandatory remains a header
   continuation;
+  `environment_argument_escaped_delimiters` pins that only an outer declared
+  group participates in slot matching, so inner `\{...\}` control symbols and
+  `\[...\]` display math cannot end or invent an argument; it also keeps the
+  ordinary and commented paths in lockstep when normalizing pre-slot gaps;
   `environment_special_character_names` pins full-name pairing and ordinary
   framing for names containing `@` and `*`, or spanning lexer tokens at `_`;
   `environment_omitted_optional_slots` pins positional `BEGIN` header matching:
@@ -333,7 +337,8 @@ sources below are missing.
   `inline_command_argument_glue` pins that collapsible trivia before matched
   arguments of a curated inline prose command is removed under ordinary prose
   and prose-argument reflow, while a trailing comment remains a hard barrier;
-  the remaining environment and argument shapes are still open.
+  the remaining environment and argument shapes are still open, with comments
+  glued to argument opening or closing delimiters as the next distinct target.
   Sectioning/`headings` is done (two slugs, and the Tier-1 lone-newline
   bug that lived there). `ifelsefi` (402 files) is done too, via the
   `CONDITIONAL` node under *Parser* and eight fixtures — do not re-derive a

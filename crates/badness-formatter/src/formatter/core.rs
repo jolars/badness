@@ -5722,6 +5722,60 @@ fn attached_arg_kind(element: &SyntaxElement) -> Option<ArgKind> {
     }
 }
 
+/// Lower a commented header slice after removing collapsible gaps before declared
+/// arguments, as the ordinary [`lower_begin`] path does. A gap after a comment is
+/// never removed because the comment consumes the rest of its line; suppressed
+/// gaps likewise remain byte-exact. Virtual `.dtx` margin streams preserve every
+/// boundary because an inner rewrite can otherwise change the enclosing margin
+/// region's parse shape on the next pass.
+fn lower_commented_header_stream(
+    elements: &[SyntaxElement],
+    declared: &[bool],
+    mut previous_was_comment: bool,
+    cx: LowerCtx<'_>,
+) -> Ir {
+    if cx.in_dtx_doc_region {
+        return Ir::concat(lower_element_stream(elements.iter().cloned(), cx));
+    }
+
+    let mut filtered = Vec::with_capacity(elements.len());
+    let mut i = 0usize;
+    while i < elements.len() {
+        let SyntaxElement::Token(token) = &elements[i] else {
+            previous_was_comment = false;
+            filtered.push(elements[i].clone());
+            i += 1;
+            continue;
+        };
+        if !is_collapsible_trivia(token.kind()) {
+            previous_was_comment = token.kind() == SyntaxKind::COMMENT;
+            filtered.push(elements[i].clone());
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        while matches!(
+            elements.get(i),
+            Some(SyntaxElement::Token(token)) if is_collapsible_trivia(token.kind())
+        ) {
+            i += 1;
+        }
+        let followed_by_declared = declared.get(i).copied().unwrap_or(false);
+        let suppressed = elements[start..i].iter().any(|element| {
+            element
+                .as_token()
+                .is_some_and(|token| cx.suppressed(token.text_range()))
+        });
+        if followed_by_declared && !previous_was_comment && !suppressed {
+            continue;
+        }
+        filtered.extend(elements[start..i].iter().cloned());
+    }
+
+    Ir::concat(lower_element_stream(filtered.into_iter(), cx))
+}
+
 /// Lower a declared `\begin` header containing a comment without letting the
 /// comment detach or consume a later argument. Argument matching mirrors the
 /// ordinary [`lower_begin`] path: omitted optional slots are skipped, a pending
@@ -5832,17 +5886,19 @@ fn lower_commented_begin(begin: &SyntaxNode, cx: LowerCtx<'_>, args: &[ArgSpec])
                 return None;
             }
 
-            let prefix = Ir::concat(lower_element_stream(
-                header_elements[..=i].iter().cloned(),
+            let prefix =
+                lower_commented_header_stream(&header_elements[..=i], &declared[..=i], false, cx);
+            let continuation = lower_commented_header_stream(
+                &header_elements[i + 1..],
+                &declared[i + 1..split],
+                true,
                 cx,
-            ));
-            let continuation = Ir::concat(lower_element_stream(
-                header_elements[i + 1..].iter().cloned(),
-                cx,
-            ));
+            );
             Some(Ir::concat([prefix, Ir::indent(continuation)]))
         })
-        .unwrap_or_else(|| Ir::concat(lower_element_stream(header_elements.iter().cloned(), cx)));
+        .unwrap_or_else(|| {
+            lower_commented_header_stream(header_elements, &declared[..split], false, cx)
+        });
 
     BeginParts {
         header,

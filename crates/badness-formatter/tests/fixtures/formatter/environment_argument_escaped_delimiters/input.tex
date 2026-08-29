@@ -1,0 +1,23 @@
+\NewDocumentEnvironment{escapedargs}{m O{plain} m}{begin}{end}
+
+\begin{escapedargs}{left \{ value \} right}[plain]{tail}
+Body text.
+\end{escapedargs}
+
+\begin{escapedargs}
+{left \{ value \} right}
+[before \[x^2\] after]
+{tail}
+Body text.
+\end{escapedargs}
+
+\begin{escapedargs}{left \{ value \} right}[before \[x^2\] after]{tail}
+Body text.
+\end{escapedargs}
+
+\begin{escapedargs}
+{left \{ value \} right}
+[before \[x^2\] after]% keep the final argument live
+{tail}
+Body text.
+\end{escapedargs}

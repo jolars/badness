@@ -557,6 +557,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
         WrapMode::Reflow,
         80,
     ),
+    // Comments glued to argument delimiters retain their binding, while a
+    // required slot after a closer comment remains a header continuation.
+    (
+        "environment_argument_delimiter_comments",
+        WrapMode::Reflow,
+        80,
+    ),
     // Locally defined delimiter aliases inherit the target environment's list
     // and math-grid layout, nest structurally, and stay ordinary commands when
     // no closer proves the pair.

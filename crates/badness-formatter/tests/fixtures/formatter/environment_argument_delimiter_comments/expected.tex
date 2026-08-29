@@ -1,0 +1,10 @@
+\NewDocumentEnvironment{sample}{m O{plain} m}{begin}{end}
+
+\begin{sample}{% keep the first argument open
+  First
+}[% keep the optional open
+  Second
+]% keep the final argument live
+  {Third}
+  Body text.
+\end{sample}

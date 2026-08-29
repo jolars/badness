@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8.0](https://github.com/jolars/badness/compare/badness-parser-v0.7.0...badness-parser-v0.8.0) (2026-08-28)
+
+### Features
+- **lsp:** add Beamer frame symbols ([`11f2a76`](https://github.com/jolars/badness/commit/11f2a76ac0f8980aa721bfb544028a4265354cc0))
+
 ## [0.7.0](https://github.com/jolars/badness/compare/badness-parser-v0.6.0...badness-parser-v0.7.0) (2026-08-27)
 
 ### Features

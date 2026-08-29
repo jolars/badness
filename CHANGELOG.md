@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.22.0](https://github.com/jolars/badness/compare/v0.21.0...v0.22.0) (2026-08-28)
+
+### Features
+- **lsp:** add Beamer frame symbols ([`11f2a76`](https://github.com/jolars/badness/commit/11f2a76ac0f8980aa721bfb544028a4265354cc0))
+
+### Bug Fixes
+- accept Windows short paths in BIBINPUTS ([`3a243cd`](https://github.com/jolars/badness/commit/3a243cd553f69f0bee1517160d51dfb15f574352))
+- resolve bibliography search paths ([`c867a8e`](https://github.com/jolars/badness/commit/c867a8e5b30d704fc269cdbd110bccdaf506ff5d)), fixes [#161](https://github.com/jolars/badness/issues/161)
+- **formatter:** align macro statement prefixes ([`4e7efa5`](https://github.com/jolars/badness/commit/4e7efa558386c94be8ba5da640b01a1d8dd35866)), fixes [#158](https://github.com/jolars/badness/issues/158)
+- **formatter:** prioritize math breakpoints ([`9f85294`](https://github.com/jolars/badness/commit/9f852940dc914f6a589c1dd484cc78ba3fe0f47c))
+- **formatter:** preserve postfix limit signs ([`658ef51`](https://github.com/jolars/badness/commit/658ef51b417d6af26e78d0ec839b050186998bfc))
+- loosen test ([`5a6eeb8`](https://github.com/jolars/badness/commit/5a6eeb8a1d302c6940fbcb4e5b6e7f8c564b8e55))
+
+### Dependencies
+- updated crates/badness-formatter to v0.8.1
+- updated crates/badness-parser to v0.8.0
+
 ## [0.21.0](https://github.com/jolars/badness/compare/v0.20.0...v0.21.0) (2026-08-27)
 
 ### Features

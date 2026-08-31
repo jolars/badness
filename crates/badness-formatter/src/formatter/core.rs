@@ -5758,17 +5758,28 @@ fn lower_begin(begin: &SyntaxNode, cx: LowerCtx<'_>) -> BeginParts {
                     signature_matches = false;
                 }
                 let keyval = spec.is_some_and(|spec| spec.content == ContentKind::Keyval);
-                let segmented = keyval.then(|| match child.kind() {
-                    SyntaxKind::OPTIONAL => lower_optional(child, cx, true),
-                    SyntaxKind::GROUP => lower_segmented_group(
-                        child,
-                        SyntaxKind::L_BRACE,
-                        SyntaxKind::R_BRACE,
-                        cx,
-                        true,
-                    ),
-                    _ => unreachable!("argument kind checked above"),
-                });
+                let colspec = !keyval
+                    && child.kind() == SyntaxKind::GROUP
+                    && spec.is_some()
+                    && slot == args.len()
+                    && sig.as_ref().is_some_and(|sig| sig.align);
+                let segmented = if keyval {
+                    Some(match child.kind() {
+                        SyntaxKind::OPTIONAL => lower_optional(child, cx, true),
+                        SyntaxKind::GROUP => lower_segmented_group(
+                            child,
+                            SyntaxKind::L_BRACE,
+                            SyntaxKind::R_BRACE,
+                            cx,
+                            true,
+                        ),
+                        _ => unreachable!("argument kind checked above"),
+                    })
+                } else if colspec {
+                    Some(lower_column_spec_group(child, cx))
+                } else {
+                    None
+                };
                 let argument = segmented.flatten().unwrap_or_else(|| lower_node(child, cx));
                 head.push(if spec.is_some() {
                     Ir::indent(argument)
@@ -7906,6 +7917,107 @@ fn lower_optional(node: &SyntaxNode, cx: LowerCtx<'_>, keyval: bool) -> Option<I
         cx,
         keyval,
     )
+}
+
+/// Lower a grid environment's column preamble as one all-or-nothing group.
+///
+/// The final declared brace argument of an environment marked `align` is the
+/// column preamble. Whitespace between its top-level syntax elements separates
+/// independently readable specifications (`l`, `S[…]`, `p{…}`), while brackets
+/// and brace groups stay sealed inside their owning spec. If the flat preamble
+/// overflows, every such boundary breaks; a partial fill is harder to scan than
+/// either the compact or fully exploded form.
+///
+/// A comment, blank line, or nested forced break declines this layout and leaves
+/// the generic group path in charge. The decision reads normalized [`Gap`]s, so a
+/// source space and source newline converge on the same width-driven shape.
+fn lower_column_spec_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Ir> {
+    if !cx.wraps_prose()
+        || (!cx.in_dtx_doc_region
+            && (contains_doc_margin(node, cx) || doc_margin_opens_line(node, cx)))
+    {
+        return None;
+    }
+
+    let mut open = Ir::Nil;
+    let mut close = Ir::Nil;
+    let mut entries: Vec<Ir> = Vec::new();
+    let mut current: Vec<Ir> = Vec::new();
+    let mut pending_gap: Option<Gap> = None;
+    let mut bracket_depth = 0usize;
+    let mut iter = strip_virtual_dtx_framing(node.children_with_tokens(), cx)
+        .into_iter()
+        .peekable();
+
+    while let Some(element) = iter.next() {
+        match element {
+            SyntaxElement::Token(token)
+                if token.kind() == SyntaxKind::L_BRACE && matches!(open, Ir::Nil) =>
+            {
+                open = Ir::verbatim(token.text());
+            }
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::R_BRACE => {
+                close = Ir::verbatim(token.text());
+            }
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::L_BRACKET => {
+                if let Some(gap) = pending_gap.take() {
+                    current.push(Ir::verbatim(gap.flat()));
+                }
+                bracket_depth += 1;
+                current.push(lower_loose_token(&token, cx));
+            }
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::R_BRACKET => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                current.push(lower_loose_token(&token, cx));
+            }
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
+                let gap = consume_gap(&token, &mut iter);
+                if gap == Gap::Blank {
+                    return None;
+                }
+                if bracket_depth == 0 {
+                    pending_gap = Some(gap);
+                } else {
+                    current.push(Ir::verbatim(gap.flat()));
+                }
+            }
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => return None,
+            SyntaxElement::Token(token) => {
+                if let Some(gap) = pending_gap.take()
+                    && !current.is_empty()
+                {
+                    entries.push(Ir::concat(std::mem::take(&mut current)));
+                    entries.push(gap.separator());
+                }
+                current.push(lower_loose_token(&token, cx));
+            }
+            SyntaxElement::Node(child) => {
+                let ir = lower_node(&child, cx);
+                if ir.contains_forced_break() {
+                    return None;
+                }
+                if let Some(gap) = pending_gap.take() {
+                    current.push(Ir::verbatim(gap.flat()));
+                }
+                current.push(ir);
+            }
+        }
+    }
+    entries.push(Ir::concat(current));
+    while entries.last().is_some_and(is_segment_separator) {
+        entries.pop();
+    }
+    let splits = entries.iter().filter(|ir| is_segment_separator(ir)).count();
+    if splits == 0 {
+        return None;
+    }
+
+    Some(Ir::group(Ir::concat([
+        open,
+        Ir::indent(Ir::concat([Ir::soft_line(), Ir::concat(entries)])),
+        Ir::soft_line(),
+        close,
+    ])))
 }
 
 /// Lower a delimited argument group as a comma-segmented Wadler group, or `None` to

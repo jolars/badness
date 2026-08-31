@@ -942,6 +942,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
         WrapMode::Reflow,
         80,
     ),
+    // A grid environment's final declared brace argument is its column preamble.
+    // When whitespace separates top-level column specifications, the preamble is
+    // one Wadler group: it stays inline when it fits and explodes to one spec per
+    // line when it does not, rather than filling several specs onto each line.
+    ("tabular_colspec_explodes_wholly", WrapMode::Reflow, 80),
     // A keyval `{…}` declines to the block form on the same preserved predicates as
     // the bracket: a `%` (which must end its line) and a blank-line `\par`, reached
     // through `segment_delimited_body`'s bail. The block form breaks after the `{`

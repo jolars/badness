@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8.1](https://github.com/jolars/badness/compare/badness-parser-v0.8.0...badness-parser-v0.8.1) (2026-08-31)
+
+### Bug Fixes
+- **formatter:** attach citations to sentences ([`57e9bb8`](https://github.com/jolars/badness/commit/57e9bb8c25ff4315de9f4d978c930c7b41c21c15)), fixes [#163](https://github.com/jolars/badness/issues/163)
+
 ## [0.8.0](https://github.com/jolars/badness/compare/badness-parser-v0.7.0...badness-parser-v0.8.0) (2026-08-28)
 
 ### Features

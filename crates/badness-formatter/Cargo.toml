@@ -1,6 +1,6 @@
 [package]
 name = "badness-formatter"
-version = "0.8.1"
+version = "0.8.2"
 edition.workspace = true
 rust-version.workspace = true
 readme = "README.md"
@@ -15,7 +15,7 @@ keywords = ["latex", "bibtex", "formatter"]
 categories = ["development-tools", "text-processing"]
 
 [dependencies]
-badness-parser = { path = "../badness-parser", version = "0.8.0" }
+badness-parser = { path = "../badness-parser", version = "0.8.1" }
 rowan = "0.17.0"
 schemars = { version = "1.2.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"], optional = true }

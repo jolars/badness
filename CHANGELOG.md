@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.22.1](https://github.com/jolars/badness/compare/v0.22.0...v0.22.1) (2026-08-31)
+
+### Bug Fixes
+- **formatter:** attach citations to sentences ([`57e9bb8`](https://github.com/jolars/badness/commit/57e9bb8c25ff4315de9f4d978c930c7b41c21c15)), fixes [#163](https://github.com/jolars/badness/issues/163)
+- **formatter:** normalize commented env args ([`6154eb9`](https://github.com/jolars/badness/commit/6154eb9a0bbf7e8d961ca66bc7863b9e1779654f))
+
+### Dependencies
+- updated crates/badness-formatter to v0.8.2
+- updated crates/badness-parser to v0.8.1
+
 ## [0.22.0](https://github.com/jolars/badness/compare/v0.21.0...v0.22.0) (2026-08-28)
 
 ### Features

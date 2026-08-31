@@ -1,48 +1,68 @@
 {
   "manifest-version": 1,
-  "baseline-sha": "11f2a76ac0f8980aa721bfb544028a4265354cc0",
+  "baseline-sha": "04d20736e8515e6cf17249e821eb8875cc64a548",
   "release-targets": [
     {
       "path": ".",
-      "version": "0.22.0",
-      "tag": "v0.22.0"
+      "version": "0.22.1",
+      "tag": "v0.22.1",
+      "dependencies": [
+        "crates/badness-formatter",
+        "crates/badness-parser"
+      ]
     },
     {
       "path": "crates/badness-formatter",
-      "version": "0.8.1",
-      "tag": "badness-formatter-v0.8.1"
+      "version": "0.8.2",
+      "tag": "badness-formatter-v0.8.2",
+      "dependencies": [
+        "crates/badness-parser"
+      ]
     },
     {
       "path": "crates/badness-parser",
-      "version": "0.8.0",
-      "tag": "badness-parser-v0.8.0"
+      "version": "0.8.1",
+      "tag": "badness-parser-v0.8.1"
     },
     {
       "path": "editors/code",
-      "version": "0.22.0",
-      "tag": "badness-code-v0.22.0"
+      "version": "0.22.1",
+      "tag": "badness-code-v0.22.1",
+      "dependencies": [
+        "."
+      ]
     }
   ],
   "pending-release-targets": [
     {
       "path": ".",
-      "version": "0.22.0",
-      "tag": "v0.22.0"
+      "version": "0.22.1",
+      "tag": "v0.22.1",
+      "dependencies": [
+        "crates/badness-formatter",
+        "crates/badness-parser"
+      ]
     },
     {
       "path": "crates/badness-formatter",
-      "version": "0.8.1",
-      "tag": "badness-formatter-v0.8.1"
+      "version": "0.8.2",
+      "tag": "badness-formatter-v0.8.2",
+      "dependencies": [
+        "crates/badness-parser"
+      ]
     },
     {
       "path": "crates/badness-parser",
-      "version": "0.8.0",
-      "tag": "badness-parser-v0.8.0"
+      "version": "0.8.1",
+      "tag": "badness-parser-v0.8.1"
     },
     {
       "path": "editors/code",
-      "version": "0.22.0",
-      "tag": "badness-code-v0.22.0"
+      "version": "0.22.1",
+      "tag": "badness-code-v0.22.1",
+      "dependencies": [
+        "."
+      ]
     }
   ]
 }

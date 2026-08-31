@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag a cite key defined by more than one entry in the same `.bib` file. Keys are compared case-insensitively, matching BibTeX, which silently keeps only one of the colliding entries; every definition after the first is flagged. No autofix: resolving the collision (rename vs delete) is the author's call.
 
+This rule is **enabled by default**.
+
 The same cite key defined by two entries:
 
 ```bib

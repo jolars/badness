@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag a field that is neither required nor optional for its entry type and carries no global field metadata -- usually a typo, or data misplaced from another entry type. BibLaTeX silently ignores fields it does not know, so the mistake otherwise vanishes without a trace. Only entry types the built-in database knows are checked. Report-only -- deleting the field would discard data.
 
+This rule is **enabled by default**.
+
 A typo'd field name (`pubisher` for `publisher`):
 
 ```bib

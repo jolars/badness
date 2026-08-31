@@ -453,6 +453,7 @@ const STARTER_CONFIG: &str = "\
 [lint]
 # select = [\"...\"]  # if set, only these rules run
 # ignore = []        # rules to disable
+# default-off rules remain available through select
 
 # Where the compiler leaves its artifacts, and which file it ran on. Read by the
 # language server only: `.aux` for label/section numbers, the PDF for forward

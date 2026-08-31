@@ -73,6 +73,10 @@ impl Rule for DashLength {
         Severity::Warning
     }
 
+    fn default_enabled(&self) -> bool {
+        false
+    }
+
     fn description(&self) -> &'static str {
         "Flag a dash of the wrong length for its context (ChkTeX 8). LaTeX sets a \
          hyphen from `-`, an en dash from `--`, and an em dash from `---`. Between \

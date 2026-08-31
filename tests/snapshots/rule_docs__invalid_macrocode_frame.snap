@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag a `.dtx` `macrocode` or `macrocode*` closing frame unless exactly four spaces separate its column-one `%` from `\end{…}`. The `doc` package scans for that literal physical delimiter, so a near match does not close the code chunk even though it looks like an ordinary environment to Badness. The safe autofix replaces only the malformed horizontal space with the required four spaces.
 
+This rule is **enabled by default**.
+
 A `macrocode` closer with only three spaces after `%`:
 
 ```tex

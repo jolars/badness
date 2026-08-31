@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag a regular entry lacking a field its type requires, per the biblatex data model. An alternation like `date` *or* `year` is satisfied by either, and classic-BibTeX aliases count (`journal` satisfies `journaltitle`). An entry type the built-in database does not know carries no signature and is never flagged. Report-only -- field content cannot be invented.
 
+This rule is **enabled by default**.
+
 An `@article` without its required `journaltitle`:
 
 ```bib

@@ -44,6 +44,7 @@ pub fn render_rule_doc(rule: &dyn BibRule) -> String {
         &RuleDocSection {
             id: rule.id(),
             description: rule.description(),
+            default_enabled: rule.default_enabled(),
             examples: rule.examples(),
             companions: &[],
             example_path: &path,
@@ -90,7 +91,8 @@ catalogue: one section per rule, keyed by its stable **rule id**. Bib rules
 share one id namespace with the [LaTeX rules](linter-rules.md), so the same
 `[lint]` `select`/`ignore` (and `--select`/`--ignore`) target both.
 
-Every rule is **on by default**; narrowing happens only through `select`/`ignore`
+Most rules are **on by default**. Each rule's section states its default; enable
+an opt-in rule with `select`, or narrow the default set with `select`/`ignore`
 in the `[lint]` table (see the
 [Configuration reference](configuration.md#lint)). Where a rewrite is unambiguous a rule
 carries an **auto-fix**: a *safe* fix (shown below as \"After applying the fix\")

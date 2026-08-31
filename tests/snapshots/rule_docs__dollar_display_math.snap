@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag plain-TeX `$$...$$` display math. `$$` is a TeX primitive that bypasses `amsmath` spacing hooks and breaks `fleqn`/`\everydisplay`, so LaTeX steers users to `\[...\]`. The autofix swaps the delimiters in place and leaves the body untouched, so it parses and stays lossless; it is withheld when the display math is unclosed.
 
+This rule is **enabled by default**.
+
 Plain-TeX display math:
 
 ```tex

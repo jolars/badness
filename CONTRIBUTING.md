@@ -149,7 +149,9 @@ The `add-lint-rule` workflow automates this, but the shape is fixed:
 1. Implement `Rule` in a new `src/linter/rules/<name>.rs`, choosing node-shape,
    whole-file, or streaming dispatch, with an `id`, a `default_severity`, a
    description, and at least one triggering example. Emit a losslessness-safe
-   fix where one is warranted, and set `emits_fix` accordingly.
+   fix where one is warranted, and set `emits_fix` accordingly. Rules are
+   enabled by default; override `default_enabled` only for useful checks whose
+   unavoidable false positives make them better suited to explicit selection.
 2. Register it in the three lockstep lists in `src/linter/rules.rs`: the module
    declaration, the re-export, and the entry in `all_rules()`.
 3. Ship unit tests next to the rule and an integration test, plus a losslessness

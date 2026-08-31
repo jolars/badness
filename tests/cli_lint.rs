@@ -17,6 +17,7 @@ use tempfile::TempDir;
 /// Triggers the `ellipsis` rule, which carries a safe fix (`...` → `\dots`).
 const FIXABLE: &str = "Wait ... what\n";
 const CLEAN: &str = "Nothing to see here.\n";
+const OPT_IN_DASH: &str = "A global--local search.\n";
 
 fn repo_dir() -> TempDir {
     let dir = TempDir::new().unwrap();
@@ -52,6 +53,26 @@ fn lint_with_env(dir: &Path, args: &[&str], stdin: Option<&str>, env: &[(&str, &
             .unwrap();
     }
     child.wait_with_output().expect("wait for badness")
+}
+
+#[test]
+fn dash_length_is_disabled_by_default_and_selectable() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("doc.tex"), OPT_IN_DASH).unwrap();
+
+    let default = lint(dir.path(), &["--output=json", "doc.tex"], None);
+    assert!(default.status.success());
+    assert_eq!(String::from_utf8(default.stdout).unwrap(), "[]\n");
+
+    let selected = lint(
+        dir.path(),
+        &["--output=json", "--select", "dash-length", "doc.tex"],
+        None,
+    );
+    assert!(!selected.status.success());
+    let stdout = String::from_utf8(selected.stdout).unwrap();
+    let findings: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
+    assert_eq!(findings[0]["rule"], "dash-length");
 }
 
 #[test]

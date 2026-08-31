@@ -144,6 +144,7 @@ pub fn demo_diagnostics_with(
 pub(crate) struct RuleDocSection<'a> {
     pub id: &'a str,
     pub description: &'a str,
+    pub default_enabled: bool,
     pub examples: &'a [Example],
     pub companions: &'a [(&'static str, &'static str)],
     pub example_path: &'a Path,
@@ -165,6 +166,16 @@ pub(crate) fn render_rule_section(
     if !description.is_empty() {
         let _ = writeln!(out);
         let _ = writeln!(out, "{description}");
+    }
+
+    let _ = writeln!(out);
+    if section.default_enabled {
+        let _ = writeln!(out, "This rule is **enabled by default**.");
+    } else {
+        let _ = writeln!(
+            out,
+            "This rule is **disabled by default**; enable it with `select`."
+        );
     }
 
     // Synthetic sibling files linted alongside every example (the two-file
@@ -222,6 +233,7 @@ pub fn render_rule_doc(rule: &dyn Rule) -> String {
         &RuleDocSection {
             id: rule.id(),
             description: rule.description(),
+            default_enabled: rule.default_enabled(),
             examples: rule.examples(),
             companions,
             example_path: &example_path,
@@ -293,7 +305,8 @@ per rule, keyed by its stable **rule id**. That id is what appears in a
 diagnostic, what `[lint]` `select`/`ignore` (and `--select`/`--ignore`) target,
 and what a `% badness-lint skip <id>` comment suppresses.
 
-Every rule is **on by default**; narrowing happens only through `select`/`ignore`
+Most rules are **on by default**. Each rule's section states its default; enable
+an opt-in rule with `select`, or narrow the default set with `select`/`ignore`
 in the `[lint]` table (see the
 [Configuration reference](configuration.md#lint)). Where a rewrite is unambiguous a rule
 carries an **auto-fix**: a *safe* fix (shown below as \"After applying the fix\")

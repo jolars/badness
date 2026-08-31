@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag the retired `% badness-ignore <rule>` and `% badness-ignore-file [<rule>]` suppression spellings, which remain accepted for compatibility but are no longer documented. The Safe autofix rewrites only the family and verb to `% badness-lint skip <rule>` or `% badness-lint skip-file [<rule>]`; the selector and reason remain byte-for-byte unchanged, and the edit stays entirely inside a comment. This meta diagnostic is not silenced by the retired directive it reports; use `[lint].ignore` to disable the rule deliberately.
 
+This rule is **enabled by default**.
+
 A retired suppression directive:
 
 ```tex

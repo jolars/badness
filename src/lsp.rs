@@ -493,7 +493,8 @@ struct ResolvedSettings {
     /// Whether a `badness.toml` governed this resolution. When `true` the file
     /// config wins outright and a request's `tab_size` is ignored.
     config_present: bool,
-    /// The `[lint]` `select`/`ignore` selection (default — every rule — when no file).
+    /// The `[lint]` `select`/`ignore` selection (the default-enabled rules when
+    /// no file has resolved settings).
     lint: LintConfig,
     /// The sibling-discovery exclude filter, rooted at the config's directory. The
     /// exclude-nothing [`ExcludeFilter::none`] when no config governs (editor
@@ -614,7 +615,7 @@ impl ResolvedSettings {
     }
 
     /// Editor-settings-only resolution: width knobs over the built-in defaults, no
-    /// configured wrap, the full default rule set, and no exclude filter.
+    /// configured wrap, the default-enabled rule set, and no exclude filter.
     fn from_editor(editor: &EditorSettings) -> Self {
         Self {
             style: editor.to_format_style(),

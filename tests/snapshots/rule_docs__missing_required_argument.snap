@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag a command invoked with fewer `{…}` groups than the required arity in its curated built-in signature (ChkTeX warning 14, decided on the parse tree and signature database rather than line heuristics). TeX also accepts unbraced single-token arguments (`\frac12`), so the rule stays silent whenever a following token could still supply the missing argument and fires only at a hard boundary: the end of the enclosing group, math shell, or environment, an alignment `&`, a `\\` line break, a blank line, or the end of the file. Contexts where a bare command is deliberate are skipped -- macro-definition bodies (`\newcommand{\bold}{\textbf}`), arguments of unknown commands, standalone `{…}` scope groups, `\let`-style alias forms, and names the file itself redefines. Report-only: the missing argument's content is the author's to write, so no fix is correct by construction.
 
+This rule is **enabled by default**.
+
 A fraction missing its denominator:
 
 ```tex

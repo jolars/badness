@@ -85,6 +85,11 @@ pub trait BibRule: Send + Sync {
         Severity::Warning
     }
 
+    /// Whether the rule runs when neither `select` nor `ignore` names it.
+    fn default_enabled(&self) -> bool {
+        true
+    }
+
     /// One-paragraph (markdown) description of what the rule flags and why, used
     /// to generate the rule reference. Empty means "not yet documented"; the
     /// `every_bib_rule_is_documented` test (`tests/bib_rule_docs.rs`) requires a

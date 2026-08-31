@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag a package or class source (`.sty`/`.cls`) that never identifies itself with the matching `\ProvidesPackage`/`\ProvidesClass`. Every well-formed package declares its identity so LaTeX can log it and honor date-based compatibility checks; a `.sty` carrying only `\ProvidesClass` (wrong kind) still counts as missing. The rule is inert for any other extension -- a `.tex` has nothing to provide, and a `.dtx` hides its declaration inside guarded `macrocode`. No autofix: writing a correct `\Provides…` line (placement, date, version) is the author's call.
 
+This rule is **enabled by default**.
+
 A package source with no self-identification (the docs are rendered against a `.sty` path):
 
 ```tex

@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag a blank line at the top level of a `key=value` argument. A blank line is a `\par` token and a keyval processor walks its entries with macros that are not `\long`, so the call aborts -- and the error TeX reports names the processor rather than the command the author wrote (`\hypersetup` yields "Paragraph ended before `\kv@processor@default` was complete"), which is what makes the finding worth more than the compiler's own message. Scoped by measurement: a blank line *nested* inside a value's brace group (`\tikzset{aa/.style={draw,\n\nthick}}`) compiles clean and is not flagged, an unclosed `{` is left to the parse error it already draws, and only the hand-curated signature tier is consulted. The autofix drops the blank line and keeps the following indentation; it is safe by construction, since it edits only whitespace and `ContentKind::Keyval` is exactly the claim that the processor strips spaces around entries.
 
+This rule is **enabled by default**.
+
 A blank line separating two keys, which aborts the call:
 
 ```tex

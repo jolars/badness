@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag an `@string` macro defined in the file but never referenced by any field value. For the common self-contained `.bib` an unused macro is dead weight; in a multi-file bibliography it may be referenced from another `.bib`, so treat cross-file setups with care -- cross-file `@string` resolution is not modeled yet. Report-only: deleting a definition is a meaning-level edit left to the author.
 
+This rule is **enabled by default**.
+
 A defined macro no field value references:
 
 ```bib

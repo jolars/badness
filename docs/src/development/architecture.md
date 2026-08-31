@@ -1581,8 +1581,8 @@ description and examples.
 
 Every lint implements `Rule`, which is `Send + Sync` so the registry can be
 shared across the LSP's read pool. A rule declares a stable kebab-case `id`, a
-`default_severity`, the description and worked examples that generate the rule
-reference, and whether it can ever emit a fix.
+`default_severity`, whether it is enabled by default, the description and worked
+examples that generate the rule reference, and whether it can ever emit a fix.
 
 No rule walks the tree on its own. Each participates in the driver's single
 shared traversal one of three ways. Node-shape rules name the `SyntaxKind`s they
@@ -1609,7 +1609,9 @@ Nested explicit math may in turn override a text island. Math-only rules require
 The registry compiles the rule list into a dispatch table indexed by
 `SyntaxKind`, so node dispatch is a slice index, and it is cached across files
 and shared by reference across the CLI's rayon lint phase. Configuration narrows
-the active set as a post-filter, so the shared driver stays config-unaware.
+the active set as a post-filter, so the shared driver stays config-unaware. With
+no `select`, resolution starts from rules whose `default_enabled` value is true;
+an explicit `select` may choose any current rule, including an opt-in one.
 
 ### Autofixes
 

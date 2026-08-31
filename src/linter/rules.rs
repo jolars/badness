@@ -669,6 +669,13 @@ pub trait Rule: Send + Sync {
         Severity::Warning
     }
 
+    /// Whether the rule runs when neither `select` nor `ignore` names it.
+    /// Rules with unavoidable false positives may override this to remain
+    /// available as opt-in checks without adding noise to every project.
+    fn default_enabled(&self) -> bool {
+        true
+    }
+
     /// One-paragraph (markdown) description of what the rule flags and why, used
     /// to generate the rule reference. Empty means "not yet documented"; the
     /// `every_rule_is_documented` test (`tests/rule_docs.rs`) requires a non-empty
@@ -916,6 +923,21 @@ fn all_current_rule_ids() -> impl Iterator<Item = &'static str> {
     )
 }
 
+/// Every built-in rule enabled when `select` is unset, across both linters.
+fn all_default_rule_ids() -> impl Iterator<Item = &'static str> {
+    all_rules()
+        .into_iter()
+        .filter(|rule| rule.default_enabled())
+        .map(|rule| rule.id())
+        .chain(
+            crate::bib::linter::all_rules()
+                .into_iter()
+                .filter(|rule| rule.default_enabled())
+                .map(|rule| rule.id())
+                .filter(|id| !ALL_RULE_IDS.contains(id)),
+        )
+}
+
 /// Every current or retired rule id recognized by configuration and `--explain`.
 pub fn all_known_rule_ids() -> impl Iterator<Item = &'static str> {
     all_current_rule_ids().chain(
@@ -944,8 +966,9 @@ pub const PARSE_RULE_ID: &str = "parse";
 /// the diagnostics `lint_document` already produced without changing that shared
 /// entry point's signature. The semantics are:
 ///
-/// 1. Base set = the current ids in `select` when it is `Some`, else every current
-///    built-in rule. Retired ids remain accepted as inert configuration entries.
+/// 1. Base set = the current ids in `select` when it is `Some`, else every
+///    default-enabled built-in rule. Retired and opt-in ids remain accepted
+///    configuration entries.
 /// 2. Subtract anything in `ignore`.
 /// 3. Unknown ids in `select`/`ignore` are returned via the second tuple element
 ///    so the caller can surface them; they do not error.
@@ -968,7 +991,7 @@ impl RuleSelection {
             Some(picks) => all_current_rule_ids()
                 .filter(|id| picks.iter().any(|p| p == id))
                 .collect(),
-            None => all_current_rule_ids().collect(),
+            None => all_default_rule_ids().collect(),
         };
         let active = base
             .into_iter()
@@ -977,8 +1000,8 @@ impl RuleSelection {
         (Self { active }, unknown)
     }
 
-    /// The unfiltered set: every built-in rule active. The default for callers
-    /// with no config (the LSP, the library API).
+    /// The unfiltered set: every built-in rule active, including opt-in rules.
+    /// Use [`Self::resolve`] with no `select` for the ordinary default set.
     pub fn all() -> Self {
         Self {
             active: all_current_rule_ids().collect(),
@@ -1000,6 +1023,22 @@ mod tests {
     fn registry_and_id_list_agree() {
         let ids: Vec<&str> = all_rules().iter().map(|r| r.id()).collect();
         assert_eq!(ids, ALL_RULE_IDS);
+    }
+
+    #[test]
+    fn shared_rule_ids_agree_on_default_enablement() {
+        for latex in all_rules() {
+            for bib in crate::bib::linter::all_rules() {
+                if latex.id() == bib.id() {
+                    assert_eq!(
+                        latex.default_enabled(),
+                        bib.default_enabled(),
+                        "shared rule id `{}` has conflicting defaults",
+                        latex.id(),
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1065,6 +1104,17 @@ mod tests {
         assert!(unknown.is_empty());
         assert!(!sel.is_active("deprecated-command"));
         assert!(sel.is_active("duplicate-label"));
+    }
+
+    #[test]
+    fn dash_length_is_opt_in() {
+        let (default, unknown) = RuleSelection::resolve(None, &[]);
+        assert!(unknown.is_empty());
+        assert!(!default.is_active("dash-length"));
+
+        let (selected, unknown) = RuleSelection::resolve(Some(&["dash-length".to_string()]), &[]);
+        assert!(unknown.is_empty());
+        assert!(selected.is_active("dash-length"));
     }
 
     #[test]

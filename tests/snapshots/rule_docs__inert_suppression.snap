@@ -6,6 +6,8 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag a suppression directive that cannot take effect: `skip` with no following construct, `on` with no matching `off`, or a directive written on a `.dtx` documentation-margin line, where `%` is typeset prose rather than a comment. Also flag an `off` region left open at EOF; it currently suppresses through the end of the file, but the missing closer is usually accidental. Report-only: moving, deleting, or closing the directive requires knowing the boundary the author intended. Inline suppressions cannot hide this meta diagnostic; use `[lint].ignore` to disable the rule deliberately.
 
+This rule is **enabled by default**.
+
 An `on` directive with no matching open region does nothing:
 
 ```tex

@@ -334,14 +334,15 @@ de = ["bzw.", "Abb."]       # applied only when lang resolves to German
 ## `[lint]`
 
 Rule selection for `badness lint`, shared by the [LaTeX](linter-rules.md) and
-[BibTeX](bib-linter-rules.md) rule sets. Every rule is on by default. An unknown
-rule id is reported at lint time, not rejected at config-parse time.
+[BibTeX](bib-linter-rules.md) rule sets. Most rules are on by default; each
+rule's reference entry states whether it is default-enabled. An unknown rule id
+is reported at lint time, not rejected at config-parse time.
 
 ### `select`
 
 Explicit allowlist of rule ids. When set, only these rules run.
 
-**Default value**: unset (all rules run)
+**Default value**: unset (all default-enabled rules run)
 
 **Type**: array of strings
 
@@ -350,6 +351,13 @@ Explicit allowlist of rule ids. When set, only these rules run.
 ```toml
 [lint]
 select = ["deprecated-command", "dollar-display-math"]
+```
+
+To enable the opt-in dash check:
+
+```toml
+[lint]
+select = ["dash-length"]
 ```
 
 ### `ignore`

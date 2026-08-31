@@ -1659,6 +1659,10 @@ const DTX_FIXTURES: &[&str] = &[
     // The mathtools smoke-test reproducer: command-only doc lines must remain a
     // fixed point after their `%  ` margins normalize (issue #126).
     "issue_126_dtx_command_lines",
+    // A section and its glued label normalize onto adjacent documentation lines.
+    // The label remains part of the heading unit, so the blank separator belongs
+    // after the label rather than between the two commands (issue #166).
+    "issue_166_dtx_section_label",
     // A virtual environment at the start of a doc paragraph owns the floated
     // leading margin even when ordinary prose follows it in the same paragraph.
     "issue_126_dtx_environment_then_prose",

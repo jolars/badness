@@ -2662,7 +2662,7 @@ fn reflow_elements_checked(
                     b.push_atom_piece(ir, &child.text().to_string());
                     if section_label_closes_line {
                         b.end_line();
-                        if next_nontrivia_is_label(&elements, idx) {
+                        if next_nontrivia_is_label(&elements, idx, cx) {
                             b.pending_sep = Ir::hard_line();
                         } else {
                             b.separate_section();
@@ -2684,7 +2684,7 @@ fn reflow_elements_checked(
                     }
                     b.push_atom_piece(ir, &child.text().to_string());
                     b.end_line();
-                    if is_section_boundary && !next_nontrivia_is_label(&elements, idx) {
+                    if is_section_boundary && !next_nontrivia_is_label(&elements, idx, cx) {
                         b.separate_section();
                     }
                     line_all_commands = true;
@@ -2809,10 +2809,10 @@ fn reflow_elements_checked(
                         || section_label_closes_line
                         || child.kind() == SyntaxKind::ENVIRONMENT
                         || display_math_closes_prose;
-                    if is_section_boundary && !next_nontrivia_is_label(&elements, idx) {
+                    if is_section_boundary && !next_nontrivia_is_label(&elements, idx, cx) {
                         b.separate_section();
                     } else if section_label_closes_line {
-                        if next_nontrivia_is_label(&elements, idx) {
+                        if next_nontrivia_is_label(&elements, idx, cx) {
                             b.pending_sep = Ir::hard_line();
                         } else {
                             b.separate_section();
@@ -10547,14 +10547,21 @@ fn next_is_separated(elements: &[SyntaxElement], idx: usize) -> bool {
     }
 }
 
-/// Whether the next non-trivia element in the paragraph is a `\label` command.
-fn next_nontrivia_is_label(elements: &[SyntaxElement], idx: usize) -> bool {
+/// Whether the next non-framing element in the paragraph is a `\label` command.
+/// A `.dtx` margin is physical line framing, so a heading and label separated by
+/// one remains structurally adjacent.
+fn next_nontrivia_is_label(elements: &[SyntaxElement], idx: usize, cx: LowerCtx<'_>) -> bool {
     elements[idx + 1..]
         .iter()
-        .find(|element| !is_collapsible_trivia_element(element))
+        .find(|element| !is_section_label_framing(element, cx))
         .is_some_and(|element| {
             matches!(element, SyntaxElement::Node(node) if node.kind() == SyntaxKind::COMMAND && command_is_label(node))
         })
+}
+
+fn is_section_label_framing(element: &SyntaxElement, cx: LowerCtx<'_>) -> bool {
+    is_collapsible_trivia_element(element)
+        || matches!(element, SyntaxElement::Token(token) if cx.is_dtx && token.kind() == SyntaxKind::DOC_MARGIN)
 }
 
 /// Whether `elements[idx]` is in a label run immediately after a sectioning
@@ -10566,7 +10573,7 @@ fn next_nontrivia_is_label(elements: &[SyntaxElement], idx: usize) -> bool {
 fn label_follows_sectioning_run(elements: &[SyntaxElement], idx: usize, cx: LowerCtx<'_>) -> bool {
     for element in elements[..idx].iter().rev() {
         match element {
-            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {}
+            element if is_section_label_framing(element, cx) => {}
             SyntaxElement::Node(node)
                 if node.kind() == SyntaxKind::COMMAND && command_is_label(node) => {}
             SyntaxElement::Node(node)

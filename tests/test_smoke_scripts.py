@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FETCH_SCRIPT = ROOT / "scripts" / "fetch_arxiv_sources.py"
 SCAN_SCRIPT = ROOT / "scripts" / "smoke_scan_project.sh"
+SMOKE_WORKFLOW = ROOT / ".github" / "workflows" / "smoke-test.yml"
 SPEC = importlib.util.spec_from_file_location("fetch_arxiv_sources", FETCH_SCRIPT)
 assert SPEC and SPEC.loader
 FETCH = importlib.util.module_from_spec(SPEC)
@@ -179,6 +180,17 @@ class SmokeScanProjectTests(unittest.TestCase):
             )
             self.assertEqual((results / "scanned_count").read_text().strip(), "1")
             self.assertEqual((results / "suppressed_count").read_text().strip(), "1")
+
+
+class SmokeWorkflowTests(unittest.TestCase):
+    def test_repository_clones_stay_outside_the_uploaded_results(self) -> None:
+        workflow = SMOKE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'REPOS_DIR="$RUNNER_TEMP/badness-debug-format-repos/github"',
+            workflow,
+        )
+        self.assertNotIn('REPOS_DIR="$RESULTS_DIR/repos"', workflow)
 
 
 if __name__ == "__main__":

@@ -248,7 +248,8 @@ jobs:
           BADNESS_VERSION="$("$BADNESS_BIN" --version | head -n 1 || true)"
           export BADNESS_BIN BADNESS_SHA BADNESS_VERSION
           RESULTS_DIR="$RUNNER_TEMP/badness-debug-format-scan/github"
-          REPOS_DIR="$RESULTS_DIR/repos"
+          # The artifact carries diagnostics, not full upstream checkouts.
+          REPOS_DIR="$RUNNER_TEMP/badness-debug-format-repos/github"
           mkdir -p "$REPOS_DIR"
 
           while IFS= read -r repo; do

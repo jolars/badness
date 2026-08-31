@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.2](https://github.com/jolars/badness/compare/badness-formatter-v0.8.1...badness-formatter-v0.8.2) (2026-08-31)
+
+### Bug Fixes
+- **formatter:** keep dtx labels with headings ([`04d2073`](https://github.com/jolars/badness/commit/04d20736e8515e6cf17249e821eb8875cc64a548)), fixes [#166](https://github.com/jolars/badness/issues/166)
+- **formatter:** attach citations to sentences ([`57e9bb8`](https://github.com/jolars/badness/commit/57e9bb8c25ff4315de9f4d978c930c7b41c21c15)), fixes [#163](https://github.com/jolars/badness/issues/163)
+- **formatter:** indent environment header arguments ([`1431943`](https://github.com/jolars/badness/commit/14319433e12932a40fba8eb93b1813cd9de2ff97))
+- **formatter:** normalize commented env args ([`6154eb9`](https://github.com/jolars/badness/commit/6154eb9a0bbf7e8d961ca66bc7863b9e1779654f))
+
+### Dependencies
+- updated crates/badness-parser to v0.8.1
+
 ## [0.8.1](https://github.com/jolars/badness/compare/badness-formatter-v0.8.0...badness-formatter-v0.8.1) (2026-08-28)
 
 ### Bug Fixes

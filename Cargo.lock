@@ -92,7 +92,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "badness"
-version = "0.22.0"
+version = "0.22.1"
 dependencies = [
  "annotate-snippets",
  "badness-formatter",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "badness-formatter"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "badness-parser",
  "insta",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "badness-parser"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "insta",
  "parser",

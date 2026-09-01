@@ -61,6 +61,51 @@ Two global CLI flags override discovery:
 CLI flags for individual options (`--line-width`, `--wrap`, `--select`, etc.)
 override the corresponding config values for a single run.
 
+## Editor support
+
+Badness publishes a [JSON Schema](https://json-schema.org/) for `badness.toml`
+so editors with TOML support can provide key and value completion, hover
+documentation, and validation.
+
+**Schema URL:** <https://badness.dev/badness.schema.json>
+
+The schema is generated from the configuration types and checked against them in
+the test suite. The version at the URL tracks the latest released version of
+Badness.
+
+### VS Code (Even Better TOML)
+
+With the [Even Better
+TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml)
+extension installed, add this association to your user or workspace
+`settings.json`:
+
+```jsonc
+{
+  "evenBetterToml.schema.associations": {
+    "^(.*/)?badness\\.toml$": "https://badness.dev/badness.schema.json"
+  }
+}
+```
+
+### Inline `#:schema` directive
+
+TOML tooling that supports inline schema directives can select it from the
+configuration file itself:
+
+```toml
+#:schema https://badness.dev/badness.schema.json
+```
+
+This is also useful for the global user configuration, whose generic
+`config.toml` file name should not be associated with Badness automatically.
+
+### Other editors
+
+Any editor or language server that consumes JSON Schemas—including Helix, Neovim
+with `taplo-lsp`, Zed, and IntelliJ—can use the same URL through its TOML schema
+settings.
+
 ## Top level
 
 ### `exclude`

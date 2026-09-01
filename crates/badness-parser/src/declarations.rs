@@ -40,8 +40,9 @@ use crate::semantic::signature::{EnvironmentSig, SignatureDb, builtin};
 /// disambiguate. Normalization lives in the type rather than at one call site so
 /// every front end gets it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(transparent)]
-pub struct CommandName(SmolStr);
+pub struct CommandName(#[cfg_attr(feature = "schema", schemars(with = "String"))] SmolStr);
 
 impl CommandName {
     /// Normalize `name` by stripping one leading backslash, if present.
@@ -88,6 +89,7 @@ impl<'de> Deserialize<'de> for CommandName {
 /// and `\startmyenv … \endmyenv` needing behavior *and* spellings — without a
 /// union-typed entry.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct EnvironmentDecl {
     /// The curated built-in environment whose behavior this one copies — math,
@@ -99,6 +101,7 @@ pub struct EnvironmentDecl {
     /// behavior always comes from curated data. An unknown target is an error
     /// rather than a silent no-op, because a mistyped `like = "algin"` is
     /// otherwise invisible.
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
     pub like: Option<SmolStr>,
     /// Command spellings that stand in for this environment's `\begin{…}`
     /// (`\bea`, `\startmyenv`). Any of them opens the environment; the closers
@@ -126,9 +129,11 @@ pub type EnvironmentDecls = BTreeMap<SmolStr, EnvironmentDecl>;
 /// One `[commands.<name>]` entry: the built-in reference or citation command
 /// whose semantic behavior the project command copies.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CommandDecl {
     /// The built-in reference or citation command whose key behavior is copied.
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
     pub like: Option<SmolStr>,
 }
 
@@ -141,11 +146,17 @@ pub type CommandDecls = BTreeMap<SmolStr, CommandDecl>;
 /// resolution reports errors in the order the user reads them, and the value
 /// ends up on a salsa input whose equality must not depend on hash order.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Declarations {
     /// The `[commands.<name>]` semantic aliases.
+    #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<String, CommandDecl>"))]
     pub commands: CommandDecls,
     /// The `[environments.<name>]` entries.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BTreeMap<String, EnvironmentDecl>")
+    )]
     pub environments: EnvironmentDecls,
 }
 

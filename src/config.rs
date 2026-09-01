@@ -28,7 +28,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::declarations::{
-    CommandDecls, DeclarationError, Declarations, EnvironmentDecls, ResolvedDeclarations,
+    CommandDecl, CommandDecls, DeclarationError, Declarations, EnvironmentDecl, EnvironmentDecls,
+    ResolvedDeclarations,
 };
 use crate::formatter::{FormatStyle, ItemIndent, LineEnding, MathWrap, WrapMode};
 
@@ -53,7 +54,7 @@ const DEFAULT_INDENT_WIDTH: u32 = 2;
 /// is always layered on top of whichever base is in effect.
 pub const DEFAULT_EXCLUDE: &[&str] = &[".git/"];
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     /// Gitignore-style patterns to exclude from directory discovery, resolved
@@ -71,15 +72,19 @@ pub struct Config {
     /// this to skip a few extra paths without restating the defaults.
     #[serde(default)]
     pub extend_exclude: Vec<String>,
+    /// Formatter settings from the `[format]` section.
     #[serde(default)]
     pub format: FormatConfig,
+    /// Linter rule selection from the `[lint]` section.
     #[serde(default)]
     pub lint: LintConfig,
+    /// Build-artifact locations from the `[build]` section.
     #[serde(default)]
     pub build: BuildConfig,
     /// Project-defined reference and citation command families. Unlike
     /// environment declarations, these affect semantic analysis only.
     #[serde(default)]
+    #[schemars(with = "BTreeMap<String, CommandDecl>")]
     pub commands: CommandDecls,
     /// The `[environments.<name>]` declaration map: what a user-defined
     /// environment behaves like, and which command spellings stand in for its
@@ -97,6 +102,7 @@ pub struct Config {
     /// than an `[[environments]]` array: the key *is* the environment, so
     /// entries merge per name once config layers or per-file overrides appear.
     #[serde(default)]
+    #[schemars(with = "BTreeMap<String, EnvironmentDecl>")]
     pub environments: EnvironmentDecls,
 }
 
@@ -142,12 +148,15 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// The `[format]` section of `badness.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct FormatConfig {
     #[serde(default = "default_line_width")]
+    #[schemars(range(min = 1, max = 1000))]
     pub line_width: u32,
     #[serde(default = "default_indent_width")]
+    #[schemars(range(min = 1, max = 1000))]
     pub indent_width: u32,
     /// How continuation lines in list items are indented from the `\item`
     /// column. See [`ItemIndentConfig`].
@@ -200,7 +209,7 @@ impl Default for FormatConfig {
 
 /// The `item-indent` key under `[format]`. A serde-named mirror of
 /// [`ItemIndent`], the same split as [`WrapModeConfig`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ItemIndentConfig {
     /// Align continuations under the body following a bare `\item `.
@@ -226,7 +235,7 @@ impl From<ItemIndentConfig> for ItemIndent {
 /// (the formatter's own type), kept separate so the TOML spelling (`kebab-case`)
 /// is a config concern, not baked into the formatter API — the same split as the
 /// CLI's `WrapArg` in `cli.rs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WrapModeConfig {
     /// Greedy fill: wrap words to the line width.
@@ -259,7 +268,7 @@ impl From<WrapModeConfig> for WrapMode {
 /// the same split as [`WrapModeConfig`]. Scope: single-formula display math
 /// (`\[…\]`, `$$…$$`, a non-grid `equation`); grid environments and inline
 /// `$…$` are unaffected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum MathWrapConfig {
     /// Derive from the effective `wrap`: `preserve` → `preserve`, else `break`.
@@ -286,7 +295,7 @@ impl From<MathWrapConfig> for MathWrap {
 
 /// The `line-ending` key under `[format]`. A serde-named mirror of
 /// [`LineEnding`], the same split as [`WrapModeConfig`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum LineEndingConfig {
     /// Keep whatever the file was written with (CRLF if its first line break is
@@ -334,7 +343,7 @@ fn default_indent_width() -> u32 {
 /// document symbols pull resolved numbers from the `.aux`; forward search locates
 /// the compiled PDF); never by the formatter or linter, which stay hermetic (see
 /// `AGENTS.md`).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct BuildConfig {
     /// Directory holding the build's `.aux` files (latexmk's `-auxdir`/`-outdir`),
@@ -385,7 +394,8 @@ impl BuildConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+/// The `[lint]` section of `badness.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct LintConfig {
     /// Explicit allowlist of rule IDs. When `Some`, only these rules run.

@@ -242,6 +242,9 @@ comparison, not a byte target.
   TeX installation and viewer paths, in editor configuration.
 - Update the CLI and configuration references, generated command documentation,
   and starter configuration when their public behavior changes.
+- Regenerate `badness.schema.json` with
+  `UPDATE_EXPECTED=1 cargo test --test config_schema`, and review the diff;
+  never edit the generated schema by hand.
 
 ## Language server
 

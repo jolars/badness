@@ -6,6 +6,9 @@
 //! lossless rowan tree: `reconstruct(text) == text`, byte for byte. Semantics
 //! (arity, verbatim-ness, sectioning) are layered on top in [`semantic`],
 //! never inside the grammar.
+//!
+//! The optional `schema` feature derives `schemars::JsonSchema` for the
+//! project-declaration wire types used by configuration front ends.
 
 #![deny(clippy::debug_assert_with_mut_call)]
 

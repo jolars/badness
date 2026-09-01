@@ -1,0 +1,365 @@
+{
+  "$id": "https://badness.dev/badness.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "BuildConfig": {
+      "additionalProperties": false,
+      "description": "The `[build]` section: where the TeX compiler leaves its artifacts, and which\nfile it was run on. Read by the language server only (label-number hover and\ndocument symbols pull resolved numbers from the `.aux`; forward search locates\nthe compiled PDF); never by the formatter or linter, which stay hermetic (see\n`AGENTS.md`).",
+      "properties": {
+        "aux-dir": {
+          "default": null,
+          "description": "Directory holding the build's `.aux` files (latexmk's `-auxdir`/`-outdir`),\nresolved relative to the root document's directory when not absolute. When\nunset, each document's `.aux` is expected next to it (plain\n`latex`/`pdflatex` runs).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pdf-dir": {
+          "default": null,
+          "description": "Directory holding the build's PDF output (latexmk's `-outdir`), resolved\nrelative to the root document's directory when not absolute. When unset,\nthe PDF is expected next to the root document. Read by forward search.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pdf-filename": {
+          "default": null,
+          "description": "The compiled PDF's file name, when the build does not name it after the\nroot document (latexmk's `-jobname`). A bare file name resolved inside\n[`pdf_dir`](Self::pdf_dir), never a path; `.pdf` is appended when it\ncarries no extension.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "default": null,
+          "description": "The project's root document — the file the compiler was run on — resolved\nrelative to this `badness.toml`'s directory when not absolute.\n\nOverrides the include-graph scan for a `\\documentclass`/`\\begin{document}`\nmember, which can only see files the server has already loaded: editing\n`chapters/ch1.tex` in a project rooted at `../main.tex` seeds only\n`chapters/`, so the scan finds no root at all.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CommandDecl": {
+      "additionalProperties": false,
+      "description": "One `[commands.<name>]` entry: the built-in reference or citation command\nwhose semantic behavior the project command copies.",
+      "properties": {
+        "like": {
+          "default": null,
+          "description": "The built-in reference or citation command whose key behavior is copied.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CommandName": {
+      "description": "A control-word name as written in a declaration, stored **without** the\nleading backslash — the spelling every signature and `ParseCtx` map is keyed\nby.\n\nUsers write `\\bea`, which in TOML wants a literal string (`'\\bea'`) to avoid\nescaping. Both spellings are accepted and normalize to the same value: a\ncontrol word can never itself contain a backslash, so there is nothing to\ndisambiguate. Normalization lives in the type rather than at one call site so\nevery front end gets it.",
+      "type": "string"
+    },
+    "EnvironmentDecl": {
+      "additionalProperties": false,
+      "description": "One `[environments.<name>]` entry: what the environment named by the key\nbehaves like, and which command spellings stand in for its delimiters.\n\nThe key is the environment's *own* name, whether or not it is one the\nbuilt-in database knows. That is what lets a single entry serve both shapes\nthe issue asked for — `\\begin{myenv} … \\end{myenv}` needing only behavior,\nand `\\startmyenv … \\endmyenv` needing behavior *and* spellings — without a\nunion-typed entry.",
+      "properties": {
+        "begin": {
+          "default": [],
+          "description": "Command spellings that stand in for this environment's `\\begin{…}`\n(`\\bea`, `\\startmyenv`). Any of them opens the environment; the closers\nin [`end`](Self::end) close it — and so does the literal `\\end{…}`, which\nis why either list may stand alone (issue #117).",
+          "items": {
+            "$ref": "#/definitions/CommandName"
+          },
+          "type": "array"
+        },
+        "end": {
+          "default": [],
+          "description": "Command spellings that stand in for this environment's `\\end{…}`. Kept a\nseparate list rather than begin/end tuples because pairing is by *kind*,\nnot by index: `\\bea … \\eea` pairs whichever spellings the author used.",
+          "items": {
+            "$ref": "#/definitions/CommandName"
+          },
+          "type": "array"
+        },
+        "like": {
+          "default": null,
+          "description": "The curated built-in environment whose behavior this one copies — math,\nalignment, list-ness, verbatim-ness, and every flag added later.\n\nResolved against the built-in database alone, never the CWL tier or\nscanned definitions, for the same reason the alias arm of\n`Signatures::environment_at` is: a declaration supplies a *spelling*, and\nbehavior always comes from curated data. An unknown target is an error\nrather than a silent no-op, because a mistyped `like = \"algin\"` is\notherwise invisible.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "FormatConfig": {
+      "additionalProperties": false,
+      "description": "The `[format]` section of `badness.toml`.",
+      "properties": {
+        "indent-width": {
+          "default": 2,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "item-indent": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ItemIndentConfig"
+            }
+          ],
+          "description": "How continuation lines in list items are indented from the `\\item`\ncolumn. See [`ItemIndentConfig`]."
+        },
+        "lang": {
+          "default": null,
+          "description": "Document language (a BCP-47-style code, e.g. `en`, `de`, `pt-BR`), used by\nthe `sentence`/`semantic` wrap modes to pick the sentence-boundary\nabbreviation profile. Unknown or absent languages fall back to English.\n(Auto-detection from babel/polyglossia is not yet implemented.)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line-ending": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LineEndingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How formatted line breaks are spelled. See [`LineEndingConfig`]. When\nomitted (or `auto`), each file keeps the endings it was written with."
+        },
+        "line-width": {
+          "default": 80,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "math-wrap": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MathWrapConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The display-math line-break policy. See [`MathWrapConfig`]. When omitted\n(or `auto`), it derives from the effective `wrap`: `preserve` keeps\nauthored math breaks, every other wrap mode uses the amsmath-style\nbreaker."
+        },
+        "no-break-abbreviations": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "description": "User-supplied no-break abbreviations for the `sentence`/`semantic` wrap\nmodes, keyed by language code or the literal `default` bucket (applied to\nevery document). An abbreviation here never ends a sentence, so a line is\nnot broken after it. Merged on top of the built-in per-language lists.",
+          "type": "object"
+        },
+        "wrap": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WrapModeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The paragraph line-break policy. See [`WrapModeConfig`]. When omitted,\nevery file kind uses [`WrapMode::default`] (`reflow`) — the formatter\ndeclines to reflow content that is unsafe to reflow on its own, in every\nmode, so the file's extension is not a layout input."
+        }
+      },
+      "type": "object"
+    },
+    "ItemIndentConfig": {
+      "description": "The `item-indent` key under `[format]`. A serde-named mirror of\n[`ItemIndent`], the same split as [`WrapModeConfig`].",
+      "oneOf": [
+        {
+          "const": "hang",
+          "description": "Align continuations under the body following a bare `\\item `.",
+          "type": "string"
+        },
+        {
+          "const": "indent",
+          "description": "Indent continuations by one `indent-width` step.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "Align continuations with the `\\item` command.",
+          "type": "string"
+        }
+      ]
+    },
+    "LineEndingConfig": {
+      "description": "The `line-ending` key under `[format]`. A serde-named mirror of\n[`LineEnding`], the same split as [`WrapModeConfig`].",
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "Keep whatever the file was written with (CRLF if its first line break is\none, LF otherwise).",
+          "type": "string"
+        },
+        {
+          "const": "lf",
+          "description": "Always `\\n`.",
+          "type": "string"
+        },
+        {
+          "const": "crlf",
+          "description": "Always `\\r\\n`.",
+          "type": "string"
+        },
+        {
+          "const": "native",
+          "description": "The platform's convention: `\\r\\n` on Windows, `\\n` elsewhere.",
+          "type": "string"
+        }
+      ]
+    },
+    "LintConfig": {
+      "additionalProperties": false,
+      "description": "The `[lint]` section of `badness.toml`.",
+      "properties": {
+        "ignore": {
+          "default": [],
+          "description": "Rule IDs to disable. Applied on top of either `select` (subtracts) or the\ndefault rule set.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "select": {
+          "default": null,
+          "description": "Explicit allowlist of rule IDs. When `Some`, only these rules run.\nUnknown rule IDs are reported at lint-time, not at config parse-time.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MathWrapConfig": {
+      "description": "The `math-wrap` key under `[format]`. A serde-named mirror of [`MathWrap`],\nthe same split as [`WrapModeConfig`]. Scope: single-formula display math\n(`\\[…\\]`, `$$…$$`, a non-grid `equation`); grid environments and inline\n`$…$` are unaffected.",
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "Derive from the effective `wrap`: `preserve` → `preserve`, else `break`.",
+          "type": "string"
+        },
+        {
+          "const": "preserve",
+          "description": "Keep authored line breaks inside the body (in-line spacing still\nnormalized).",
+          "type": "string"
+        },
+        {
+          "const": "single-line",
+          "description": "Never insert breaks; a long body overflows the line width.",
+          "type": "string"
+        },
+        {
+          "const": "break",
+          "description": "Break a too-long body before its top-level operators (amsmath style).",
+          "type": "string"
+        }
+      ]
+    },
+    "WrapModeConfig": {
+      "description": "The `wrap` key under `[format]`. A thin, serde-named mirror of [`WrapMode`]\n(the formatter's own type), kept separate so the TOML spelling (`kebab-case`)\nis a config concern, not baked into the formatter API — the same split as the\nCLI's `WrapArg` in `cli.rs`.",
+      "oneOf": [
+        {
+          "const": "reflow",
+          "description": "Greedy fill: wrap words to the line width.",
+          "type": "string"
+        },
+        {
+          "const": "stable",
+          "description": "Prefer acceptable authored breaks, changing the smallest possible region\n(revision-stable wrapping).",
+          "type": "string"
+        },
+        {
+          "const": "sentence",
+          "description": "One sentence per line (width ignored).",
+          "type": "string"
+        },
+        {
+          "const": "semantic",
+          "description": "Semantic line breaks (sembr.org): keep authored breaks and add breaks at\nsentence boundaries.",
+          "type": "string"
+        },
+        {
+          "const": "preserve",
+          "description": "Leave authored line breaks untouched.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "description": "Schema for badness.toml. Generated from the host Config types; do not hand-edit—run `UPDATE_EXPECTED=1 cargo test --test config_schema` instead.",
+  "properties": {
+    "build": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/BuildConfig"
+        }
+      ],
+      "description": "Build-artifact locations from the `[build]` section."
+    },
+    "commands": {
+      "additionalProperties": {
+        "$ref": "#/definitions/CommandDecl"
+      },
+      "default": {},
+      "description": "Project-defined reference and citation command families. Unlike\nenvironment declarations, these affect semantic analysis only.",
+      "type": "object"
+    },
+    "environments": {
+      "additionalProperties": {
+        "$ref": "#/definitions/EnvironmentDecl"
+      },
+      "default": {},
+      "description": "The `[environments.<name>]` declaration map: what a user-defined\nenvironment behaves like, and which command spellings stand in for its\ndelimiters (`\\bea`/`\\eea`).\n\nDifferent in kind from the sections above, because it reaches the\n*parser* rather than the formatter or the linter (`AGENTS.md` decision\n#12). It is deserialized straight into the `badness-parser` type instead\nof a local mirror: serde is a hard dependency of that crate, so unlike\n`FormatStyle` there is no feature to turn on, and a mirror would only add\na second wire spelling that could drift from the one the dprint plugin\nreads.\n\nA top-level map rather than a nested section, and a keyed table rather\nthan an `[[environments]]` array: the key *is* the environment, so\nentries merge per name once config layers or per-file overrides appear.",
+      "type": "object"
+    },
+    "exclude": {
+      "default": null,
+      "description": "Gitignore-style patterns to exclude from directory discovery, resolved\nrelative to the directory containing this `badness.toml`. Applies to *both*\n`format` and `lint` (which share one file walk), so it is a top-level key,\nnot nested under `[format]`.\n\nWhen present it **replaces** the built-in [`DEFAULT_EXCLUDE`] set (Ruff's\n`exclude` semantics); when absent the defaults apply. Either way,\n[`extend_exclude`](Self::extend_exclude) is added on top.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "extend-exclude": {
+      "default": [],
+      "description": "Gitignore-style patterns added *in addition to* whichever base set\n[`exclude`](Self::exclude) selects (Ruff's `extend-exclude` semantics). Use\nthis to skip a few extra paths without restating the defaults.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "format": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/FormatConfig"
+        }
+      ],
+      "description": "Formatter settings from the `[format]` section."
+    },
+    "lint": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/LintConfig"
+        }
+      ],
+      "description": "Linter rule selection from the `[lint]` section."
+    }
+  },
+  "title": "Badness configuration",
+  "type": "object"
+}

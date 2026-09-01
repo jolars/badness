@@ -168,6 +168,11 @@ upstream sources by `scripts/gen_*.py` and guarded by paired `task …:check` an
 rather than hand-editing the mechanical facts. `signatures.json`, `colors.json`,
 and `tikz_libraries.json` are curated by hand and may be edited directly.
 
+The published `badness.toml` schema is generated from the Rust configuration
+types. Regenerate `badness.schema.json` with
+`UPDATE_EXPECTED=1 cargo test --test config_schema`, and review the diff rather
+than editing the JSON by hand.
+
 ### Windows CI bites twice
 
 Line endings: the formatter emits LF and tests compare bytes against checked-in

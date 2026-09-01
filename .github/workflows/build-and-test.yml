@@ -118,11 +118,11 @@ jobs:
           cargo build -p badness-parser -p badness-formatter -p badness-wasm
           --release --target wasm32-unknown-unknown
 
-      # The dprint plugin builds `badness-formatter` for wasm *with* `schema`,
-      # so schemars has to stay wasm-clean too.
-      - name: Build formatter with the schema feature for wasm
+      # Both libraries expose a `schema` feature, so schemars has to stay
+      # wasm-clean too.
+      - name: Build libraries with the schema feature for wasm
         run: >
-          cargo build -p badness-formatter --features schema
+          cargo build -p badness-parser -p badness-formatter --features schema
           --release --target wasm32-unknown-unknown
 
   smoke-scripts:

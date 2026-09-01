@@ -36,6 +36,9 @@ docs/src/reference/cli.md eol=lf
 docs/src/reference/linter-rules.md eol=lf
 docs/src/reference/bib-linter-rules.md eol=lf
 
+# Generated from the Rust configuration types and compared byte-for-byte.
+badness.schema.json eol=lf
+
 # Preserve line-ending fixtures as-is (CRLF/LF) once they exist.
 crates/*/tests/fixtures/**/crlf_*/* -text
 crates/*/tests/fixtures/**/lf_*/* -text

@@ -1626,7 +1626,9 @@ it for that shape while still reporting the finding. Because a fix owes
 correctness as a raw edit, with no formatter spacing to lean on, such a rule can
 be strictly more conservative than a layout pass would be:
 `redundant-script-braces` withholds the strip when a following character would
-re-glue the argument, so `x^{2}-3` stays braced.
+re-glue the argument, so `x^{2}-3` stays braced. It also retains braces around
+standard named math operators such as `\max`: those commands expand through
+`\mathop`, which TeX cannot consume as an unbraced script field.
 
 Each fix declares an applicability. `Safe` fixes preserve meaning and are
 applied by `lint --fix`; `Unsafe` ones, those that could change typeset output,

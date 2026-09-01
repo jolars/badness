@@ -884,7 +884,7 @@ warning: unknown-option
 
 ## `redundant-script-braces`
 
-Flag braces around a single-token sub/superscript argument, which `^`/`_` bind without them (`x^{2}` is `x^2`). The autofix deletes the two braces and leaves the inner token untouched. It is withheld when dropping the braces would let the following character glue onto the argument and change meaning (`x^{2}-3` stays braced — unspaced `x^2-3` would re-lex `2-3` as one token; `y_{\alpha}b` stays braced — `\alphab` is one control word).
+Flag braces around a single-token sub/superscript argument, which `^`/`_` bind without them (`x^{2}` is `x^2`). The autofix deletes the two braces and leaves the inner token untouched. It is withheld when dropping the braces would let the following character glue onto the argument and change meaning (`x^{2}-3` stays braced — unspaced `x^2-3` would re-lex `2-3` as one token; `y_{\alpha}b` stays braced — `\alphab` is one control word). It also leaves standard named math operators braced because commands such as `\max` are not valid unbraced script fields.
 
 This rule is **enabled by default**.
 

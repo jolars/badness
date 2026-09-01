@@ -23,13 +23,15 @@
 //!
 //! So the rule strips only when the inner token is a single-character `WORD` or a
 //! lone control word *and* the next character is absent or not a word character
-//! (for a control word, not an ASCII letter). This is the guard that formerly
-//! lived in the formatter (`strippable_script_arg`), minus the spacing-dependent
-//! widening.
+//! (for a control word, not an ASCII letter). Standard named math operators are
+//! excluded: commands such as `\max` expand to `\mathop`, which TeX cannot consume
+//! as an unbraced script field. This is the guard that formerly lived in the
+//! formatter (`strippable_script_arg`), minus the spacing-dependent widening.
 
 use std::path::PathBuf;
 
 use crate::parser::lexer::is_word_char;
+use crate::semantic::math::NAMED_MATH_OPERATORS;
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 
 use crate::linter::diagnostic::{Diagnostic, Edit, Fix, Severity};
@@ -64,7 +66,9 @@ impl Rule for RedundantScriptBraces {
          and leaves the inner token untouched. It is withheld when dropping the \
          braces would let the following character glue onto the argument and change \
          meaning (`x^{2}-3` stays braced — unspaced `x^2-3` would re-lex `2-3` as one \
-         token; `y_{\\alpha}b` stays braced — `\\alphab` is one control word)."
+         token; `y_{\\alpha}b` stays braced — `\\alphab` is one control word). It \
+         also leaves standard named math operators braced because commands such as \
+         `\\max` are not valid unbraced script fields."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -160,15 +164,18 @@ fn strippable_script_arg(group: &SyntaxNode) -> bool {
         {
             next_char_safe_after(group, false)
         }
-        SyntaxElement::Node(n) if is_lone_control_word(&n) => next_char_safe_after(group, true),
+        SyntaxElement::Node(n) if is_strippable_control_word(&n) => {
+            next_char_safe_after(group, true)
+        }
         _ => false,
     }
 }
 
-/// A `COMMAND` node consisting solely of a control word with no attached
-/// arguments (e.g. `\alpha`) — the form whose braces are droppable in script
-/// position.
-fn is_lone_control_word(node: &SyntaxNode) -> bool {
+/// A lone control word that TeX may consume as an unbraced script field.
+///
+/// Named operators are syntactically lone commands in the CST, but LaTeX
+/// implements them through `\mathop`; that expansion requires a braced field.
+fn is_strippable_control_word(node: &SyntaxNode) -> bool {
     if node.kind() != SyntaxKind::COMMAND {
         return false;
     }
@@ -177,7 +184,11 @@ fn is_lone_control_word(node: &SyntaxNode) -> bool {
         children.next(),
         Some(SyntaxElement::Token(t)) if t.kind() == SyntaxKind::CONTROL_WORD
     );
-    first_is_control_word && children.next().is_none()
+    if !first_is_control_word || children.next().is_some() {
+        return false;
+    }
+    crate::ast::command_name(node)
+        .is_some_and(|name| !NAMED_MATH_OPERATORS.contains(&name.as_str()))
 }
 
 /// True if the character following `group` cannot glue onto a stripped
@@ -264,6 +275,13 @@ mod tests {
     fn keeps_control_word_before_letter() {
         // `\alphab` is one control word.
         assert!(findings("$y_{\\alpha}b$\n").is_empty());
+    }
+
+    #[test]
+    fn keeps_named_math_operators() {
+        // LaTeX's named operators expand to `\mathop`, which TeX cannot consume
+        // as an unbraced script field.
+        assert!(findings("$t_{\\max}(x)$ and $x^{\\lim}$\n").is_empty());
     }
 
     #[test]

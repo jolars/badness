@@ -349,6 +349,24 @@ mod tests {
     }
 
     #[test]
+    fn empheq_environment_body_is_math() {
+        use crate::syntax::SyntaxKind;
+        let input =
+            "\\begin{empheq}[left={\\empheqlbrace}]{align}\na&=a+b\\\\a&=a+b\n\\end{empheq}\n";
+        let root = parse(input).syntax();
+        let math = root
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::MATH)
+            .expect("the empheq body is wrapped in a MATH node");
+        assert!(
+            math.children_with_tokens()
+                .any(|e| e.kind() == SyntaxKind::AMPERSAND),
+            "top-level `&` stays a direct MATH child"
+        );
+        assert_eq!(reconstruct(input), input);
+    }
+
+    #[test]
     fn non_math_environment_body_is_unchanged() {
         use crate::syntax::SyntaxKind;
         let input = "\\begin{itemize}\n  \\item a\n\\end{itemize}\n";

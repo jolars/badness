@@ -1247,6 +1247,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_grid_begin_tail_comment", WrapMode::Reflow, 80),
     ("math_env_gather", WrapMode::Preserve, 80),
     ("math_env_gathered", WrapMode::Reflow, 80),
+    // `empheq` selects an AMS display environment through its mandatory keyval
+    // argument, but its collected body is always math. Preserve-mode formatting
+    // still normalizes relation and binary-operator spacing inside its grid
+    // (issue #172).
+    ("issue_172_empheq_math", WrapMode::Preserve, 80),
     ("math_env_align_spacing", WrapMode::Preserve, 80),
     // expl3 code formatting in a `.tex` document. A `~` is the catcode-10 literal
     // space and breaks like an ordinary (breakable) space when a line overflows,

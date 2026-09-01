@@ -1486,6 +1486,14 @@ mod tests {
         assert!(equation.math);
         assert!(!equation.reflow());
         assert!(!equation.align);
+        let empheq = db.environment("empheq").unwrap();
+        assert!(empheq.math);
+        assert!(!empheq.align);
+        assert_eq!(empheq.args.len(), 2);
+        assert_eq!(empheq.args[0].kind, ArgKind::Bracket);
+        assert_eq!(empheq.args[0].content, ContentKind::Keyval);
+        assert_eq!(empheq.args[1].kind, ArgKind::Brace);
+        assert_eq!(empheq.args[1].content, ContentKind::Keyval);
         let align = db.environment("align").unwrap();
         assert!(align.math);
         assert!(align.align);

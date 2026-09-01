@@ -135,6 +135,13 @@ fn gathered_math_environment() {
 }
 
 #[test]
+fn empheq_math_environment() {
+    insta::assert_snapshot!(tree(
+        "\\begin{empheq}[left={\\empheqlbrace}]{align}\na&=a+b\\\\a&=a+b\n\\end{empheq}"
+    ));
+}
+
+#[test]
 fn inline_and_display_math() {
     insta::assert_snapshot!(tree(r"$x^2$ and \[ y_i \]"));
 }

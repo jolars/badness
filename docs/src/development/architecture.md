@@ -381,7 +381,10 @@ fall into the following categories:
   This is a grammar decision needing no lexer math state, and it reads the
   curated flag only, never the bulk or user tiers. Math parsing and alignment
   layout are separate classifications: for example, `gathered` is math-only,
-  while `aligned` also carries the `align` flag.
+  while `aligned` also carries the `align` flag. The `empheq` wrapper is
+  math-only because its required keyval argument selects among AMS equation
+  types; the formatter derives grid layout from the resulting body's `&` and
+  `\\` structure instead of assigning one layout to every selection.
 - **Definition bodies.** Inside the argument groups of the curated definer set
   (`\newcommand` and `\newenvironment` families, xparse, the LaTeX2e hooks),
   `\begin` and `\end` parse as plain commands, because TeX does not require them

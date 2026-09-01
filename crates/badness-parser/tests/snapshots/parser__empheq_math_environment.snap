@@ -1,0 +1,42 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "tree(\"\\\\begin{empheq}[left={\\\\empheqlbrace}]{align}\\na&=a+b\\\\\\\\a&=a+b\\n\\\\end{empheq}\")"
+---
+ROOT@0..71
+  ENVIRONMENT@0..71
+    BEGIN@0..43
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..14
+        L_BRACE@6..7 "{"
+        WORD@7..13 "empheq"
+        R_BRACE@13..14 "}"
+      OPTIONAL@14..36
+        L_BRACKET@14..15 "["
+        WORD@15..20 "left="
+        GROUP@20..35
+          L_BRACE@20..21 "{"
+          COMMAND@21..34
+            CONTROL_WORD@21..34 "\\empheqlbrace"
+          R_BRACE@34..35 "}"
+        R_BRACKET@35..36 "]"
+      GROUP@36..43
+        L_BRACE@36..37 "{"
+        WORD@37..42 "align"
+        R_BRACE@42..43 "}"
+    MATH@43..59
+      NEWLINE@43..44 "\n"
+      WORD@44..45 "a"
+      AMPERSAND@45..46 "&"
+      WORD@46..50 "=a+b"
+      LINE_BREAK@50..52
+        CONTROL_SYMBOL@50..52 "\\\\"
+      WORD@52..53 "a"
+      AMPERSAND@53..54 "&"
+      WORD@54..58 "=a+b"
+      NEWLINE@58..59 "\n"
+    END@59..71
+      CONTROL_WORD@59..63 "\\end"
+      NAME_GROUP@63..71
+        L_BRACE@63..64 "{"
+        WORD@64..70 "empheq"
+        R_BRACE@70..71 "}"

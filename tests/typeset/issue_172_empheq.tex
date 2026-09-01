@@ -1,0 +1,13 @@
+% `empheq` collects an AMS display environment selected by its mandatory
+% keyval argument. Formatting its body as math and its option lists as keyvals
+% must leave the rendered equation unchanged (issue #172).
+\documentclass{article}
+\usepackage{empheq}
+
+\begin{document}
+
+\begin{empheq}[left={\empheqlbrace}]{align}
+a&=a+b\\a&=a+b
+\end{empheq}
+
+\end{document}

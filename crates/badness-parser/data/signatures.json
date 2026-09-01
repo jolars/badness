@@ -262,6 +262,7 @@
     "displaymath": { "math": true },
     "equation": { "math": true },
     "equation*": { "math": true },
+    "empheq": { "args": [{ "kind": "opt", "content": "keyval" }, { "kind": "req", "content": "keyval" }], "math": true },
     "align": { "math": true, "align": true },
     "align*": { "math": true, "align": true },
     "alignat": { "math": true, "align": true },

@@ -7526,6 +7526,11 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
 /// comment, nested block content — where the node may also be single-line
 /// (`\baz[{c% x\nd}]`).
 ///
+/// A blank line at an optional body's edge remains a blank line. Unlike opaque
+/// brace groups, long optionals can now reach this path structurally, and
+/// erasing the edge break would both discard their `\par` and make the next pass
+/// select the inline layout.
+///
 /// Inside a group the parser emits body tokens directly (no `PARAGRAPH`
 /// wrapping), so the only `open` token is the first child and the only `close`
 /// token is the last — but an `OPTIONAL` body may contain a stray `[` (TeX does
@@ -7551,6 +7556,22 @@ fn lower_bracketed(
             _ => body_elements.push(element),
         }
     }
+    let preserve_blank_edges = open == SyntaxKind::L_BRACKET;
+    let leading_blank = preserve_blank_edges
+        && body_elements
+            .iter()
+            .take_while(|element| is_collapsible_trivia_element(element))
+            .filter(|element| element.kind() == SyntaxKind::NEWLINE)
+            .count()
+            >= 2;
+    let trailing_blank = preserve_blank_edges
+        && body_elements
+            .iter()
+            .rev()
+            .take_while(|element| is_collapsible_trivia_element(element))
+            .filter(|element| element.kind() == SyntaxKind::NEWLINE)
+            .count()
+            >= 2;
 
     // A comment glued to the open delimiter (`{%`, with no newline between them)
     // must ride on the open-delimiter line. Pushing it to its own indented line
@@ -7624,7 +7645,11 @@ fn lower_bracketed(
     let body = trim_trailing_break(trim_leading_break(body));
 
     if matches!(body, Ir::Nil) {
-        if has_leading_comment {
+        if leading_blank || trailing_blank {
+            // One normalized blank line preserves an otherwise empty long
+            // optional's `\par` and keeps this path stable on reparse.
+            Ir::concat([open_ir, Ir::empty_line(), close_ir])
+        } else if has_leading_comment {
             // `{%\n}`: the comment already rode the open delimiter, so the close
             // must still drop to its own line — collapsing to `{%}` would comment
             // out the closing brace.
@@ -7637,8 +7662,16 @@ fn lower_bracketed(
         // A glued opener keeps the first body line on the opener's line; the
         // `Ir::indent` still indents the body's *interior* breaks one step, so
         // only the first line rides the opener (`{\aaa` / `␣␣\bbb`).
-        let lead = if open_glued { Ir::Nil } else { Ir::hard_line() };
-        let trail = if close_glued {
+        let lead = if leading_blank {
+            Ir::empty_line()
+        } else if open_glued {
+            Ir::Nil
+        } else {
+            Ir::hard_line()
+        };
+        let trail = if trailing_blank {
+            Ir::empty_line()
+        } else if close_glued {
             Ir::Nil
         } else {
             Ir::hard_line()

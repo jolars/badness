@@ -1,0 +1,26 @@
+\documentclass{article}
+\NewDocumentEnvironment{sample}{+m +O{plain} m}{%
+  \par\noindent
+  First: #1\par
+  Second: #2\par
+  Third: #3\par
+}{}
+\begin{document}
+\begin{sample}{First paragraph.
+
+Second paragraph.}[shown]{tail}
+Body text.
+\end{sample}
+
+\begin{sample}{first}[First option.
+
+Second option.]{tail}
+Body text.
+\end{sample}
+
+\begin{sample}{first}[Trailing option.
+
+]{tail}
+Body text.
+\end{sample}
+\end{document}

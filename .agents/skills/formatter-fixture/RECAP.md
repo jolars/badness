@@ -11,9 +11,8 @@ status notes over implementation narratives. Durable rules belong in tests,
 
 ## Current lead
 
-- Re-survey `environments`, `mand-args`, and `opt-args` for blank lines inside a
-  declared environment argument, including mixed optional and mandatory slots.
-  Check current fixtures and `TODO.md` first.
+- No current lead. Re-measure the remaining environment and argument families
+  before choosing the next construct.
 
 ## Known exclusions and blockers
 
@@ -26,6 +25,10 @@ status notes over implementation narratives. Durable rules belong in tests,
   content-changing or format-error failure.
 - `ifelsefi` is parser-owned through `CONDITIONAL`; do not derive a
   formatter-only extent rule for it.
+- A paragraph-spanning optional attaches only in the tight `[…]{…}` shape.
+  Standalone or trivia-separated xparse `+O` would require signature-directed
+  generic attachment, which the parser contract forbids without a source-shape
+  proof.
 
 ## Covered areas
 
@@ -35,7 +38,7 @@ fixture tables:
 | Area | Representative fixtures |
 | --- | --- |
 | Environment frames and bodies | `environment_empty_body`, `environment_special_character_names`, `begin_tail_is_body`, `environment_leading_body_command`, `environment_inline_prose_boundaries`, `environment_adjacent_siblings` |
-| Declared environment arguments | `environment_argument_comment_barrier`, `environment_argument_comment_slots`, `environment_argument_delimiter_comments`, `environment_argument_escaped_delimiters`, `environment_omitted_optional_slots` |
+| Declared environment arguments | `environment_argument_blank_lines`, `environment_argument_comment_barrier`, `environment_argument_comment_slots`, `environment_argument_delimiter_comments`, `environment_argument_escaped_delimiters`, `environment_omitted_optional_slots` |
 | Protected bodies | `filecontents_protected_body` |
 | Sectioning | `sectioning_starts_own_line`, `sectioning_blank_line_and_comment` |
 | Keyval groups | `keyval_group_splits_entries`, `keyval_group_declines_on_comment`, `environment_keyval_group_splits_entries` |

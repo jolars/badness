@@ -564,6 +564,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
         WrapMode::Reflow,
         80,
     ),
+    // Long declared arguments retain paragraph breaks, including a trailing one
+    // whose presence keeps optional block lowering at a fixed point.
+    ("environment_argument_blank_lines", WrapMode::Reflow, 80),
     // Locally defined delimiter aliases inherit the target environment's list
     // and math-grid layout, nest structurally, and stay ordinary commands when
     // no closer proves the pair.

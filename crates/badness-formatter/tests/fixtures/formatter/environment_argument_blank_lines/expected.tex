@@ -1,0 +1,21 @@
+\NewDocumentEnvironment{sample}{+m +O{plain} m}{begin}{end}
+
+\begin{sample}{First paragraph.
+
+    Second paragraph.}[shown]{tail}
+  Body text.
+\end{sample}
+
+\begin{sample}{first}[
+    First option.
+
+    Second option.]{tail}
+  Body text.
+\end{sample}
+
+\begin{sample}{first}[
+    Trailing option.
+
+  ]{tail}
+  Body text.
+\end{sample}

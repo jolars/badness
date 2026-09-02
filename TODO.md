@@ -315,6 +315,11 @@ sources below are missing.
   optionals do not keep a completed commented header open, its greedy tail joins
   ordinary body reflow, and a genuinely pending mandatory remains a header
   continuation;
+  `environment_argument_blank_lines` pins paragraph breaks inside declared `+m`
+  arguments and the source-proven mixed `+O`/mandatory shape. The parser admits
+  the long optional only when both `[…]{…}` junctions are tight, without using
+  signature arity; the formatter preserves an optional-edge paragraph so the
+  block layout remains typeset-safe and fixed-point stable;
   `environment_argument_escaped_delimiters` pins that only an outer declared
   group participates in slot matching, so inner `\{...\}` control symbols and
   `\[...\]` display math cannot end or invent an argument; it also keeps the
@@ -337,8 +342,9 @@ sources below are missing.
   `inline_command_argument_glue` pins that collapsible trivia before matched
   arguments of a curated inline prose command is removed under ordinary prose
   and prose-argument reflow, while a trailing comment remains a hard barrier;
-  the remaining environment and argument shapes are still open, with comments
-  glued to argument opening or closing delimiters as the next distinct target.
+  standalone or trivia-separated paragraph-spanning optionals remain blocked on
+  a source-shape parser proof. Re-measure the remaining environment and argument
+  shapes before choosing the next distinct target.
   Sectioning/`headings` is done (two slugs, and the Tier-1 lone-newline
   bug that lived there). `ifelsefi` (402 files) is done too, via the
   `CONDITIONAL` node under *Parser* and eight fixtures — do not re-derive a

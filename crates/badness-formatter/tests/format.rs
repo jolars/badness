@@ -684,6 +684,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("nested_groups", WrapMode::Preserve, 80),
     ("group_single_line_stays_inline", WrapMode::Preserve, 80),
     ("group_reindents", WrapMode::Preserve, 80),
+    // A raw TeX definition's parameter text is calling syntax: delimiters before
+    // the replacement group remain authored, while the replacement body uses the
+    // ordinary multiline-group indentation rule.
+    ("def_delimited_parameters", WrapMode::Reflow, 80),
     // A `%` glued to the open delimiter (`{%`, no newline between) rides on the
     // open-delimiter line instead of dropping to its own indented line: otherwise
     // the newline the formatter inserts after `{` becomes real whitespace inside

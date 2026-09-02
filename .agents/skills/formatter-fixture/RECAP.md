@@ -44,6 +44,7 @@ fixture tables:
 | Keyval groups | `keyval_group_splits_entries`, `keyval_group_declines_on_comment`, `environment_keyval_group_splits_entries` |
 | List markers | `list_item_overlay_prefix` |
 | Inline command arguments | `inline_command_argument_glue` |
+| Raw macro definitions | `def_delimited_parameters` |
 | Display math in prose | `display_math_prose_boundaries` |
 
 ## Maintenance

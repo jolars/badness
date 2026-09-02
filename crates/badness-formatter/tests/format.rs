@@ -521,6 +521,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("environment_empty_body", WrapMode::Preserve, 80),
     ("environment_begin_arguments", WrapMode::Preserve, 80),
     ("environment_argument_glued", WrapMode::Preserve, 80),
+    // A structurally paired environment nested inside a command argument keeps
+    // its frame at the argument-body indent and indents its own body once more.
+    ("environment_in_command_argument", WrapMode::Preserve, 80),
     // Pairing reads the complete flat environment name, so punctuation and
     // lexer-token boundaries (such as `_`) do not alter ordinary framing or
     // nesting.

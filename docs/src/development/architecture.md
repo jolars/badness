@@ -494,22 +494,29 @@ math like `$\left#2\right#4$` lives (issue #95). On the driver that is two
 predicates in a policy; as a hand-written scan it was a comment nothing
 enforced.
 
-The **bracket family** closes the migration: three gates (`TextBracketGate`,
-`MathBracketGate`, `MacrocodeBracketGate`) asking whether a `[`'s `]` is
-reachable before the token that would make the `optional` walk bail, in text, in
-math, and inside a `macrocode` chunk. Their nesting turned out to need no new
-model. A per-opener bracket scan counts the `]`s *owed* to the command-abutting
-`[`s it passes — such a `[` is itself argument-shaped and will claim the next
-`]` when parsed, so that `]` cannot also satisfy the outer one (issue #55) — and
-that claim countdown **is** the driver's nested-opener stack once an opener is
-defined as a command-abutting `[`, since closer matching is LIFO either way.
+The **bracket family** closes the migration: four gates (`TextBracketGate`,
+`LongTextBracketGate`, `MathBracketGate`, `MacrocodeBracketGate`) asking whether
+a `[`'s `]` is reachable before the token that would make its `optional` walk
+bail, in text, in the tightly delimited long-text exception, in math, and inside
+a `macrocode` chunk. Their nesting turned out to need no new model. A per-opener
+bracket scan counts the `]`s *owed* to the command-abutting `[`s it passes —
+such a `[` is itself argument-shaped and will claim the next `]` when parsed, so
+that `]` cannot also satisfy the outer one (issue #55) — and that claim
+countdown **is** the driver's nested-opener stack once an opener is defined as a
+command-abutting `[`, since closer matching is LIFO either way.
 
 The distinctive feature of this family is that both anchors are depth-**blind**:
 a `\begin`/`\end` refuses rather than counts (an optional never legitimately
 spans an environment, so either half means a runaway `[`), and it and the
 paragraph break fire at any brace depth. Both follow from the walk they guard:
-`optional` bails wherever the cursor stands, and a gate stricter *or* looser
-than its parse is a bug.
+`optional` ordinarily bails wherever the cursor stands, and a gate stricter *or*
+looser than its parse is a bug. The long-text gate is the deliberate exception:
+it removes only the paragraph anchor, and the parser selects it only when the
+opener directly abuts its command and the located closer directly abuts a
+structural mandatory group. That tight `[…]{…}` evidence admits mixed long
+optional/mandatory slots such as xparse `+O` followed by `m`; a standalone long
+optional remains generic syntax. The decision is source-shape-driven—signature
+arity neither attaches the bracket nor supplies its extent.
 
 The in-math gate adds two rules of its own. First, it interprets `$` according
 to the enclosing math's *flavor*, which belongs to the walk state and therefore
@@ -520,7 +527,7 @@ everything else reads on — while inside `$…$` TeX cannot nest one, so the fi
 `$` at the bracket's own level is that math's closer and refuses. And the gate
 is stricter than the `optional` bail in one preserved respect: its
 `\begin`/`\end` anchor carries no `in_macro_code` filter, which can only decline
-to attach. All three bracket gates ignore chunk-unmatched braces, matching the
+to attach. All four bracket gates ignore chunk-unmatched braces, matching the
 walk they guard: `optional` treats such braces as ordinary macrocode tokens but
 still bails at a structural `R_BRACE`.
 

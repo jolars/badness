@@ -1579,6 +1579,61 @@ fn bracket_attachments_with(src: &str, config: LexConfig) -> Vec<bool> {
 }
 
 #[test]
+fn a_long_mixed_optional_attaches_by_shape() {
+    let src = "\\begin{sample}{first}[First option.\n\nSecond option.]{tail}\nBody.\n\\end{sample}";
+    let parsed = parse(src);
+    assert_eq!(parsed.syntax().to_string(), src, "losslessness");
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+
+    let begin = parsed
+        .syntax()
+        .descendants()
+        .find(|node| node.kind() == SyntaxKind::BEGIN)
+        .expect("environment has a BEGIN");
+    let children = begin.children().map(|node| node.kind()).collect::<Vec<_>>();
+    assert_eq!(
+        children,
+        [
+            SyntaxKind::NAME_GROUP,
+            SyntaxKind::GROUP,
+            SyntaxKind::OPTIONAL,
+            SyntaxKind::GROUP,
+        ]
+    );
+    insta::assert_snapshot!(tree(src));
+
+    assert_eq!(
+        bracket_attachments("\\cmd[first {nested\n\nwords} after]{tail}"),
+        [true]
+    );
+    assert_eq!(
+        bracket_attachments("\\cmd[first% keep the break\ncontinued\n\nsecond]{tail}"),
+        [true]
+    );
+}
+
+#[test]
+fn a_long_optional_requires_two_tight_junctions() {
+    assert_eq!(
+        bracket_attachments("\\cmd [first\n\nsecond]{tail}"),
+        [false]
+    );
+    assert_eq!(
+        bracket_attachments("\\cmd[first\n\nsecond] {tail}"),
+        [false]
+    );
+    assert_eq!(bracket_attachments("\\cmd[first\n\nsecond] tail"), [false]);
+}
+
+#[test]
+fn a_long_optional_does_not_claim_a_nested_commands_closer() {
+    assert_eq!(
+        bracket_attachments("\\cmd[\n\nReal option: \\item[label]{body}"),
+        [false, true]
+    );
+}
+
+#[test]
 fn nested_bracket_claims_settle_innermost_first() {
     // The claim countdown of issue #55, seen from the batch that now computes
     // it: one scan settles every command-abutting `[` in the frame, and closer

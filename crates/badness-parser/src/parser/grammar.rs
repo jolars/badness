@@ -405,6 +405,32 @@ impl GatePolicy for TextBracketGate {
     }
 }
 
+/// The high-confidence paragraph-spanning text-bracket shape. It shares every
+/// structural anchor with [`TextBracketGate`], but a blank line does not refute
+/// the candidate. The caller supplies the remaining proof: both delimiter
+/// junctions are tight, and the located `]` is followed by a mandatory group.
+struct LongTextBracketGate;
+
+impl GatePolicy for LongTextBracketGate {
+    const PARAGRAPH_ANCHOR: ParagraphAnchor = ParagraphAnchor::None;
+    const STRAY_BRACE: StrayBrace = StrayBrace::RefutesAlways;
+    const MATH_ANCHOR: MathAnchor = MathAnchor::None;
+    const ANCHORS_AT_ANY_DEPTH: bool = true;
+    const ENV_ANCHOR: EnvAnchor = EnvAnchor::Refutes;
+
+    fn last_closer(&self, p: &Parser<'_>) -> Option<usize> {
+        p.last_r_bracket
+    }
+
+    fn opens_at(&self, p: &Parser<'_>, i: usize) -> bool {
+        p.bracket_abuts_command(i)
+    }
+
+    fn closes_at(&self, p: &Parser<'_>, i: usize) -> bool {
+        p.tokens[i].kind == SyntaxKind::R_BRACKET
+    }
+}
+
 struct MathBracketGate {
     enclosing_is_dollar: bool,
 }
@@ -700,6 +726,9 @@ struct Parser<'t> {
     /// command-abutting `[` is asked in turn, so a run of them re-scanned per
     /// opener before the batch.
     text_bracket_batch: std::cell::RefCell<Option<GateBatch>>,
+    /// The paragraph-permissive text-bracket twin. It stays separate because
+    /// paragraph anchoring is part of a batch's policy, not its walk-state key.
+    long_text_bracket_batch: std::cell::RefCell<Option<GateBatch>>,
     /// The [`MathBracketGate`] twin, keyed like the others — including on the
     /// enclosing math's flavor, which this gate alone reads ([`WalkKey`]).
     math_bracket_batch: std::cell::RefCell<Option<GateBatch>>,
@@ -773,6 +802,7 @@ impl<'t> Parser<'t> {
             env_batch: std::cell::RefCell::new(None),
             left_right_batch: std::cell::RefCell::new(None),
             text_bracket_batch: std::cell::RefCell::new(None),
+            long_text_bracket_batch: std::cell::RefCell::new(None),
             math_bracket_batch: std::cell::RefCell::new(None),
             brace_matches: std::cell::RefCell::new(None),
             alias_end: None,
@@ -1557,9 +1587,10 @@ impl<'t> Parser<'t> {
     }
 
     /// Greedily attach trailing `{…}` / `[…]` argument groups to the currently
-    /// open node, allowing intervening trivia but stopping at a paragraph break.
-    /// Shared by `\foo` commands and `\begin{env}` (see `AGENTS.md`, Core
-    /// decision #8). Arity is unknown without the semantic layer.
+    /// open node, allowing intervening trivia but ordinarily stopping at a
+    /// paragraph break. Shared by `\foo` commands and `\begin{env}` (see
+    /// `AGENTS.md`, Core decision #8). Arity is unknown without the semantic
+    /// layer.
     ///
     /// `[…]` attachment is additionally shape-gated (issue #43) — `[`/`]` are
     /// not real grouping in TeX, so a bracket is an argument only when it reads
@@ -1587,6 +1618,11 @@ impl<'t> Parser<'t> {
     ///   attachment, which the semantic layer legitimizes downstream (the
     ///   xparse-signature glue relies on a next-line `[Warning]` still
     ///   attaching to `\begin{note}`).
+    /// - **Across a paragraph, only in the tight `[…]{…}` shape.** Both
+    ///   delimiter junctions must abut, and the bracket gate must locate the
+    ///   `]` before structural recovery anchors. This admits long mixed
+    ///   optional/mandatory slots without consulting signature arity, while a
+    ///   standalone long `[…]` remains ordinary text.
     fn attach_arguments(&mut self, bracket: BracketPolicy, args: Option<&[ArgSpec]>) {
         let mut slot = 0usize;
         loop {
@@ -1634,17 +1670,30 @@ impl<'t> Parser<'t> {
                     // prose writes real optionals (`\@ifnextchar [\@xmpar\@ympar`,
                     // issue #60), so an unreachable closer means the bracket is
                     // data, not an argument.
+                    let mut allow_paragraphs = false;
                     if !self.in_math()
                         && self.macrocode_end.is_none()
                         && !self.bracket_closes_in_text(scan.next)
                     {
-                        break;
+                        let long_closer = (scan.next == self.pos)
+                            .then(|| self.long_bracket_closer_in_text(scan.next))
+                            .flatten();
+                        let tight_mandatory_suffix = long_closer.is_some_and(|closer| {
+                            self.tokens.get(closer + 1).is_some_and(|token| {
+                                token.kind == SyntaxKind::L_BRACE
+                                    && !self.plain_braces.contains(&(closer + 1))
+                            })
+                        });
+                        if !tight_mandatory_suffix {
+                            break;
+                        }
+                        allow_paragraphs = true;
                     }
                     self.skip_trivia();
                     let domain = args
                         .and_then(|args| match_arg_slot(args, &mut slot, ArgKind::Bracket))
                         .map_or(ArgumentDomain::Unknown, |spec| spec.domain);
-                    self.argument_optional(domain);
+                    self.argument_optional(domain, allow_paragraphs);
                 }
                 // A verbatim-argument command's body (`\url{…}`, `\lstinline|…|`,
                 // the final arg of `\mintinline{lang}{code}`) is lexed as a single
@@ -1745,12 +1794,13 @@ impl<'t> Parser<'t> {
     /// `[` and `]` are not real grouping in TeX, so this is heuristic: it ends
     /// at the first `]`, and bails defensively (rather than swallowing the
     /// document) on a structural `}`, a `\begin`/`\end`, a paragraph break, or
-    /// EOF. A chunk-unmatched macrocode `}` is an ordinary token.
+    /// EOF. The shape-gated tight `[…]{…}` path may admit paragraph breaks. A
+    /// chunk-unmatched macrocode `}` is an ordinary token.
     fn optional(&mut self) {
-        self.argument_optional(ArgumentDomain::Unknown);
+        self.argument_optional(ArgumentDomain::Unknown, false);
     }
 
-    fn argument_optional(&mut self, domain: ArgumentDomain) {
+    fn argument_optional(&mut self, domain: ArgumentDomain, allow_paragraphs: bool) {
         debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACKET));
         let opener = self.token_span(self.pos);
         self.open(SyntaxKind::OPTIONAL);
@@ -1782,7 +1832,7 @@ impl<'t> Parser<'t> {
                 _ => {
                     // The macrocode frame terminator is absolute: an optional
                     // still open there is abandoned, never consumes the frame.
-                    if self.at_paragraph_break_outside_guards()
+                    if (!allow_paragraphs && self.at_paragraph_break_outside_guards())
                         || self.macrocode_end.is_some_and(|end| self.pos >= end)
                     {
                         self.error_at(opener, "unclosed `[`");
@@ -1907,6 +1957,13 @@ impl<'t> Parser<'t> {
     fn bracket_closes_in_text(&self, open: usize) -> bool {
         self.gated_closer(open, &TextBracketGate, &self.text_bracket_batch)
             .is_some()
+    }
+
+    /// Locate the closer for a paragraph-spanning text optional. This is only a
+    /// structural half-proof: [`Self::attach_arguments`] also requires tight
+    /// opener and mandatory-suffix junctions before admitting the node.
+    fn long_bracket_closer_in_text(&self, open: usize) -> Option<usize> {
+        self.gated_closer(open, &LongTextBracketGate, &self.long_text_bracket_batch)
     }
 
     /// True if the `$` (or `$$`) opener at token index `open` is closed by a
@@ -3760,6 +3817,8 @@ mod tests {
         let body = |n: usize| format!("{}]\n", "\\cmd[x\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
         let body = |n: usize| format!("$ {}]$\n", "\\cmd[x ".repeat(n));
+        assert_scan_work_linear(&body(200), &body(400));
+        let body = |n: usize| format!("{}]{{tail}}\n", "\\cmd[x\n\n".repeat(n));
         assert_scan_work_linear(&body(200), &body(400));
     }
 

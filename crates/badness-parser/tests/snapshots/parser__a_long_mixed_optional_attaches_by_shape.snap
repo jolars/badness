@@ -1,0 +1,42 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: tree(src)
+---
+ROOT@0..77
+  PARAGRAPH@0..77
+    ENVIRONMENT@0..77
+      BEGIN@0..58
+        CONTROL_WORD@0..6 "\\begin"
+        NAME_GROUP@6..14
+          L_BRACE@6..7 "{"
+          WORD@7..13 "sample"
+          R_BRACE@13..14 "}"
+        GROUP@14..21
+          L_BRACE@14..15 "{"
+          WORD@15..20 "first"
+          R_BRACE@20..21 "}"
+        OPTIONAL@21..52
+          L_BRACKET@21..22 "["
+          WORD@22..27 "First"
+          WHITESPACE@27..28 " "
+          WORD@28..35 "option."
+          NEWLINE@35..36 "\n"
+          NEWLINE@36..37 "\n"
+          WORD@37..43 "Second"
+          WHITESPACE@43..44 " "
+          WORD@44..51 "option."
+          R_BRACKET@51..52 "]"
+        GROUP@52..58
+          L_BRACE@52..53 "{"
+          WORD@53..57 "tail"
+          R_BRACE@57..58 "}"
+      PARAGRAPH@58..64
+        NEWLINE@58..59 "\n"
+        WORD@59..64 "Body."
+      NEWLINE@64..65 "\n"
+      END@65..77
+        CONTROL_WORD@65..69 "\\end"
+        NAME_GROUP@69..77
+          L_BRACE@69..70 "{"
+          WORD@70..76 "sample"
+          R_BRACE@76..77 "}"

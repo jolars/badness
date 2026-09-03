@@ -618,6 +618,18 @@ fn rule_spans_and_keys_do_not_trip_dash_length() {
 }
 
 #[test]
+fn beamer_overlay_specs_do_not_trip_dash_length() {
+    // Issue #174: a single hyphen is Beamer's slide-range operator, not a
+    // typographical dash. Rewriting it to `--` silently changes the overlay set.
+    let src = "\\item<1-2> First\n\\only<1-2|handout:1>{Second}\n";
+    assert!(
+        lint(src).iter().all(|(rule, _)| *rule != "dash-length"),
+        "Beamer overlay specs must not trip dash-length: {:?}",
+        lint(src)
+    );
+}
+
+#[test]
 fn primitive_command_reports_and_swaps_end_to_end() {
     // `\over` restructures its operands, so it is report-only (no fix); the
     // plain-TeX subscript alias `\sb` carries a safe 1:1 swap to `_`.

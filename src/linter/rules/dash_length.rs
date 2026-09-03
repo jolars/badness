@@ -38,7 +38,10 @@
 //! picture environment (`tikzpicture`, pgfplots `axis`, …) or a pgfmath-expression
 //! argument (`\addplot3 {(y^2-1)^2}`, `\pgfmathparse{…}`) — where a `-` between
 //! numbers is a subtraction the pgfmath parser evaluates, so the en-dash rewrite
-//! would corrupt a meaning-bearing minus. None of these is typeset range text.
+//! would corrupt a meaning-bearing minus. Angle-delimited command and environment
+//! specifications are skipped too: in Beamer's `\item<1-2>` and
+//! `\begin{onlyenv}<2-3>`, the single hyphen is range syntax. None of these is
+//! typeset range text.
 
 use std::path::PathBuf;
 
@@ -94,7 +97,9 @@ impl Rule for DashLength {
          flags (`--verbose`) are left alone. Column spans in rule commands \
          (`\\cline{1-3}`, `\\cmidrule(lr){2-3}`) and key arguments \
          (`\\label{fig:1-3}`, `\\cite{smith2020-1}`) are specs and opaque \
-         identifiers rather than typeset ranges, so they are skipped too. \
+         identifiers rather than typeset ranges, so they are skipped too. The \
+         same applies to angle-delimited command and environment specifications \
+         such as Beamer's `\\item<1-2>` and `\\begin{onlyenv}<2-3>`. \
          Comments, verbatim, and math are never touched."
     }
 
@@ -122,6 +127,13 @@ impl Rule for DashLength {
         let Some((run_start, run_end)) = lone_internal_dash_run(text) else {
             return;
         };
+        // Treat an angle-delimited specification directly after a command or
+        // environment opener as macro syntax rather than prose. This catches
+        // Beamer overlay ranges (`\item<1-2>`, `\only<2-3>{...}`), where replacing
+        // the single hyphen with `--` silently changes which slides are produced.
+        if in_angle_delimited_spec(tok, run_start, run_end) {
+            return;
+        }
         // A column span in a rule command (`\cline{1-3}`, `\cmidrule(lr){2-3}`)
         // and a key argument (`\label{fig:1-3}`, `\cite{smith2020-1}`) hold a
         // spec or an opaque identifier, never a typeset range. Monospace text
@@ -227,6 +239,45 @@ fn lone_internal_dash_run(text: &str) -> Option<(usize, usize)> {
         return None;
     }
     Some((s, e))
+}
+
+/// Whether the dash run sits between `<` and `>` in a token directly following
+/// a command or environment opener. With no authored gap, an argument protocol
+/// is plausible enough to skip under the rule's false-negative bias; a spaced
+/// expression such as `\foo <1-2>` remains in scope.
+fn in_angle_delimited_spec(
+    tok: &crate::syntax::SyntaxToken,
+    run_start: usize,
+    run_end: usize,
+) -> bool {
+    let text = tok.text();
+    let before = &text[..run_start];
+    let after = &text[run_end..];
+    let Some(open) = before.rfind('<') else {
+        return false;
+    };
+    if before[open + 1..].contains('>') {
+        return false;
+    }
+    let Some(close) = after.find('>') else {
+        return false;
+    };
+    if after[..close].contains('<') {
+        return false;
+    }
+
+    let follows_command = matches!(
+        tok.prev_sibling_or_token(),
+        Some(SyntaxElement::Node(node)) if node.kind() == SyntaxKind::COMMAND
+    );
+    let follows_environment_begin = tok.parent_ancestors().any(|node| {
+        node.kind() == SyntaxKind::ENVIRONMENT
+            && node
+                .children()
+                .find(|child| child.kind() == SyntaxKind::BEGIN)
+                .is_some_and(|begin| begin.text_range().end() == tok.text_range().start())
+    });
+    follows_command || follows_environment_begin
 }
 
 fn is_digit(c: Option<char>) -> bool {
@@ -365,6 +416,26 @@ mod tests {
     fn prose_argument_ranges_are_checked() {
         let src = "\\textbf{pages 5-10}\\section{pages 5-10}\\footnote{pages 5-10}\n";
         assert_eq!(findings(src).len(), 3);
+    }
+
+    #[test]
+    fn beamer_overlay_specs_are_left_alone() {
+        let src = concat!(
+            "\\item<1-2> First\n",
+            "\\only<1-2|handout:1>{Second}\n",
+            "\\only{Third}<2-3>\n",
+            "\\onslide+<3-4> Third\n",
+            "\\begin{actionenv}<4-5>Fourth\\end{actionenv}\n",
+        );
+        assert!(findings(src).is_empty());
+    }
+
+    #[test]
+    fn angle_bracketed_prose_range_is_still_checked() {
+        assert_eq!(
+            findings("The interval <1-2> is closed; see \\LaTeX <3-4>.\n").len(),
+            2
+        );
     }
 
     #[test]

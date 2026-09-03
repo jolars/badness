@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.23.0](https://github.com/jolars/badness/compare/v0.22.1...v0.23.0) (2026-09-03)
+
+### Features
+- **config:** publish JSON schema ([`f83cacd`](https://github.com/jolars/badness/commit/f83cacd8c526d31c4f321e818e18fbd838e4a02d))
+- **lint:** support opt-in rules ([`8cc742a`](https://github.com/jolars/badness/commit/8cc742ac68a9cda8d520ced7e5f395b1700a2978))
+
+### Bug Fixes
+- **linter:** skip positional verbatim arguments ([`08b5243`](https://github.com/jolars/badness/commit/08b52434f0d163ffbf04f6a80bc235fde17f6ec6)), fixes [#175](https://github.com/jolars/badness/issues/175)
+- **linter:** ignore Beamer overlay ranges ([`d57390f`](https://github.com/jolars/badness/commit/d57390f2990f14f0859cf59431c82dd32aa872de)), fixes [#174](https://github.com/jolars/badness/issues/174)
+- **formatter:** stabilize long optionals ([`04d8ecf`](https://github.com/jolars/badness/commit/04d8ecfc280b9071b759724dcfa7347b75b20219))
+- **parser:** parse long mixed optionals ([`38adc16`](https://github.com/jolars/badness/commit/38adc16dd07b4b6d85820f31dd63dd86eed6a567))
+- **formatter:** format empheq as math ([`e7a2140`](https://github.com/jolars/badness/commit/e7a21409a0164e27003b95521fcf19add3d719ee)), fixes [#172](https://github.com/jolars/badness/issues/172)
+- **linter:** retain braces around math operators ([`946bf2b`](https://github.com/jolars/badness/commit/946bf2bad4f091477e14d1f321c0e2cdd2781276))
+
+### Dependencies
+- updated crates/badness-formatter to v0.8.3
+- updated crates/badness-parser to v0.9.0
+
 ## [0.22.1](https://github.com/jolars/badness/compare/v0.22.0...v0.22.1) (2026-08-31)
 
 ### Bug Fixes

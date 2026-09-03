@@ -28,9 +28,9 @@
 //! - **Redefined names.** A file that redefines a built-in
 //!   (`\renewcommand{\emph}…`) has changed its arity; the built-in signature no
 //!   longer applies, so redefined names are skipped (via the definition scanner).
-//! - **Verbatim-argument commands** (`\mintinline`, …) capture their final
-//!   argument as a single opaque token with lexer support; their mixed shape is
-//!   skipped wholesale.
+//! - **Verbatim arguments** (`\mintinline`, `\href`, …) are captured as single
+//!   opaque tokens with lexer support; their mixed command shape is skipped
+//!   wholesale.
 //!
 //! Only the curated built-in tier is consulted — CWL arities are bulk-converted
 //! and the linter doesn't know which packages are loaded, so trusting them here
@@ -119,9 +119,10 @@ impl StreamVisitor for MissingRequiredArgumentVisitor {
         let Some(sig) = signature::builtin().command(&name) else {
             return;
         };
-        // A verbatim-argument command's final argument is an opaque VERB token, not
-        // a group; its mixed shape is skipped wholesale.
-        if sig.verbatim {
+        // Verbatim arguments are opaque VERB tokens, not groups; their mixed
+        // shape is skipped wholesale whether the capture is implicit or occupies
+        // a positional signature slot.
+        if sig.verbatim || sig.args.iter().any(|arg| arg.verbatim) {
             return;
         }
         let required = sig.args.iter().filter(|a| a.required).count();
@@ -476,5 +477,11 @@ mod tests {
     fn silent_on_verbatim_argument_command() {
         // `\mintinline`'s shape mixes a group with an opaque VERB capture; skipped.
         assert!(findings("\\mintinline\n").is_empty());
+    }
+
+    #[test]
+    fn silent_on_positional_verbatim_argument_command() {
+        assert!(findings("\\href{https://example.test}{examples}\n\n").is_empty());
+        assert!(findings("\\href[page=2]{file:a%20b.pdf}{page two}\n").is_empty());
     }
 }

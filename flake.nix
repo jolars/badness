@@ -21,7 +21,7 @@
 
         badness = pkgs.rustPlatform.buildRustPackage {
           pname = "badness";
-          version = "0.22.1";
+          version = "0.23.0";
 
           src = ./.;
 

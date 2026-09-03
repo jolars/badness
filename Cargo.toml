@@ -15,7 +15,7 @@ authors = ["Johan Larsson <johan@jolars.co>"]
 
 [package]
 name = "badness"
-version = "0.22.1"
+version = "0.23.0"
 edition.workspace = true
 rust-version.workspace = true
 readme = "README.md"
@@ -48,8 +48,8 @@ path = "src/main.rs"
 
 [dependencies]
 annotate-snippets = "0.12.16"
-badness-formatter = { path = "crates/badness-formatter", version = "0.8.2" }
-badness-parser = { path = "crates/badness-parser", version = "0.8.1", features = [
+badness-formatter = { path = "crates/badness-formatter", version = "0.8.3" }
+badness-parser = { path = "crates/badness-parser", version = "0.9.0", features = [
     "schema",
 ] }
 clap = { version = "4.5.51", features = ["derive"] }

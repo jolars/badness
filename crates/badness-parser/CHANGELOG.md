@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.0](https://github.com/jolars/badness/compare/badness-parser-v0.8.1...badness-parser-v0.9.0) (2026-09-03)
+
+### Features
+- **config:** publish JSON schema ([`f83cacd`](https://github.com/jolars/badness/commit/f83cacd8c526d31c4f321e818e18fbd838e4a02d))
+
+### Bug Fixes
+- **parser:** parse long mixed optionals ([`38adc16`](https://github.com/jolars/badness/commit/38adc16dd07b4b6d85820f31dd63dd86eed6a567))
+- **formatter:** format empheq as math ([`e7a2140`](https://github.com/jolars/badness/commit/e7a21409a0164e27003b95521fcf19add3d719ee)), fixes [#172](https://github.com/jolars/badness/issues/172)
+
 ## [0.8.1](https://github.com/jolars/badness/compare/badness-parser-v0.8.0...badness-parser-v0.8.1) (2026-08-31)
 
 ### Bug Fixes

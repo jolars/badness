@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.3](https://github.com/jolars/badness/compare/badness-formatter-v0.8.2...badness-formatter-v0.8.3) (2026-09-03)
+
+### Bug Fixes
+- **formatter:** stabilize long optionals ([`04d8ecf`](https://github.com/jolars/badness/commit/04d8ecfc280b9071b759724dcfa7347b75b20219))
+- **formatter:** format empheq as math ([`e7a2140`](https://github.com/jolars/badness/commit/e7a21409a0164e27003b95521fcf19add3d719ee)), fixes [#172](https://github.com/jolars/badness/issues/172)
+- **formatter:** explode column specs ([`583a98d`](https://github.com/jolars/badness/commit/583a98dd6ac96b6b1159132580c4eb33da80c345))
+
+### Dependencies
+- updated crates/badness-parser to v0.9.0
+
 ## [0.8.2](https://github.com/jolars/badness/compare/badness-formatter-v0.8.1...badness-formatter-v0.8.2) (2026-08-31)
 
 ### Bug Fixes

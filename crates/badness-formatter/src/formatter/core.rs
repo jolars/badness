@@ -29,6 +29,7 @@ use crate::semantic::{
 };
 use crate::syntax::{
     SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, is_collapsible_trivia, is_param_digit,
+    is_trivia,
 };
 
 use super::context::FormatContext;
@@ -1267,6 +1268,9 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         // comment at package-load time). Such a group falls through to the
         // generic stream, which keeps the authored margins verbatim.
         SyntaxKind::GROUP if !contains_doc_margin(node, cx) => {
+            if opaque_group_has_glued_environment_sibling(node) {
+                return Ir::verbatim(node.text().to_string());
+            }
             // Width-driven Opaque layout under the default mode: block-vs-inline
             // is decided by width, content, and preserved predicates — never by
             // whether the author happened to break the line. A group *opening
@@ -7682,6 +7686,42 @@ fn lower_bracketed(
             trail,
             close_ir,
         ])
+    }
+}
+
+/// Whether an opaque brace group directly contains an environment glued to
+/// sibling content.
+///
+/// With no signature proving the group's whitespace semantics, the glued seam
+/// says that partially expanding the environment is unsafe: it would insert a
+/// space where the source had none and leave the rest of the argument half
+/// formatted. Preserve the whole group instead. A comment or any authored gap
+/// already supplies a safe boundary and therefore does not trigger this gate.
+/// The predicate reads only CST adjacency, so the verbatim result is its own
+/// fixed point.
+fn opaque_group_has_glued_environment_sibling(node: &SyntaxNode) -> bool {
+    let elements: Vec<SyntaxElement> = node.children_with_tokens().collect();
+    elements.iter().enumerate().any(|(index, element)| {
+        let SyntaxElement::Node(child) = element else {
+            return false;
+        };
+        if child.kind() != SyntaxKind::ENVIRONMENT {
+            return false;
+        }
+
+        let left = index
+            .checked_sub(1)
+            .and_then(|previous| elements.get(previous));
+        glued_group_content(left, SyntaxKind::L_BRACE)
+            || glued_group_content(elements.get(index + 1), SyntaxKind::R_BRACE)
+    })
+}
+
+fn glued_group_content(element: Option<&SyntaxElement>, delimiter: SyntaxKind) -> bool {
+    match element {
+        Some(SyntaxElement::Node(_)) => true,
+        Some(SyntaxElement::Token(token)) => token.kind() != delimiter && !is_trivia(token.kind()),
+        None => false,
     }
 }
 

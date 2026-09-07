@@ -524,6 +524,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // A structurally paired environment nested inside a command argument keeps
     // its frame at the argument-body indent and indents its own body once more.
     ("environment_in_command_argument", WrapMode::Preserve, 80),
+    // An opaque brace group containing an environment glued to sibling content
+    // stays byte-for-byte intact. Without a signature proving the body's
+    // whitespace semantics, partially expanding the environment would insert
+    // meaningful spaces and produce an awkward half-formatted argument.
+    ("opaque_group_glued_environment", WrapMode::Reflow, 80),
     // A block environment forces its standalone brace-group parent into block
     // layout: the frame shares the group-body indent, and its body nests once
     // more. No command or environment spelling participates in the decision.
@@ -2065,6 +2070,29 @@ fn formatter_fixtures_match_expected() {
             ..FormatStyle::default()
         };
         assert_fixture(name, style);
+    }
+}
+
+#[test]
+fn opaque_group_glued_environment_is_preserved_in_every_wrap_mode() {
+    let input = fs::read_to_string(fixture_path("opaque_group_glued_environment", "input.tex"))
+        .expect("read opaque-group fixture");
+    for wrap in [
+        WrapMode::Reflow,
+        WrapMode::Stable,
+        WrapMode::Sentence,
+        WrapMode::Semantic,
+        WrapMode::Preserve,
+    ] {
+        let style = FormatStyle {
+            wrap,
+            ..FormatStyle::default()
+        };
+        assert_eq!(
+            format_with_style(&input, style).expect("format opaque group"),
+            input,
+            "opaque group changed under {wrap:?}"
+        );
     }
 }
 

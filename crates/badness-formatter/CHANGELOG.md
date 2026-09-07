@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8.4](https://github.com/jolars/badness/compare/badness-formatter-v0.8.3...badness-formatter-v0.8.4) (2026-09-07)
+
+### Bug Fixes
+- **formatter:** preserve glued opaque environments ([`cab55f6`](https://github.com/jolars/badness/commit/cab55f6e8d396afc803fe7b80702bce47b46e272))
+
 ## [0.8.3](https://github.com/jolars/badness/compare/badness-formatter-v0.8.2...badness-formatter-v0.8.3) (2026-09-03)
 
 ### Bug Fixes

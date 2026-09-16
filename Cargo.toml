@@ -154,6 +154,8 @@ name = "lsp_memory"
 harness = false
 
 [profile.release]
+codegen-units = 1
+lto = "thin"
 strip = "symbols"
 
 [dev-dependencies]

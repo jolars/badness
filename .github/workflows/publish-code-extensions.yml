@@ -113,15 +113,9 @@ jobs:
         working-directory: editors/code
         run: npx vsce package --target ${{ matrix.vsce_target }} -o badness-${{ matrix.vsce_target }}.vsix
 
-      - name: Publish to Open VSX Registry
-        uses: HaaLeo/publish-vscode-extension@v2
+      - name: Publish extensions
+        uses: jolars/publish-vsix@v1
         with:
-          pat: ${{ secrets.OVSX_PAT }}
-          extensionFile: editors/code/badness-${{ matrix.vsce_target }}.vsix
-
-      - name: Publish to Visual Studio Marketplace
-        uses: HaaLeo/publish-vscode-extension@v2
-        with:
-          pat: ${{ secrets.VSCE_PAT }}
-          registryUrl: https://marketplace.visualstudio.com
-          extensionFile: editors/code/badness-${{ matrix.vsce_target }}.vsix
+          vsix-path: editors/code/badness-${{ matrix.vsce_target }}.vsix
+          marketplace-token: ${{ secrets.VSCE_PAT }}
+          open-vsx-token: ${{ secrets.OVSX_PAT }}

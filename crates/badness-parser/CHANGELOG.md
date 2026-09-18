@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.9.1](https://github.com/jolars/badness/compare/badness-parser-v0.9.0...badness-parser-v0.9.1) (2026-09-18)
+
+### Other changes
+- resolve local command signatures from data ([`cf532c9`](https://github.com/jolars/badness/commit/cf532c959e06109ccf8e41da93ebf313a642fd84)), fixes [#181](https://github.com/jolars/badness/issues/181)
+
 ## [0.9.0](https://github.com/jolars/badness/compare/badness-parser-v0.8.1...badness-parser-v0.9.0) (2026-09-03)
 
 ### Features

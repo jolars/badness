@@ -160,6 +160,84 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
+### expl3 semantic linting
+
+Investigated [expltools][expltools-review] on 2026-09-18 at commit `48bc583`
+(latest documented release: explcheck v0.23.2). Implement a useful subset as
+native Rust rules over the existing CST, using explcheck as a differential
+reference. Its [semantic checks][explcheck-semantics] are the main opportunity:
+Badness already has expl3 tokenization, argspec-directed argument attachment,
+statement recognition, and formatting. The definition scanner in
+`crates/badness-parser/src/semantic/define.rs` does not yet recognize the
+`\cs_new:*`, conditional-definition, or variant families.
+
+- [ ] **Start with three report-only rules over recognized calls.** Check
+  incompatible function variants (`T403`, followed by deprecated variant
+  conversions from `W410`), protected predicates (`E404`), and invalid message
+  parameters (`E425`). These need no project-wide symbol resolution. For
+  example, `\cs_generate_variant:Nn \demo_use:n { nn }` requests more arguments
+  than the original specification, a protected conditional must not request a
+  `p` form, and message text cannot use `#5`. Use stable kebab-case Badness rule
+  IDs; the explcheck IDs identify reference behavior, not the proposed public
+  names. Withhold fixes where the author's intended signature or meaning is
+  unknown.
+
+- [ ] **Build shared semantic call-reading helpers.** Keep these pure and
+  above the parser, reusing `semantic::expl3` and typed CST reads. Preserve the
+  original argspec letters: `Expl3Slot` deliberately merges `N` with `V`, and
+  `n` with expansion forms, which is enough for layout but insufficient for
+  linting. Distinguish executable bodies from token-list data and retain unknown
+  or incomplete cases. A command-shaped token is not necessarily a call, and
+  an unsupported shape is not evidence of an undefined symbol. Keep the
+  parser's conservative fallback and its text-purity contract intact; do not
+  add general macro expansion or catcode evaluation. Rules should use shared
+  dispatch, with a shared index in `RuleContext` once multiple rules need the
+  same derived facts.
+
+- [ ] **Add deprecation and variable checks next.** Generate a pinned
+  deprecation table from LaTeX3's `l3obsolete.txt` for `W202`. Variable type
+  compatibility (`T422`), constant mutation (`E417`/`E418`), and local/global
+  assignment mismatches (`E420`/`E421`) need recognized operation semantics and
+  code context, not just name-prefix matching. Explcheck, for example, exempts
+  top-level assignments from its local/global mismatch checks. Malformed names
+  and braced `N` or unbraced `n` arguments (`W303`/`W302`) are lower-priority
+  style candidates; the latter shapes are not necessarily errors.
+
+- [ ] **Index expl3 definitions and uses before adding resolution checks.**
+  Cover functions, generated variants, variables, constants, and messages.
+  This enables undefined and unused symbol checks and message argument-count
+  checks, and could also improve editor navigation, hover, and completion.
+  Keep cross-file resolution in the root crate and generated standard-library
+  facts hermetic. Missing project context and dynamically constructed names
+  must remain unknown, not become diagnostics. Do not infer execution order
+  from a flat definition scan.
+
+- [ ] **Treat flow and expandability analysis as a separate, larger project.**
+  Explcheck already implements several execution-order checks, including
+  duplicate definitions, calls before definition, and unused functions and
+  variables. Supporting these properly needs nested code segments, call and
+  control-flow relationships, aliases, and explicit uncertainty. Its
+  [flow-analysis document][explcheck-flow] also contains planned checks, so
+  verify implementation status before treating that document as a parity
+  checklist.
+
+- [ ] **Validate each stage with positive and negative fixtures.** Use
+  explcheck's examples as a behavioral reference, including nested definitions,
+  escaped parameter tokens, partial applications, dynamic names, and commands
+  carried as data. Cover comments, protected regions, and `.dtx` source spans.
+  Native diagnostics in `.dtx` files are a useful advantage: explcheck currently
+  requires extracted files. The initial investigation built Badness at
+  `cf532c9` and compared eight focused examples: variant arity, protected
+  predicates, message parameters, variable scope, variable type, deprecation,
+  braced `N`, and unbraced `n`. Badness reported no diagnostics in all eight;
+  the installed explcheck v0.17.1 flagged each intended issue. This was a small
+  smoke comparison against the older installed binary, not a current-upstream
+  corpus baseline; the feature assessment used the pinned source above.
+
+[expltools-review]: https://github.com/Witiko/expltools/tree/48bc5831e3eff1ce3e3243ea5e582fead6e143da
+[explcheck-semantics]: https://github.com/Witiko/expltools/blob/48bc5831e3eff1ce3e3243ea5e582fead6e143da/explcheck/doc/warnings-and-errors-04-semantic-analysis.md
+[explcheck-flow]: https://github.com/Witiko/expltools/blob/48bc5831e3eff1ce3e3243ea5e582fead6e143da/explcheck/doc/warnings-and-errors-05-flow-analysis.md
+
 ### Issues
 
 - [ ] **Prose `dash-length` FPs on index-pair and term names.** `0-1 law`,

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.24.0](https://github.com/jolars/badness/compare/v0.23.0...v0.24.0) (2026-09-18)
+
+### Features
+- **lint:** add expl3 semantic checks ([`7e1ad2c`](https://github.com/jolars/badness/commit/7e1ad2c4c3b7f192137a21d96c310120d195ca7f))
+
+### Bug Fixes
+- **lint:** accept exam question parts without arguments ([`3e4ff7c`](https://github.com/jolars/badness/commit/3e4ff7ccde7c97d7d4297e497b019eee787b33bb)), fixes [#181](https://github.com/jolars/badness/issues/181)
+- **formatter:** preserve glued opaque environments ([`cab55f6`](https://github.com/jolars/badness/commit/cab55f6e8d396afc803fe7b80702bce47b46e272))
+
+### Performance Improvements
+- **build:** enable ThinLTO with one codegen unit ([`2e9414c`](https://github.com/jolars/badness/commit/2e9414cef0e782b503531fd4075d22221a79dec1))
+
+### Dependencies
+- updated crates/badness-formatter to v0.8.4
+- updated crates/badness-parser to v0.9.1
+
 ## [0.23.0](https://github.com/jolars/badness/compare/v0.22.1...v0.23.0) (2026-09-03)
 
 ### Features

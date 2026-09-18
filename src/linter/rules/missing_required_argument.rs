@@ -28,6 +28,8 @@
 //! - **Redefined names.** A file that redefines a built-in
 //!   (`\renewcommand{\emph}…`) has changed its arity; the built-in signature no
 //!   longer applies, so redefined names are skipped (via the definition scanner).
+//! - **Environment-local meanings.** Inside exam's `parts` environment, `\part`
+//!   is a question item with optional points, not a section heading with a title.
 //! - **Verbatim arguments** (`\mintinline`, `\href`, …) are captured as single
 //!   opaque tokens with lexer support; their mixed command shape is skipped
 //!   wholesale.
@@ -44,7 +46,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{Group, children, command_name, control_word_range};
+use crate::ast::{AstNode, Environment, Group, children, command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::semantic::define::is_definition_command;
 use crate::semantic::signature;
@@ -86,7 +88,9 @@ impl Rule for MissingRequiredArgument {
          command is deliberate are skipped -- macro-definition bodies \
          (`\\newcommand{\\bold}{\\textbf}`), arguments of unknown commands, \
          standalone `{…}` scope groups, `\\let`-style alias forms, and names the \
-         file itself redefines. Report-only: the missing argument's content is \
+         file itself redefines. Inside a `parts` environment, `\\part` is also \
+         skipped because exam uses it for question parts with optional points. \
+         Report-only: the missing argument's content is \
          the author's to write, so no fix is correct by construction."
     }
 
@@ -133,6 +137,9 @@ impl StreamVisitor for MissingRequiredArgumentVisitor {
         if ctx.user_definitions().command(&name).is_some() {
             return;
         }
+        if name == "part" && in_exam_parts(node) {
+            return;
+        }
         let braced = children::<Group>(node).count();
         if braced >= required
             || in_unsafe_group(node)
@@ -161,6 +168,20 @@ impl StreamVisitor for MissingRequiredArgumentVisitor {
             related: Vec::new(),
         });
     }
+}
+
+/// Exam redefines `\part` locally inside `parts`, including nested environments.
+/// Use the enclosing environment rather than requiring a class declaration:
+/// included question files may not carry one, and the global arity is uncertain
+/// in this scope. Outside it, the ordinary sectioning signature still applies.
+fn in_exam_parts(command: &SyntaxNode) -> bool {
+    command
+        .ancestors()
+        .filter_map(Environment::cast)
+        .any(|env| {
+            env.begin()
+                .is_some_and(|begin| !begin.is_alias() && begin.name().as_deref() == Some("parts"))
+        })
 }
 
 /// Trivia skipped when scanning for the neighboring meaningful element.
@@ -471,6 +492,65 @@ mod tests {
     fn silent_when_name_is_redefined_in_the_file() {
         // The redefinition changes `\emph`'s arity; the built-in no longer applies.
         assert!(findings("\\renewcommand{\\emph}{nothing}\nsee \\emph\n").is_empty());
+    }
+
+    #[test]
+    fn silent_on_exam_part_inside_parts() {
+        // Included question files need not carry their own class declaration.
+        for preamble in ["", "\\documentclass{exam}\n"] {
+            for body in [
+                "\\part\n\nP\n",
+                "\\part[2]\n\nP\n",
+                "\\part\n",
+                "\\part[2]\n",
+                "\\begin{samepage}\n\\part\n\nP\n\\end{samepage}\n",
+            ] {
+                let src = format!("{preamble}\\begin{{parts}}\n{body}\\end{{parts}}\n");
+                assert!(findings(&src).is_empty(), "must not flag: {src}");
+            }
+        }
+    }
+
+    #[test]
+    fn flags_sectioning_part_before_and_after_parts() {
+        for class in ["article", "book", "exam"] {
+            let src = format!(
+                "\\documentclass{{{class}}}\n\\part\n\n\
+                 \\begin{{parts}}\n\\part\n\nP\n\\end{{parts}}\n\
+                 \\part\n"
+            );
+            let out = findings(&src);
+            let positions: Vec<_> = out.iter().map(|d| d.start).collect();
+            assert_eq!(
+                positions,
+                vec![src.find("\\part").unwrap(), src.rfind("\\part").unwrap()],
+                "must still check sectioning commands: {src}"
+            );
+        }
+    }
+
+    #[test]
+    fn flags_other_required_arguments_inside_parts() {
+        let out = findings("\\begin{parts}\n\\textbf\n\n\\section\n\\end{parts}\n");
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            out[0].message,
+            "`\\textbf` is missing its required argument"
+        );
+        assert_eq!(
+            out[1].message,
+            "`\\section` is missing its required argument"
+        );
+    }
+
+    #[test]
+    fn flags_part_in_other_environments() {
+        for name in ["questions", "subparts", "parts-extra"] {
+            let src = format!("\\begin{{{name}}}\n\\part\n\\end{{{name}}}\n");
+            let out = findings(&src);
+            assert_eq!(out.len(), 1, "must still check: {src}");
+            assert_eq!(out[0].message, "`\\part` is missing its required argument");
+        }
     }
 
     #[test]

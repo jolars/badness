@@ -1138,6 +1138,32 @@ fn missing_required_argument_flags_truncated_invocation() {
 }
 
 #[test]
+fn missing_required_argument_accepts_exam_question_parts() {
+    let src = r"\documentclass{exam}
+\begin{document}
+\begin{questions}
+  \question Q
+  \begin{parts}
+    \part
+
+    P
+    \part[2]
+
+    Another part.
+    \part
+  \end{parts}
+\end{questions}
+\end{document}
+";
+    assert!(parse(src).errors.is_empty());
+    assert!(
+        lint(src)
+            .iter()
+            .all(|(rule, _)| *rule != "missing-required-argument")
+    );
+}
+
+#[test]
 fn sectioning_level_jump_flags_skipped_level() {
     let out = lint("\\section{Intro}\n\\subsubsection{Deep}\n");
     let hits: Vec<_> = out

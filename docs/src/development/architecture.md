@@ -1616,6 +1616,16 @@ Nested explicit math may in turn override a text island. Math-only rules require
 `Math`, text-only rules require `Text`, and rules whose fix differs by mode skip
 `Unknown`.
 
+`missing-required-argument` checks curated built-in arities, but skips names the
+file redefines and scopes where a known local meaning makes that arity
+uncertain. In exam's `parts` environment, `\part` is a question item with
+optional points, so the rule skips it throughout that environment, including
+nested environments. The gate uses the literal environment name without
+requiring a class declaration, so it also covers included question files.
+Outside `parts`, the ordinary sectioning signature still applies. This exception
+belongs to the linter and does not change parser grouping or the global
+signature database.
+
 The registry compiles the rule list into a dispatch table indexed by
 `SyntaxKind`, so node dispatch is a slice index, and it is cached across files
 and shared by reference across the CLI's rayon lint phase. Configuration narrows

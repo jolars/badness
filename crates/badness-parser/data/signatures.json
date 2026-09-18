@@ -177,6 +177,12 @@
     "multicolumn": { "args": ["req", "req", "req"] }
   },
 
+  "environmentCommands": {
+    "parts": {
+      "part": { "args": ["opt"] }
+    }
+  },
+
   "environments": {
     "document": { "noIndent": true },
     "appendix": { "noIndent": true },

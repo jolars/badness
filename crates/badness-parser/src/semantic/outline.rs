@@ -155,7 +155,7 @@ fn collect_command(command: &SyntaxNode, out: &mut Vec<Raw>) {
     // outline is a curated judgment, and CWL's sectioning classifications are not
     // trustworthy enough to drive it (the CWL tier carries no `sectioning` anyway).
     if let Some(level) = signature::builtin()
-        .command(&name)
+        .command_at(command)
         .and_then(|c| c.sectioning)
     {
         let selection = nth_group(command, 0)
@@ -406,12 +406,9 @@ pub fn label_context(root: &SyntaxNode, offset: TextSize) -> Option<LabelContext
         if command.text_range().start() > offset {
             break;
         }
-        let is_sectioning = command_name(&command)
-            .and_then(|name| {
-                signature::builtin()
-                    .command(&name)
-                    .and_then(|c| c.sectioning)
-            })
+        let is_sectioning = signature::builtin()
+            .command_at(&command)
+            .and_then(|c| c.sectioning)
             .is_some();
         if is_sectioning {
             best = Some(command);
@@ -474,6 +471,27 @@ mod tests {
         assert_eq!(items[0].kind, OutlineSymbol::Section);
         assert_eq!(items[1].name, "B");
         assert!(items[0].children.is_empty());
+    }
+
+    #[test]
+    fn exam_parts_do_not_create_sections_or_change_label_context() {
+        let src = "\\section{Questions}\n\\begin{parts}\n\\part P\n\
+                   \\end{parts}\n\\label{questions}\n\\subsection{Answers}\n";
+        let items = outline_of(src);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Questions");
+        let children: Vec<_> = items[0]
+            .children
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        assert_eq!(children, vec!["questions", "Answers"]);
+        assert_eq!(
+            context_of(src),
+            Some(LabelContext::Section {
+                title: "Questions".to_owned()
+            })
+        );
     }
 
     #[test]

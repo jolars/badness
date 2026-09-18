@@ -174,7 +174,7 @@ impl StreamVisitor for SectioningLevelJumpVisitor {
             return;
         }
         let Some(level) = signature::builtin()
-            .command(&name)
+            .command_at(node)
             .and_then(|c| c.sectioning)
         else {
             return;
@@ -250,6 +250,17 @@ mod tests {
         }
         visitor.finish(&ctx, &mut out);
         out
+    }
+
+    #[test]
+    fn exam_parts_do_not_reset_the_sectioning_level() {
+        for (heading, expected) in [("subsection", 0), ("subsubsection", 1)] {
+            let src = format!(
+                "\\section{{Questions}}\n\\begin{{parts}}\n\\part P\n\
+                 \\end{{parts}}\n\\{heading}{{Answers}}\n"
+            );
+            assert_eq!(findings(&src).len(), expected, "{src}");
+        }
     }
 
     #[test]

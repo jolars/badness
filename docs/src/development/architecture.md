@@ -311,6 +311,22 @@ curated built-ins, CWL-derived data, and definitions scanned from source. This
 layer describes properties such as arity, verbatim behavior, sectioning, and
 argument content kinds.
 
+The curated `environmentCommands` table in `data/signatures.json` stores
+complete command signatures local to literal environment bodies.
+`SignatureDb::command_at` uses the nearest enclosing environment with an entry
+for the command, then falls back to its global signature. Unlisted environments
+inherit the outer meaning; headers and closers do not acquire their own
+environment's local signatures, and alias delimiters are not matched by
+spelling. The database indexes these entries by command name so ordinary
+commands need no ancestor walk.
+
+For example, `parts` gives exam's `\part` an optional points argument and no
+sectioning role. The missing-argument and section-level rules, document outline,
+and label context share this lookup. No class declaration is required, which
+supports included question files. Local entries are separate from global command
+and environment signatures, so they do not change parser grouping, environment
+recognition, or formatter layout.
+
 This is not an absolute wall: a small number of semantic facts may influence
 parsing when they satisfy both of the following conditions:
 
@@ -1616,15 +1632,10 @@ Nested explicit math may in turn override a text island. Math-only rules require
 `Math`, text-only rules require `Text`, and rules whose fix differs by mode skip
 `Unknown`.
 
-`missing-required-argument` checks curated built-in arities, but skips names the
-file redefines and scopes where a known local meaning makes that arity
-uncertain. In exam's `parts` environment, `\part` is a question item with
-optional points, so the rule skips it throughout that environment, including
-nested environments. The gate uses the literal environment name without
-requiring a class declaration, so it also covers included question files.
-Outside `parts`, the ordinary sectioning signature still applies. This exception
-belongs to the linter and does not change parser grouping or the global
-signature database.
+`missing-required-argument` checks curated signatures through
+`SignatureDb::command_at`, including environment-local meanings, and skips names
+the file itself redefines. It never relies on bulk CWL arities or ambient
+package discovery to report a missing argument.
 
 The registry compiles the rule list into a dispatch table indexed by
 `SyntaxKind`, so node dispatch is a slice index, and it is cached across files

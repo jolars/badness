@@ -28,8 +28,8 @@
 //! - **Redefined names.** A file that redefines a built-in
 //!   (`\renewcommand{\emph}…`) has changed its arity; the built-in signature no
 //!   longer applies, so redefined names are skipped (via the definition scanner).
-//! - **Environment-local meanings.** Inside exam's `parts` environment, `\part`
-//!   is a question item with optional points, not a section heading with a title.
+//! - **Environment-local meanings.** Curated local signatures override the global
+//!   arity. Inside exam's `parts` environment, `\part` takes only optional points.
 //! - **Verbatim arguments** (`\mintinline`, `\href`, …) are captured as single
 //!   opaque tokens with lexer support; their mixed command shape is skipped
 //!   wholesale.
@@ -46,7 +46,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast::{AstNode, Environment, Group, children, command_name, control_word_range};
+use crate::ast::{Group, children, command_name, control_word_range};
 use crate::linter::diagnostic::{Diagnostic, Severity};
 use crate::semantic::define::is_definition_command;
 use crate::semantic::signature;
@@ -88,8 +88,9 @@ impl Rule for MissingRequiredArgument {
          command is deliberate are skipped -- macro-definition bodies \
          (`\\newcommand{\\bold}{\\textbf}`), arguments of unknown commands, \
          standalone `{…}` scope groups, `\\let`-style alias forms, and names the \
-         file itself redefines. Inside a `parts` environment, `\\part` is also \
-         skipped because exam uses it for question parts with optional points. \
+         file itself redefines. Curated environment-local signatures take \
+         precedence over global signatures: inside `parts`, exam's `\\part` \
+         takes only optional points. \
          Report-only: the missing argument's content is \
          the author's to write, so no fix is correct by construction."
     }
@@ -120,7 +121,7 @@ impl StreamVisitor for MissingRequiredArgumentVisitor {
         let Some(name) = command_name(node) else {
             return;
         };
-        let Some(sig) = signature::builtin().command(&name) else {
+        let Some(sig) = signature::builtin().command_at(node) else {
             return;
         };
         // Verbatim arguments are opaque VERB tokens, not groups; their mixed
@@ -135,9 +136,6 @@ impl StreamVisitor for MissingRequiredArgumentVisitor {
         }
         // The file redefined this name; the built-in arity no longer applies.
         if ctx.user_definitions().command(&name).is_some() {
-            return;
-        }
-        if name == "part" && in_exam_parts(node) {
             return;
         }
         let braced = children::<Group>(node).count();
@@ -170,20 +168,6 @@ impl StreamVisitor for MissingRequiredArgumentVisitor {
     }
 }
 
-/// Exam redefines `\part` locally inside `parts`, including nested environments.
-/// Use the enclosing environment rather than requiring a class declaration:
-/// included question files may not carry one, and the global arity is uncertain
-/// in this scope. Outside it, the ordinary sectioning signature still applies.
-fn in_exam_parts(command: &SyntaxNode) -> bool {
-    command
-        .ancestors()
-        .filter_map(Environment::cast)
-        .any(|env| {
-            env.begin()
-                .is_some_and(|begin| !begin.is_alias() && begin.name().as_deref() == Some("parts"))
-        })
-}
-
 /// Trivia skipped when scanning for the neighboring meaningful element.
 /// `NEWLINE` is deliberately *not* here: both scans count newlines to detect the
 /// blank-line (`\par`) boundary.
@@ -214,7 +198,7 @@ fn in_unsafe_group(command: &SyntaxNode) -> bool {
             SyntaxKind::COMMAND => {
                 let known_non_definition = command_name(&owner).is_some_and(|owner_name| {
                     !is_definition_command(&owner_name)
-                        && signature::builtin().command(&owner_name).is_some()
+                        && signature::builtin().command_at(&owner).is_some()
                 });
                 if !known_non_definition {
                     return true;

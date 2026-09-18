@@ -16,6 +16,12 @@
 //! math-ness together, keyed by name. This is the high-precision tier we maintain
 //! by hand.
 //!
+//! `environmentCommands` records complete command signatures local to literal
+//! environment bodies. [`SignatureDb::command_at`] resolves the nearest matching
+//! scope before the global command signature. These facts are separate from
+//! environment signatures so adding a local meaning does not grant parser or
+//! formatter behavior to the containing environment.
+//!
 //! Lower-precision external sources layer *underneath* this, ingested into the
 //! same schema rather than replacing it. The TeXstudio/Kile **CWL corpus** is one
 //! such tier: a
@@ -458,6 +464,10 @@ pub(crate) const fn environment(generated: GeneratedEnvironment) -> EnvironmentS
 pub struct SignatureDb {
     commands: HashMap<SmolStr, CommandSig>,
     environments: HashMap<SmolStr, EnvironmentSig>,
+    /// Environment-local signatures, indexed by command name, then literal
+    /// environment name. The JSON groups these by environment; transposing at
+    /// load time avoids walking ancestors for commands with no local meanings.
+    command_scopes: HashMap<SmolStr, HashMap<SmolStr, CommandSig>>,
     /// Which loaded package (by file stem) a command signature came from, when
     /// it was merged with an explicit origin via [`merge_from`](Self::merge_from).
     /// Absent for the document's own definitions and for every static tier
@@ -505,6 +515,38 @@ impl SignatureDb {
     /// The signature of command `name` (without the leading `\`), if known.
     pub fn command(&self, name: &str) -> Option<&CommandSig> {
         self.commands.get(name)
+    }
+
+    /// Resolve a command at its source location using only this database.
+    ///
+    /// The nearest enclosing literal environment with an entry for the command
+    /// supplies its complete signature. Environments without a matching entry
+    /// inherit the outer scope; leaving a scope restores the previous meaning.
+    /// Headers and closers do not acquire their own environment's local meaning.
+    /// Alias delimiters need separate resolution and are not matched by spelling.
+    /// No class lookup, macro expansion, or parser grouping is involved.
+    pub fn command_at(&self, command: &SyntaxNode) -> Option<&CommandSig> {
+        use crate::ast::{AstNode, Environment, command_name};
+
+        if command.kind() != SyntaxKind::COMMAND {
+            return None;
+        }
+        let name = command_name(command)?;
+        if let Some(scopes) = self.command_scopes.get(&name) {
+            let mut child = command.clone();
+            while let Some(parent) = child.parent() {
+                if !matches!(child.kind(), SyntaxKind::BEGIN | SyntaxKind::END)
+                    && let Some(env) = Environment::cast(parent.clone())
+                    && let Some(begin) = env.begin()
+                    && !begin.is_alias()
+                    && let Some(sig) = begin.name().and_then(|env| scopes.get(env.as_str()))
+                {
+                    return Some(sig);
+                }
+                child = parent;
+            }
+        }
+        self.command(&name)
     }
 
     /// The signature of environment `name`, if known.
@@ -620,6 +662,12 @@ impl SignatureDb {
     /// signature. When it is `None`, each entry inherits `other`'s provenance,
     /// clearing stale provenance when `other` has none.
     pub fn merge_from(&mut self, other: &SignatureDb, origin: Option<&str>) {
+        for (name, scopes) in &other.command_scopes {
+            self.command_scopes
+                .entry(name.clone())
+                .or_default()
+                .extend(scopes.iter().map(|(env, sig)| (env.clone(), sig.clone())));
+        }
         for (name, sig) in &other.commands {
             match origin
                 .map(SmolStr::new)
@@ -1104,6 +1152,8 @@ struct RawDb {
     _comment: Option<serde::de::IgnoredAny>,
     #[serde(default)]
     commands: HashMap<String, RawCommand>,
+    #[serde(default, rename = "environmentCommands")]
+    environment_commands: HashMap<String, HashMap<String, RawCommand>>,
     #[serde(default)]
     environments: HashMap<String, RawEnvironment>,
 }
@@ -1111,7 +1161,17 @@ struct RawDb {
 /// Deserialize the bundled JSON into a [`SignatureDb`].
 fn parse(json: &str) -> serde_json::Result<SignatureDb> {
     let raw: RawDb = serde_json::from_str(json)?;
+    let mut command_scopes: HashMap<SmolStr, HashMap<SmolStr, CommandSig>> = HashMap::new();
+    for (env, commands) in raw.environment_commands {
+        for (name, sig) in commands {
+            command_scopes
+                .entry(SmolStr::new(name))
+                .or_default()
+                .insert(SmolStr::new(&env), sig.into());
+        }
+    }
     Ok(SignatureDb {
+        command_scopes,
         commands: raw
             .commands
             .into_iter()
@@ -1201,6 +1261,136 @@ mod tests {
         assert_eq!(db.command("subsubsection").unwrap().sectioning, Some(4));
         assert_eq!(db.command("section").unwrap().args.len(), 2);
         assert!(db.command("textbf").unwrap().sectioning.is_none());
+    }
+
+    fn commands_in(src: &str) -> Vec<SyntaxNode> {
+        let parsed = crate::parser::parse(src);
+        assert!(parsed.errors.is_empty(), "{src}: {:?}", parsed.errors);
+        assert_eq!(parsed.syntax().to_string(), src);
+        SyntaxNode::new_root(parsed.green)
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::COMMAND)
+            .collect()
+    }
+
+    #[test]
+    fn environment_commands_override_complete_signatures() {
+        let db = parse(
+            r#"{
+                "commands": { "heading": { "args": ["req"], "sectioning": 2 } },
+                "environmentCommands": {
+                    "questions": { "heading": { "args": ["opt"] }, "local": {} },
+                    "nested": { "heading": { "args": ["req", "req"] } }
+                }
+            }"#,
+        )
+        .unwrap();
+        let commands = commands_in(
+            "\\heading\n\\begin{questions}\n\\heading\n\
+             \\begin{unknown}\n\\heading\n\\end{unknown}\n\
+             \\begin{nested}\n\\heading\n\\end{nested}\n\
+             \\heading\n\\local\n\\end{questions}\n\\heading\n\\local\n",
+        );
+        let signatures: Vec<_> = commands
+            .iter()
+            .map(|node| {
+                db.command_at(node).map(|sig| {
+                    (
+                        sig.args.iter().filter(|arg| arg.required).count(),
+                        sig.sectioning,
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(
+            signatures,
+            vec![
+                Some((1, Some(2))),
+                Some((0, None)),
+                Some((0, None)),
+                Some((2, None)),
+                Some((0, None)),
+                Some((0, None)),
+                Some((1, Some(2))),
+                None,
+            ]
+        );
+        assert!(db.environment("questions").is_none());
+        assert!(db.command("local").is_none());
+    }
+
+    #[test]
+    fn environment_commands_apply_to_bodies_not_headers() {
+        let db = parse(
+            r#"{
+                "commands": { "heading": { "args": ["req"] } },
+                "environmentCommands": {
+                    "outer": { "heading": {} },
+                    "inner": { "heading": { "args": ["req", "req"] } }
+                }
+            }"#,
+        )
+        .unwrap();
+        let commands = commands_in(
+            "\\begin{outer}{\\heading}\n\
+             \\begin{inner}{\\heading}\n\\heading\n\\end{inner}\n\
+             \\heading\n\\end{outer}\n",
+        );
+        let arities: Vec<_> = commands
+            .iter()
+            .map(|node| db.command_at(node).unwrap().args.len())
+            .collect();
+        assert_eq!(arities, vec![1, 0, 2, 0]);
+    }
+
+    #[test]
+    fn exam_part_signature_is_local_to_parts() {
+        let commands = commands_in("\\part\n\\begin{parts}\n\\part[2]\n\\end{parts}\n\\part\n");
+        let db = builtin();
+        let local = db.command_at(&commands[1]).unwrap();
+        assert_eq!(local.args.len(), 1);
+        assert_eq!(local.args[0].kind, ArgKind::Bracket);
+        assert!(!local.args[0].required);
+        assert!(local.sectioning.is_none());
+        for index in [0, 2] {
+            assert_eq!(db.command_at(&commands[index]), db.command("part"));
+        }
+    }
+
+    #[test]
+    fn environment_commands_do_not_match_alias_spellings() {
+        let commands = commands_in(
+            "\\def\\parts{\\begin{quote}}\n\\def\\endparts{\\end{quote}}\n\
+             \\parts\n\\part\n\\endparts\n",
+        );
+        let part = commands
+            .iter()
+            .find(|node| crate::ast::command_name(node).as_deref() == Some("part"))
+            .unwrap();
+        assert_eq!(builtin().command_at(part), builtin().command("part"));
+    }
+
+    #[test]
+    fn merging_environment_commands_preserves_unrelated_scopes() {
+        let mut db = parse(
+            r#"{ "environmentCommands": {
+                "outer": { "heading": { "args": ["req"] }, "local": {} },
+                "inner": { "heading": { "args": ["req", "req"] } }
+            } }"#,
+        )
+        .unwrap();
+        let overlay =
+            parse(r#"{ "environmentCommands": { "outer": { "heading": {} } } }"#).unwrap();
+        db.merge_from(&overlay, None);
+        let commands = commands_in(
+            "\\begin{outer}\n\\heading\n\\local\n\
+             \\begin{inner}\n\\heading\n\\end{inner}\n\\end{outer}\n",
+        );
+        let arities: Vec<_> = commands
+            .iter()
+            .map(|node| db.command_at(node).unwrap().args.len())
+            .collect();
+        assert_eq!(arities, vec![0, 0, 2]);
     }
 
     #[test]

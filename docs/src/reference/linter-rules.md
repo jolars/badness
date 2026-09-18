@@ -324,6 +324,89 @@ warning: ellipsis
   |        ^^^ literal `...` ellipsis; use `\cdots` in math (`\ldots` for lists, `\cdots` for operator chains)
 ```
 
+## `expl3-invalid-message-parameter`
+
+Flag `#5` through `#9` in either text argument of a literal expl3 `msg_new`, `msg_set`, or `msg_gset` definition. Messages accept only `#1` through `#4`. Escaped hashes and parameters belonging to an enclosing function definition are distinguished from message parameters. Checks cover recognized executable calls and unexpanded function bodies; stored token lists, expanded text arguments, and unresolved calls stay silent. Report-only: the intended message argument is unknown.
+
+This rule is **enabled by default**.
+
+A message refers to a fifth parameter:
+
+```tex
+\ExplSyntaxOn
+\msg_new:nnn { demo } { bad-value } { Invalid~value:~#5 }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-invalid-message-parameter
+ --> example.tex:2:54
+  |
+2 | \msg_new:nnn { demo } { bad-value } { Invalid~value:~#5 }
+  |                                                      ^^ invalid expl3 message parameter `#5`; messages accept only `#1` through `#4`
+```
+
+## `expl3-protected-predicate`
+
+Flag a protected expl3 conditional definition whose literal condition list requests a `p` predicate. Predicates must be expandable, which protection prevents. The `new`, `set`, and `gset` families are checked in recognized executable code, including unexpanded function bodies. Computed condition lists and unresolved calls stay silent. Report-only: choosing between protection and the predicate changes the function's API or meaning.
+
+This rule is **enabled by default**.
+
+A protected conditional requests a predicate:
+
+```tex
+\ExplSyntaxOn
+\prg_new_protected_conditional:Nnn \demo_ready: { p, TF }
+  { \prg_return_true: }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-protected-predicate
+ --> example.tex:2:51
+  |
+2 | \prg_new_protected_conditional:Nnn \demo_ready: { p, TF }
+  |                                                   ^ a protected expl3 conditional cannot define an expandable `p` predicate
+```
+
+## `expl3-variant-type`
+
+Flag incompatible or deprecated argument-type conversions in literal expl3 variant-generation calls. A shorter variant inherits the original suffix. Unchanged letters are valid, `N` may become `c`, and `n` may become `o`, `V`, `v`, `f`, `e`, or `x`. Conversions between these two families are deprecated; other changes are incompatible. Checks cover recognized executable calls and unexpanded function bodies, not stored token lists or unresolved expansion. Report-only: the intended signature is the author's decision.
+
+This rule is **enabled by default**.
+
+A variant cannot add arguments:
+
+```tex
+\ExplSyntaxOn
+\cs_generate_variant:Nn \demo_use:n { nn }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-variant-type
+ --> example.tex:2:39
+  |
+2 | \cs_generate_variant:Nn \demo_use:n { nn }
+  |                                       ^^ incompatible expl3 variant conversion from `n` to `nn`
+```
+
+Converting a single-token argument to a token-list argument is deprecated:
+
+```tex
+\ExplSyntaxOn
+\cs_generate_variant:Nn \demo_use:Nn { nn }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-variant-type
+ --> example.tex:2:40
+  |
+2 | \cs_generate_variant:Nn \demo_use:Nn { nn }
+  |                                        ^^ deprecated expl3 variant conversion from `Nn` to `nn`
+```
+
 ## `extra-alignment-tab`
 
 Flags a row in a built-in `tabular`, `tabular*`, or `array` environment that consumes more columns than its column preamble declares. LaTeX cannot place the overflowing cell and reports an extra alignment tab. Short rows are valid and are not flagged. Custom column types and dynamic `\multicolumn` spans are left alone when their width cannot be established statically. No autofix is offered because either the row or the preamble may be wrong.

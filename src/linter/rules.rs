@@ -29,6 +29,9 @@ pub mod dollar_display_math;
 pub mod duplicate_label;
 pub mod duplicate_package;
 pub mod ellipsis;
+pub mod expl3_invalid_message_parameter;
+pub mod expl3_protected_predicate;
+pub mod expl3_variant_type;
 pub mod extra_alignment_tab;
 pub mod hard_coded_reference;
 pub mod indented_docstrip_guard;
@@ -64,6 +67,9 @@ pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
 pub use duplicate_package::DuplicatePackage;
 pub use ellipsis::Ellipsis;
+pub use expl3_invalid_message_parameter::Expl3InvalidMessageParameter;
+pub use expl3_protected_predicate::Expl3ProtectedPredicate;
+pub use expl3_variant_type::Expl3VariantType;
 pub use extra_alignment_tab::ExtraAlignmentTab;
 pub use hard_coded_reference::HardCodedReference;
 pub use indented_docstrip_guard::IndentedDocstripGuard;
@@ -128,6 +134,9 @@ pub struct RuleContext<'a> {
     /// delimiters are rare, so — unlike `math_regions` — it is computed *lazily*
     /// on first [`RuleContext::in_expl3`] call rather than for every lint.
     expl3_regions: OnceLock<Vec<TextRange>>,
+    /// Executable expl3 calls and their argument context, shared by the three
+    /// semantic rules instead of rediscovered by each rule's traversal.
+    expl3_calls: OnceLock<super::expl3::Expl3Index>,
     /// The document's user command/environment definitions ([`scan_definitions`]),
     /// shared by the rules that must not flag a name the file itself redefines
     /// (`missing-required-argument`, `deprecated-command`, `primitive-command`).
@@ -162,6 +171,7 @@ impl<'a> RuleContext<'a> {
             mode_index: ModeIndex::build(root),
             conditionals: super::conditional::ConditionalIndex::compute(root),
             expl3_regions: OnceLock::new(),
+            expl3_calls: OnceLock::new(),
             user_definitions: OnceLock::new(),
             suppressions: crate::directives::Suppressions::build(root),
         }
@@ -215,6 +225,12 @@ impl<'a> RuleContext<'a> {
     pub(crate) fn user_definitions(&self) -> &SignatureDb {
         self.user_definitions
             .get_or_init(|| scan_definitions(self.root))
+    }
+
+    pub(crate) fn expl3_call(&self, node: &SyntaxNode) -> Option<&super::expl3::Call> {
+        self.expl3_calls
+            .get_or_init(|| super::expl3::Expl3Index::build(self.root))
+            .get(node)
     }
 }
 
@@ -781,6 +797,9 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(PrimitiveCommand),
         Box::new(DollarDisplayMath),
         Box::new(Ellipsis),
+        Box::new(Expl3InvalidMessageParameter),
+        Box::new(Expl3ProtectedPredicate),
+        Box::new(Expl3VariantType),
         Box::new(ExtraAlignmentTab),
         Box::new(HardCodedReference),
         Box::new(IndentedDocstripGuard),
@@ -873,6 +892,9 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "primitive-command",
     "dollar-display-math",
     "ellipsis",
+    "expl3-invalid-message-parameter",
+    "expl3-protected-predicate",
+    "expl3-variant-type",
     "extra-alignment-tab",
     "hard-coded-reference",
     "indented-docstrip-guard",

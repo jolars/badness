@@ -19,6 +19,58 @@ const FIXABLE: &str = "Wait ... what\n";
 const CLEAN: &str = "Nothing to see here.\n";
 const OPT_IN_DASH: &str = "A global--local search.\n";
 
+#[test]
+fn expl3_rules_are_selectable_report_only_and_default_enabled() {
+    let dir = repo_dir();
+    let source = "\\ExplSyntaxOn\n\
+        \\cs_generate_variant:Nn \\demo:n {nn}\n\
+        \\prg_new_protected_conditional:Nnn \\demo: {p} {\\prg_return_true:}\n\
+        \\msg_new:nnn{demo}{bad}{#5}\n\\ExplSyntaxOff\n";
+    let path = dir.path().join("demo.tex");
+    std::fs::write(&path, source).unwrap();
+    let ids = [
+        "expl3-variant-type",
+        "expl3-protected-predicate",
+        "expl3-invalid-message-parameter",
+    ];
+    let output = lint(dir.path(), &["--output=json", "demo.tex"], None);
+    let findings: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    for id in ids {
+        assert!(findings.as_array().unwrap().iter().any(|d| d["rule"] == id));
+        let selected = lint(
+            dir.path(),
+            &["--output=json", "--select", id, "demo.tex"],
+            None,
+        );
+        let findings: serde_json::Value = serde_json::from_slice(&selected.stdout).unwrap();
+        assert_eq!(findings.as_array().unwrap().len(), 1);
+        assert_eq!(findings[0]["rule"], id);
+        assert_eq!(findings[0]["severity"], "warning");
+        assert!(findings[0].get("fix").is_none());
+        for flags in [vec!["--fix"], vec!["--fix", "--unsafe-fixes"]] {
+            let mut args = vec!["--output=json", "--select", id, "demo.tex"];
+            args.extend(flags);
+            let output = lint(dir.path(), &args, None);
+            assert_eq!(output.status.code(), Some(1));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+        }
+    }
+    let ignored = lint(
+        dir.path(),
+        &[
+            "--output=json",
+            "--select",
+            ids[0],
+            "--ignore",
+            ids[0],
+            "demo.tex",
+        ],
+        None,
+    );
+    assert!(ignored.status.success());
+    assert_eq!(String::from_utf8(ignored.stdout).unwrap(), "[]\n");
+}
+
 fn repo_dir() -> TempDir {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir(dir.path().join(".git")).unwrap();

@@ -1644,6 +1644,43 @@ the active set as a post-filter, so the shared driver stays config-unaware. With
 no `select`, resolution starts from rules whose `default_enabled` value is true;
 an explicit `select` may choose any current rule, including an opt-in one.
 
+### expl3 semantic checks
+
+The three report-only expl3 rules share a lazy `linter::expl3::Expl3Index` in
+`RuleContext`. Each rule subscribes to `COMMAND` dispatch and asks for the same
+cached call facts. The index reads complete attached arguments using typed CST
+accessors and `semantic::expl3` slot shapes, but retains the original argspec
+letters: layout can merge `N` with `V`, while variant compatibility cannot.
+Neither a command-shaped node nor a formatter statement boundary proves that the
+command executes.
+
+Recognition starts in top-level code and enters unexpanded `cs_new`, `cs_set`,
+and `cs_gset` definition bodies, their protected/nopar forms, unexpanded
+conditional definitions, and trailing `T`/`F` branches. Other argument bodies
+remain opaque. An incomplete or underivable call, or an expansion wrapper,
+leaves subsequent sibling consumption unknown. In `.dtx` files, only macrocode
+bodies are code; lexed colon-bearing control words also cover their implicit
+expl3 regions without borrowing the formatter's positional layout gate.
+
+Known definition bodies carry their parameter counts. A source-mapped token view
+collapses one level of doubled hashes per enclosing definition and marks outer
+parameter substitutions as unknown. It therefore distinguishes a message's `##5`
+inside a function from that function's own `#5`, without substituting arguments
+or expanding macros. Ordinary CST word tokens may span several TeX characters,
+so parameter reads retain character-level spans: `#51` refers to parameter five
+followed by a literal `1`.
+
+`expl3-variant-type` checks literal variant lists against the base name's raw
+argspec, including inherited suffixes and deprecated conversions.
+`expl3-protected-predicate` checks literal `p` requests in protected conditional
+definitions. `expl3-invalid-message-parameter` checks both message-text
+arguments for parameters five through nine. Their reference is explcheck at
+commit `48bc5831e3eff1ce3e3243ea5e582fead6e143da`; Rust regressions pin the
+supported behavior without adding an external tool dependency to CI. All three
+emit warnings without fixes, since the intended signature or meaning is unknown.
+Symbol resolution, definition indexing, and additional operation semantics
+remain separate work.
+
 ### Autofixes
 
 A diagnostic may carry a `Fix`: one or more edits applied atomically, so a

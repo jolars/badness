@@ -1,0 +1,25 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `expl3-invalid-message-parameter`
+
+Flag `#5` through `#9` in either text argument of a literal expl3 `msg_new`, `msg_set`, or `msg_gset` definition. Messages accept only `#1` through `#4`. Escaped hashes and parameters belonging to an enclosing function definition are distinguished from message parameters. Checks cover recognized executable calls and unexpanded function bodies; stored token lists, expanded text arguments, and unresolved calls stay silent. Report-only: the intended message argument is unknown.
+
+This rule is **enabled by default**.
+
+A message refers to a fifth parameter:
+
+```tex
+\ExplSyntaxOn
+\msg_new:nnn { demo } { bad-value } { Invalid~value:~#5 }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-invalid-message-parameter
+ --> example.tex:2:54
+  |
+2 | \msg_new:nnn { demo } { bad-value } { Invalid~value:~#5 }
+  |                                                      ^^ invalid expl3 message parameter `#5`; messages accept only `#1` through `#4`
+```

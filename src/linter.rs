@@ -10,6 +10,7 @@ pub mod check;
 pub(crate) mod conditional;
 pub mod diagnostic;
 pub mod docs;
+pub(crate) mod expl3;
 pub mod fix;
 pub mod render;
 pub mod rules;

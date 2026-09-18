@@ -1,0 +1,26 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `expl3-protected-predicate`
+
+Flag a protected expl3 conditional definition whose literal condition list requests a `p` predicate. Predicates must be expandable, which protection prevents. The `new`, `set`, and `gset` families are checked in recognized executable code, including unexpanded function bodies. Computed condition lists and unresolved calls stay silent. Report-only: choosing between protection and the predicate changes the function's API or meaning.
+
+This rule is **enabled by default**.
+
+A protected conditional requests a predicate:
+
+```tex
+\ExplSyntaxOn
+\prg_new_protected_conditional:Nnn \demo_ready: { p, TF }
+  { \prg_return_true: }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-protected-predicate
+ --> example.tex:2:51
+  |
+2 | \prg_new_protected_conditional:Nnn \demo_ready: { p, TF }
+  |                                                   ^ a protected expl3 conditional cannot define an expandable `p` predicate
+```

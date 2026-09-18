@@ -171,28 +171,21 @@ statement recognition, and formatting. The definition scanner in
 `crates/badness-parser/src/semantic/define.rs` does not yet recognize the
 `\cs_new:*`, conditional-definition, or variant families.
 
-- [ ] **Start with three report-only rules over recognized calls.** Check
-  incompatible function variants (`T403`, followed by deprecated variant
-  conversions from `W410`), protected predicates (`E404`), and invalid message
-  parameters (`E425`). These need no project-wide symbol resolution. For
-  example, `\cs_generate_variant:Nn \demo_use:n { nn }` requests more arguments
-  than the original specification, a protected conditional must not request a
-  `p` form, and message text cannot use `#5`. Use stable kebab-case Badness rule
-  IDs; the explcheck IDs identify reference behavior, not the proposed public
-  names. Withhold fixes where the author's intended signature or meaning is
-  unknown.
+- [x] **Start with three report-only rules over recognized calls.** Added
+  `expl3-variant-type` (`T403` and `W410`), `expl3-protected-predicate` (`E404`),
+  and `expl3-invalid-message-parameter` (`E425`). All three are enabled by
+  default and emit warnings without fixes. They cover literal operands in
+  complete calls, unexpanded function bodies, and conditional branches, without
+  project-wide symbol resolution.
 
-- [ ] **Build shared semantic call-reading helpers.** Keep these pure and
-  above the parser, reusing `semantic::expl3` and typed CST reads. Preserve the
-  original argspec letters: `Expl3Slot` deliberately merges `N` with `V`, and
-  `n` with expansion forms, which is enough for layout but insufficient for
-  linting. Distinguish executable bodies from token-list data and retain unknown
-  or incomplete cases. A command-shaped token is not necessarily a call, and
-  an unsupported shape is not evidence of an undefined symbol. Keep the
-  parser's conservative fallback and its text-purity contract intact; do not
-  add general macro expansion or catcode evaluation. Rules should use shared
-  dispatch, with a shared index in `RuleContext` once multiple rules need the
-  same derived facts.
+- [x] **Build shared semantic call-reading helpers.** `linter::expl3` reads
+  attached call arguments through typed CST accessors and `semantic::expl3`,
+  retaining original argspec letters. A lazy `RuleContext` index distinguishes
+  executable bodies from token-list data and maps nested definition parameters
+  back to source spans. Incomplete calls, expansion wrappers, unknown argument
+  bodies, and ambiguous following siblings stay unknown. This adds no parser
+  attachment policy, macro expansion, or catcode evaluation. Further operation
+  semantics can extend this conservative foundation.
 
 - [ ] **Add deprecation and variable checks next.** Generate a pinned
   deprecation table from LaTeX3's `l3obsolete.txt` for `W202`. Variable type

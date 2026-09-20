@@ -141,7 +141,8 @@ especially idempotency and losslessness regressions.
      have not fixed yet is **not** out of scope, and allowlisting it buries the
      work. When in doubt, leave it failing and say so in the report.
    - **`timeout` ⇒ a hang or pathological slowness.** Reproduce with the
-     `/profile` skill's micro-bench; never-infinite-loop on unexpected input
+     [perf-investigation](../perf-investigation/SKILL.md) skill's matching
+     harness; never-infinite-loop on unexpected input
      is a parser invariant.
    - **`unknown` ⇒ read the sample log before assuming a badness bug.** The
      scan buckets any failure whose output matches no known label here —

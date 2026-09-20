@@ -1,0 +1,3 @@
+interface:
+  display_name: "Investigate Badness Performance"
+  short_description: "Profile Badness latency, throughput, and memory"

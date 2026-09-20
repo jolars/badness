@@ -33,26 +33,66 @@
     return out;
   }
 
-  // Exact powers of ten spanning the data's ratio range, so the log axis ticks
-  // (and grid) land only on 10ⁿ values the label expression can render cleanly.
-  function powersOfTenTicks(points) {
-    var ratios = points
+  // Whole decades keep the log scale easy to read; a small margin keeps dots
+  // at the domain boundaries clear of the plot edges.
+  function logDomain(points, field) {
+    var values = points
       .map(function (p) {
-        return p.ratio;
+        return p[field];
       })
-      .filter(function (r) {
-        return r > 0;
+      .filter(function (value) {
+        return Number.isFinite(value) && value > 0;
       });
-    if (!ratios.length) {
-      return [1];
+    var lo = Math.floor(Math.log10(Math.min.apply(null, values.concat([1]))));
+    var hi = Math.ceil(Math.log10(Math.max.apply(null, values.concat([1]))));
+    if (lo === hi) {
+      lo--;
+      hi++;
     }
-    var lo = Math.floor(Math.log10(Math.min.apply(null, ratios)));
-    var hi = Math.ceil(Math.log10(Math.max.apply(null, ratios)));
+    return [Math.pow(10, lo) / 1.1, Math.pow(10, hi) * 1.1];
+  }
+
+  // Match ggplot2's log ticks: long at powers of ten, medium at five, and
+  // short at the other subdivisions. Only powers of ten receive labels.
+  function logAxis(domain, color) {
     var ticks = [];
-    for (var e = lo; e <= hi; e++) {
-      ticks.push(Math.pow(10, e));
+    var major = [];
+    var middle = [];
+    for (
+      var e = Math.floor(Math.log10(domain[0]));
+      e <= Math.ceil(Math.log10(domain[1]));
+      e++
+    ) {
+      for (var m = 1; m < 10; m++) {
+        var value = m * Math.pow(10, e);
+        if (value >= domain[0] && value <= domain[1]) {
+          ticks.push(value);
+          if (m === 1) major.push(value);
+          if (m === 5) middle.push(value);
+        }
+      }
     }
-    return ticks;
+    var isMajor = "indexof(" + JSON.stringify(major) + ", datum.value) >= 0";
+    var isMiddle = "indexof(" + JSON.stringify(middle) + ", datum.value) >= 0";
+    return {
+      values: ticks,
+      labelExpr: isMajor + " ? format(datum.value, ',~g') : ''",
+      labelOverlap: false,
+      labelPadding: 4,
+      tickColor: color,
+      tickSize: {
+        condition: [
+          { test: isMajor, value: 9 },
+          { test: isMiddle, value: 6 },
+        ],
+        value: 3,
+      },
+      grid: true,
+      gridOpacity: {
+        condition: { test: isMajor + " && datum.value !== 1", value: 1 },
+        value: 0,
+      },
+    };
   }
 
   function spec(points) {
@@ -61,6 +101,7 @@
     var grid = dark ? "#3b3f5c" : "#dddddd";
     var formatters = orderedUnique(points, "formatter");
     var documents = orderedUnique(points, "document");
+    var domain = logDomain(points, "ratio");
 
     return {
       $schema: "https://vega.github.io/schema/vega-lite/v5.json",
@@ -96,13 +137,8 @@
               field: "ratio",
               type: "quantitative",
               title: "Time relative to badness",
-              scale: { type: "log" },
-              axis: {
-                // Pin ticks to exact powers of ten and label them as plain
-                // decimals (1000, 100, 10, 1, 0.1, …); "~f" trims trailing zeros.
-                values: powersOfTenTicks(points),
-                format: "~f",
-              },
+              scale: { type: "log", domain: domain, nice: false },
+              axis: logAxis(domain, fg),
             },
             color: {
               field: "document",

@@ -52,7 +52,7 @@ impl<'a> FormatContext<'a> {
 
     fn max_inline_width(self, indent: usize) -> usize {
         self.style
-            .line_width
+            .effective_line_width()
             .saturating_sub(self.style.indent_width * indent)
     }
 }

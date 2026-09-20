@@ -11,7 +11,7 @@ its default.
 # extend-exclude = []
 
 [format]
-# line-width = 80
+# line-width = 80  # 0 disables width-based wrapping
 # indent-width = 2
 # item-indent = "hang"  # hang | indent | none
 # wrap = "reflow"  # reflow | stable | sentence | semantic | preserve
@@ -152,7 +152,12 @@ takes precedence for a single run.
 
 ### `line-width`
 
-Maximum line width before the formatter breaks a line. Must be between 1 and 1000.
+Maximum line width before the formatter breaks a line. Must be between 0 and 1000.
+Set `line-width = 0` to disable width-based wrapping. Sentence breaks, authored
+breaks retained by the selected wrap mode, and structural line breaks still
+apply. This setting also controls width-based layout in display math, command
+arguments, and BibTeX values. Protected content and indivisible atoms may exceed
+a positive width.
 
 **Default value**: `80`
 
@@ -210,21 +215,21 @@ item-indent = "indent"
 How the formatter lays out line breaks *inside a paragraph*. It does not affect
 structure, only where soft line breaks fall.
 
-  | Mode       | Behavior                                                                                                        |
-  | ---------- | --------------------------------------------------------------------------------------------------------------- |
-  | `reflow`   | Greedy fill: pack words up to `line-width`, breaking only where the next word would overflow.                   |
-  | `stable`   | Preserve acceptable authored breaks and rebalance only text that no longer fits (keeps revision diffs small).   |
-  | `preserve` | Leave the authored line breaks untouched.                                                                       |
-  | `sentence` | One sentence per line. Line width is ignored—a long sentence stays on one line.                                 |
-  | `semantic` | [Semantic line breaks](https://sembr.org): keep the author's soft breaks *and* add a break after each sentence. |
+  | Mode       | Behavior                                                                                                                       |
+  | ---------- | ------------------------------------------------------------------------------------------------------------------------------ |
+  | `reflow`   | Greedy fill: pack words up to `line-width`, breaking only where the next word would overflow.                                  |
+  | `stable`   | Preserve acceptable authored breaks and rebalance only text that no longer fits (keeps revision diffs small).                  |
+  | `preserve` | Leave the authored line breaks untouched.                                                                                      |
+  | `sentence` | One sentence per line. Line width is ignored—a long sentence stays on one line.                                                |
+  | `semantic` | [Semantic line breaks](https://sembr.org): keep authored breaks, add sentence breaks, and wrap overlong lines to `line-width`. |
 
-Both `sentence` and `semantic` split a paragraph at sentence boundaries, one
-sentence per line. Boundary detection is a small per-language rule engine over
-the words: a `.`, `!`, or `?` ends a sentence *unless* the word is a known
-abbreviation (`e.g.`, `Fig.`, `Dr.`, etc.) an ellipsis (`...`, `…`), or a
-contextual abbreviation whose following word signals that the sentence continues
-(`U.S. Government` stays together, `U.S. However` splits). The abbreviation
-profile is chosen by [`lang`](#lang) and extended by
+Both `sentence` and `semantic` split a paragraph at sentence boundaries.
+Boundary detection is a small per-language rule engine over the words: a `.`,
+`!`, or `?` ends a sentence *unless* the word is a known abbreviation (`e.g.`,
+`Fig.`, `Dr.`, etc.) an ellipsis (`...`, `…`), or a contextual abbreviation
+whose following word signals that the sentence continues (`U.S. Government`
+stays together, `U.S. However` splits). The abbreviation profile is chosen by
+[`lang`](#lang) and extended by
 [`no-break-abbreviations`](#no-break-abbreviations).
 
 In `sentence` mode, citation commands follow their grammatical role.
@@ -238,8 +243,22 @@ line but preserves an authored line break.
 `semantic` additionally *preserves the author's own line breaks* on top of the
 sentence breaks (the [sembr](https://sembr.org) convention). It does not detect
 clause boundaries itself—a break after a comma or `and` survives only where the
-author placed a newline. A run-on sentence on a single source line is still
-sentence-split.
+author placed a newline. Long sentences wrap at `line-width`, so one sentence
+can span several lines. Each sentence starts on a new line even if it would fit
+beside the preceding one.
+
+Earlier versions ignored width in `semantic` mode. To keep unlimited semantic
+prose, use:
+
+```toml
+[format]
+wrap = "semantic"
+line-width = 0
+```
+
+Zero also disables width-based wrapping outside prose. Authored breaks remain
+preserved, including breaks inserted by an earlier formatting pass: increasing
+the width does not automatically join them.
 
 `stable` also preserves authored line breaks, but treats them as preferred
 anchors rather than hard boundaries. It is aimed at keeping revision diffs
@@ -251,7 +270,9 @@ authored break, raggedness around that target, and line count. This makes the
 hard width non-negotiable before minimizing source churn, while a short final
 line remains unpenalized. Blank lines and command-only lines bound each
 independently optimized run, and code-like statement bodies retain ordinary
-greedy fill. (The soft target is not currently configurable.)
+greedy fill. (The soft target is not currently configurable.) With
+`line-width = 0`, `stable` retains authored breaks without balancing line
+lengths.
 
 When omitted, every file kind reflows—`.tex`, `.bib`, `.sty`, `.cls`, `.dtx`,
 and `.ins` alike. A file's extension is not a layout input.

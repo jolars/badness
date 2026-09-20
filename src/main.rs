@@ -438,12 +438,11 @@ const STARTER_CONFIG: &str = "\
 # extend-exclude = []
 
 [format]
-# line-width = 80
+# line-width = 80  # 0 disables width-based wrapping
 # indent-width = 2
 # item-indent = \"hang\"  # hang | indent | none
 # wrap = \"reflow\"  # reflow | stable | sentence | semantic | preserve
-                     # omit to use each file kind's default
-                     # (.tex -> reflow, .sty/.cls/.dtx/.ins -> preserve)
+                     # semantic keeps authored and sentence breaks, then wraps to width
 # math-wrap = \"auto\"  # auto | preserve | single-line | break
                         # display-math line breaking; auto derives from wrap
                         # (preserve -> preserve, else break)

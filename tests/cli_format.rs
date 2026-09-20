@@ -56,6 +56,35 @@ fn format(dir: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
+fn semantic_line_width_config_and_overrides() {
+    let dir = repo_dir();
+    let input = "Alpha beta gamma delta epsilon. Next sentence.\n";
+    let narrow = "Alpha beta gamma\ndelta epsilon.\nNext sentence.\n";
+    let unlimited = "Alpha beta gamma delta epsilon.\nNext sentence.\n";
+    for (width, expected, override_width, overridden) in
+        [(20, narrow, "0", unlimited), (0, unlimited, "20", narrow)]
+    {
+        std::fs::write(
+            dir.path().join("badness.toml"),
+            format!("[format]\nwrap = \"semantic\"\nline-width = {width}\n"),
+        )
+        .unwrap();
+        for (args, expected) in [
+            (vec![], expected),
+            (vec!["--line-width", override_width], overridden),
+        ] {
+            let output = format_stdin(dir.path(), &args, Some(input));
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+        }
+    }
+}
+
+#[test]
 fn item_indent_flag_overrides_config() {
     let dir = repo_dir();
     std::fs::write(

@@ -28,6 +28,13 @@ pub(crate) enum Ir {
     /// Always a newline + current indent, regardless of mode. Forces every
     /// enclosing [`Ir::Group`] to break.
     HardLine,
+    /// Always a newline, but does not classify enclosing content as a forced
+    /// block during lowering or break propagation. Semantic wrapping preserves
+    /// source newlines that may themselves come from a previous width fill;
+    /// treating those as structural breaks would change the enclosing layout
+    /// on the next pass. Fit measurement still rejects a flat layout containing
+    /// this break, so groups decide their layout from their actual content.
+    PreservedLine,
     /// A blank line followed by the next line's indent. Like [`Ir::HardLine`] it
     /// forces enclosing groups to break.
     EmptyLine,
@@ -310,7 +317,8 @@ impl Ir {
     }
 
     /// Build a source-break-aware paragraph fill. `preferred[i]` describes the
-    /// gap between atoms `i` and `i + 1`.
+    /// gap between atoms `i` and `i + 1`. A zero target preserves these breaks
+    /// without balancing line lengths.
     pub(crate) fn preferred_fill(
         atoms: impl IntoIterator<Item = Ir>,
         preferred: Vec<bool>,
@@ -347,6 +355,22 @@ impl Ir {
         match atoms.len() {
             0 => Ir::Nil,
             1 => atoms.into_iter().next().unwrap(),
+            _ if target == 0 => {
+                // Without width pressure, authored breaks must survive even
+                // inside a group that would otherwise choose a flat layout.
+                let mut parts = Vec::with_capacity(atoms.len() * 2 - 1);
+                for (i, atom) in atoms.into_iter().enumerate() {
+                    if i > 0 {
+                        parts.push(if preferred[i - 1] {
+                            Ir::hard_line()
+                        } else {
+                            Ir::text(" ")
+                        });
+                    }
+                    parts.push(atom);
+                }
+                Ir::concat(parts)
+            }
             _ => Ir::PreferredFill {
                 atoms: atoms.into(),
                 preferred: preferred.into(),
@@ -464,6 +488,10 @@ impl Ir {
         Ir::HardLine
     }
 
+    pub(crate) fn preserved_line() -> Ir {
+        Ir::PreservedLine
+    }
+
     pub(crate) fn empty_line() -> Ir {
         Ir::EmptyLine
     }
@@ -476,8 +504,9 @@ impl Ir {
     /// `HardLine`/`EmptyLine`, a force-break `Verbatim` (e.g. a comment), or an
     /// `expand` group. Conditional breaks (`IfBreak` branches, `SoftLine`,
     /// `Line`) do not count, since they only break when an enclosing group does.
-    /// Used to detect, e.g., a non-empty block argument that should force its
-    /// arg list open.
+    /// Preserved source lines also do not count: they constrain fit measurement
+    /// without promoting inline content to a structural block. Used to detect,
+    /// e.g., a non-empty block argument that should force its arg list open.
     pub(crate) fn contains_forced_break(&self) -> bool {
         match self {
             Ir::HardLine | Ir::EmptyLine => true,
@@ -509,6 +538,7 @@ impl Ir {
             | Ir::Line
             | Ir::TightLine
             | Ir::SoftLine
+            | Ir::PreservedLine
             | Ir::IfBreak { .. }
             | Ir::Nil => false,
         }
@@ -551,6 +581,7 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
         | Ir::Line
         | Ir::TightLine
         | Ir::SoftLine
+        | Ir::PreservedLine
         | Ir::Nil => (false, None),
         Ir::Concat(items) => {
             let (forced, rewritten) = saturate_slice(items);
@@ -779,6 +810,7 @@ mod tests {
             | Ir::ColumnZero(_)
             | Ir::ZeroWidth(_)
             | Ir::HardLine
+            | Ir::PreservedLine
             | Ir::EmptyLine
             | Ir::Line
             | Ir::TightLine

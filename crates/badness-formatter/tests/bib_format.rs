@@ -199,6 +199,45 @@ fn format_refuses_unparseable_input() {
 }
 
 #[test]
+fn unlimited_line_width_preserves_entry_structure() {
+    let input = "@article{key, title={Alpha beta gamma delta epsilon zeta eta theta}, author={Doe, Jane}}\n";
+    let style = FormatStyle {
+        line_width: 0,
+        ..FormatStyle::default()
+    };
+    let actual = format_with_style(input, style).unwrap();
+    let wide = format_with_style(
+        input,
+        FormatStyle {
+            line_width: 1000,
+            ..style
+        },
+    )
+    .unwrap();
+    let narrow = format_with_style(
+        input,
+        FormatStyle {
+            line_width: 20,
+            ..style
+        },
+    )
+    .unwrap();
+    assert_eq!(actual, wide);
+    assert_ne!(actual, narrow);
+    assert!(
+        actual.contains("{Alpha beta gamma delta epsilon zeta eta theta}"),
+        "{actual}"
+    );
+    assert!(actual.starts_with("@article{key,\n"));
+    assert!(actual.ends_with("\n}\n"));
+    assert_eq!(format_with_style(&actual, style).unwrap(), actual);
+    assert_eq!(meaning(input), meaning(&actual));
+    assert_eq!(field_values(input), field_values(&actual));
+    assert!(parse(&actual).errors.is_empty());
+    assert_eq!(reconstruct(&actual), actual);
+}
+
+#[test]
 fn indent_width_is_honored() {
     let input = "@misc{k, t = {x}}\n";
     let style = FormatStyle {

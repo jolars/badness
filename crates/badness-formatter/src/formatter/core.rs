@@ -1861,20 +1861,19 @@ enum RunRender<'a> {
     Fill,
     /// Source-break-aware optimal fill used by [`WrapMode::Stable`].
     Stable { target: usize },
-    /// One sentence per line (sentence/semantic): cut the run at sentence
-    /// boundaries and lay each sentence flat (space-joined), separating sentences
-    /// with a hard break. Width is ignored — a long sentence stays on one line.
+    /// One sentence per line, regardless of width.
     Sentence(ResolvedProfile<'a>),
+    /// Sentence boundaries remain hard breaks while each sentence fills to width.
+    Semantic(ResolvedProfile<'a>),
 }
 
-/// Split a logical-line run into sentences and lay each one flat. Adjacent atoms
-/// within a run are always whitespace-separated (a glued no-whitespace span is a
-/// single atom), so the inter-atom separator is a single literal space and the
-/// boundary detector always sees `has_whitespace_after = true`; the final atom
-/// closes the last sentence regardless. A single inserted space keeps every
-/// preserved token boundary from re-lexing into a merged token, so the result
-/// reparses to the same tokens (idempotent).
-fn render_sentences(run: Vec<RunAtom>, profile: ResolvedProfile<'_>) -> Ir {
+/// Split a logical-line run into sentences, optionally filling each to width.
+/// Adjacent atoms within a run are always whitespace-separated (a glued
+/// no-whitespace span is a single atom), so either a space or a width-driven
+/// line break preserves the token boundaries. The boundary detector always
+/// sees `has_whitespace_after = true`; the final atom closes the last sentence
+/// regardless.
+fn render_sentences(run: Vec<RunAtom>, profile: ResolvedProfile<'_>, fill: bool) -> Ir {
     let n = run.len();
     // Break decisions for the n-1 internal gaps, read before the run is consumed.
     let mut break_after = vec![false; n];
@@ -1930,19 +1929,32 @@ fn render_sentences(run: Vec<RunAtom>, profile: ResolvedProfile<'_>) -> Ir {
 
     let mut sentences: Vec<Ir> = Vec::new();
     let mut current: Vec<Ir> = Vec::new();
-    for (i, atom) in run.into_iter().enumerate() {
-        if !current.is_empty() {
-            current.push(Ir::text(" "));
+    let render_sentence = |atoms: Vec<Ir>| {
+        if fill {
+            Ir::fill(atoms)
+        } else {
+            Ir::join(Ir::text(" "), atoms)
         }
+    };
+    for (i, atom) in run.into_iter().enumerate() {
         current.push(atom.ir);
         if break_after[i] {
-            sentences.push(Ir::concat(std::mem::take(&mut current)));
+            sentences.push(render_sentence(std::mem::take(&mut current)));
         }
     }
     if !current.is_empty() {
-        sentences.push(Ir::concat(current));
+        sentences.push(render_sentence(current));
     }
-    Ir::join(Ir::hard_line(), sentences)
+    // Semantic sentence boundaries reparse as authored newlines, so both
+    // passes must preserve them without promoting the run to a block.
+    Ir::join(
+        if fill {
+            Ir::preserved_line()
+        } else {
+            Ir::hard_line()
+        },
+        sentences,
+    )
 }
 
 /// Accumulator for [`reflow_elements`]: glues atom pieces, collects them into the
@@ -2202,7 +2214,8 @@ impl<'a> LineBuilder<'a> {
                     .collect();
                 Ir::preferred_fill(run.into_iter().map(|a| a.ir), preferred, target)
             }
-            RunRender::Sentence(profile) => render_sentences(run, profile),
+            RunRender::Sentence(profile) => render_sentences(run, profile, false),
+            RunRender::Semantic(profile) => render_sentences(run, profile, true),
         }
     }
 
@@ -2278,9 +2291,8 @@ fn reflow_elements_checked(
         WrapMode::Stable if kind != ReflowKind::Statement => RunRender::Stable {
             target: cx.stable_target,
         },
-        WrapMode::Sentence | WrapMode::Semantic if kind != ReflowKind::Statement => {
-            RunRender::Sentence(cx.profile)
-        }
+        WrapMode::Sentence if kind != ReflowKind::Statement => RunRender::Sentence(cx.profile),
+        WrapMode::Semantic if kind != ReflowKind::Statement => RunRender::Semantic(cx.profile),
         _ => RunRender::Fill,
     };
 
@@ -2392,6 +2404,15 @@ fn reflow_elements_checked(
                         || next_is_command
                     {
                         b.end_line();
+                        if cx.wrap == WrapMode::Semantic
+                            && kind != ReflowKind::Statement
+                            && line_has_content
+                        {
+                            // A width break from the previous pass must stay a
+                            // line break without becoming a structural block
+                            // that changes an enclosing argument's lowering.
+                            b.pending_sep = Ir::preserved_line();
+                        }
                     } else {
                         b.flush_atom();
                         // Stable uses this as a soft layout preference; sentence
@@ -6899,6 +6920,9 @@ fn build_alignment_grid(
             });
             return Some(());
         }
+        // Preserved breaks are nonstructural, but still emit newlines in flat
+        // mode. Embedding them in a row's `Ir::Text` would bypass margin prefixes.
+        printer.flat_width(&ir)?;
         cells.push(Cell {
             text: printer.print_flat(&ir).trim().to_string(),
             span,
@@ -10815,7 +10839,7 @@ fn classify_trivia(gap: WideGap, soften_newline: bool) -> Ir {
 /// so protected content survives.
 fn is_trimmable_break(ir: &Ir) -> bool {
     match ir {
-        Ir::HardLine | Ir::EmptyLine | Ir::Nil => true,
+        Ir::HardLine | Ir::PreservedLine | Ir::EmptyLine | Ir::Nil => true,
         Ir::Verbatim { text, force_break } => {
             !force_break && text.chars().all(|c| c == ' ' || c == '\t')
         }

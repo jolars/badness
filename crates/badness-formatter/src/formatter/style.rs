@@ -34,9 +34,9 @@ pub enum WrapMode {
     /// long sentence stays on one line.
     Sentence,
     /// Semantic line breaks (<https://sembr.org/>): keep the author's soft line
-    /// breaks *and* add a break after each sentence. Like [`WrapMode::Sentence`]
-    /// plus preserving authored newlines; clause boundaries survive only where the
-    /// author placed a break (no comma/colon detection).
+    /// breaks, add a break after each sentence, and fill overlong lines to
+    /// `line_width`. Clause boundaries survive only where the author placed a
+    /// break (no comma/colon detection). A zero width disables width-based breaks.
     Semantic,
     /// Leave paragraph line breaks exactly as authored (only collapse trailing
     /// whitespace and blank-line runs, as before reflow existed).
@@ -242,6 +242,8 @@ pub(crate) fn apply_line_ending(out: &mut String, resolved: LineEnding) {
 )]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FormatStyle {
+    /// Width used for layout decisions. Zero disables width-based wrapping;
+    /// structural breaks and the selected paragraph policy still apply.
     pub line_width: usize,
     pub indent_width: usize,
     pub item_indent: ItemIndent,
@@ -272,12 +274,27 @@ impl Default for FormatStyle {
 /// field if a concrete user need for tuning it appears.
 pub(crate) const STABLE_WRAP_TARGET_OFFSET: usize = 15;
 
+/// Leave headroom for column arithmetic while exceeding any realizable document.
+pub(crate) const UNLIMITED_LINE_WIDTH: usize = usize::MAX / 2;
+
 impl FormatStyle {
+    pub(crate) fn effective_line_width(self) -> usize {
+        if self.line_width == 0 {
+            UNLIMITED_LINE_WIDTH
+        } else {
+            self.line_width
+        }
+    }
+
     /// Soft equilibrium target for [`WrapMode::Stable`]: [`STABLE_WRAP_TARGET_OFFSET`]
     /// columns below the hard `line_width`, clamped to at least one column. It can
-    /// never exceed the hard width, including for styles built directly by API
-    /// callers.
+    /// never exceed a positive hard width, including for styles built directly
+    /// by API callers. Zero means unlimited width: stable wrapping then retains
+    /// authored breaks without balancing line lengths.
     pub fn stable_wrap_target(self) -> usize {
+        if self.line_width == 0 {
+            return 0;
+        }
         self.line_width
             .saturating_sub(STABLE_WRAP_TARGET_OFFSET)
             .clamp(1, self.line_width.max(1))

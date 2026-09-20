@@ -198,9 +198,14 @@ fn schema_rejects_invalid_enums_and_types() {
 }
 
 #[test]
+fn schema_accepts_unlimited_line_width() {
+    assert!(validation_errors("[format]\nline-width = 0").is_empty());
+}
+
+#[test]
 fn schema_rejects_widths_outside_the_runtime_range() {
     for source in [
-        "[format]\nline-width = 0",
+        "[format]\nline-width = -1",
         "[format]\nline-width = 1001",
         "[format]\nindent-width = 0",
         "[format]\nindent-width = 1001",

@@ -388,6 +388,20 @@ mod tests {
     }
 
     #[test]
+    fn semantic_line_width_and_unlimited_width() {
+        let input = "Alpha beta gamma delta epsilon. Next sentence.\n";
+        for (width, expected) in [
+            (20, "Alpha beta gamma\ndelta epsilon.\nNext sentence.\n"),
+            (0, "Alpha beta gamma delta epsilon.\nNext sentence.\n"),
+        ] {
+            assert_eq!(
+                format_impl(input, "tex", Some(width), None, Some("semantic"), None).unwrap(),
+                expected,
+            );
+        }
+    }
+
+    #[test]
     fn format_smoke_per_file_type() {
         assert!(format_impl("Hello \\emph{world}.\n", "tex", None, None, None, None).is_ok());
         assert!(format_impl("\\def\\x@y{z}\n", "sty-cls", None, None, None, None).is_ok());

@@ -48,7 +48,7 @@ With paths, formats each file in place. Reads stdin (to stdout) when given `-`, 
 :   Name the stdin buffer so its language is dispatched by extension (`.bib` → BibTeX, anything else → LaTeX). No file is read or written; only the extension is used. Ignored when paths are given
 
 `--line-width <LINE_WIDTH>`
-:   Maximum line width before the formatter breaks a line
+:   Maximum line width before the formatter breaks a line; 0 disables width-based wrapping
 
 `--indent-width <INDENT_WIDTH>`
 :   Number of spaces per indent step
@@ -70,7 +70,7 @@ With paths, formats each file in place. Reads stdin (to stdout) when given `-`, 
     - `reflow`: Greedy fill: wrap words to the line width (default)
     - `stable`: Preserve acceptable authored breaks and rebalance only nearby text (revision-stable wrapping)
     - `sentence`: One sentence per line (line width ignored)
-    - `semantic`: Semantic line breaks (sembr.org): keep authored breaks and add breaks at sentence boundaries
+    - `semantic`: Semantic line breaks (sembr.org): keep authored breaks, add sentence breaks, and wrap overlong lines to the line width
     - `preserve`: Leave authored line breaks untouched
 
 `--math-wrap <MATH_WRAP>`

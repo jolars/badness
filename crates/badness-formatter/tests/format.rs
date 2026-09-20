@@ -2217,6 +2217,213 @@ fn assert_fixture(name: &str, style: FormatStyle) {
 }
 
 #[test]
+fn semantic_wrap_respects_line_width() {
+    let style = FormatStyle {
+        wrap: WrapMode::Semantic,
+        line_width: 20,
+        ..FormatStyle::default()
+    };
+    for (input, expected) in [
+        (
+            "Alpha beta gamma delta epsilon. Next sentence.\n",
+            "Alpha beta gamma\ndelta epsilon.\nNext sentence.\n",
+        ),
+        ("One. Two.\n", "One.\nTwo.\n"),
+        (
+            "Alpha beta\ngamma delta epsilon zeta eta. Next.\n",
+            "Alpha beta\ngamma delta epsilon\nzeta eta.\nNext.\n",
+        ),
+        (
+            "\\begin{itemize}\n\\item Alpha beta gamma delta epsilon. Next.\n\\end{itemize}\n",
+            "\\begin{itemize}\n  \\item Alpha beta\n        gamma delta\n        epsilon.\n        Next.\n\\end{itemize}\n",
+        ),
+        (
+            "\\section[\\emph{alpha beta gamma delta epsilon}]{Title}\n",
+            "\\section[\\emph{\n  alpha beta gamma\n  delta epsilon\n}]{Title}\n",
+        ),
+    ] {
+        assert_eq!(format_with_style(input, style).unwrap(), expected);
+        check_format_invariants(input, style, LexConfig::default()).unwrap();
+    }
+}
+
+#[test]
+fn semantic_wrap_nested_arguments_are_idempotent() {
+    for input in [
+        "\\section[\\emph{alpha beta gamma delta epsilon}]{Title}\n",
+        "\\section[\\emph{alpha beta\ngamma delta epsilon}]{Title}\n",
+        "\\section[short, \\emph{alpha beta gamma delta epsilon}]{Title}\n",
+        "\\foo{\\emph{alpha beta gamma delta epsilon}}\n",
+        "\\caption{\\emph{alpha beta gamma delta epsilon}}\n",
+        "\\section[\\emph{First sentence. Second sentence.}]{Title}\n",
+        "\\foo{\\emph{First sentence. Second sentence.}}\n",
+        "\\caption{\\emph{First sentence. Second sentence.}}\n",
+        "\\section[\\emph{alpha beta % comment\ngamma delta epsilon}]{Title}\n",
+        "\\foo{\\emph{alpha beta\n\ngamma delta epsilon}}\n",
+        "\\caption{Before \\textbf{\\emph{alpha beta gamma delta epsilon}} after.}\n",
+        "\\begin{tabular}{ll}\n\\emph{alpha beta gamma delta epsilon} & Title \\\\\n\\end{tabular}\n",
+        "Before.\n\\section[\\emph{alpha beta gamma delta epsilon}]{Title}\nAfter.\n",
+    ] {
+        for line_width in [0, 20, 30, 80] {
+            let style = FormatStyle {
+                wrap: WrapMode::Semantic,
+                line_width,
+                ..FormatStyle::default()
+            };
+            check_format_invariants(input, style, LexConfig::default())
+                .unwrap_or_else(|e| panic!("{input:?}, width {line_width}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn semantic_wrap_width_preserves_sentence_and_content_invariants() {
+    for name in [
+        "sentence_abbreviations",
+        "sentence_ellipsis",
+        "sentence_contextual_abbrev",
+        "sentence_inline_math",
+        "sentence_caption",
+        "issue_163_sentence_citations",
+    ] {
+        let input = fs::read_to_string(fixture_path(name, "input.tex")).unwrap();
+        for line_width in [0, 20, 80] {
+            let style = FormatStyle {
+                wrap: WrapMode::Semantic,
+                line_width,
+                ..FormatStyle::default()
+            };
+            check_format_invariants(&input, style, LexConfig::default())
+                .unwrap_or_else(|e| panic!("{name}, width {line_width}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn semantic_wrap_counts_dtx_margins() {
+    let input = "% Alpha beta gamma delta epsilon. Next.\n";
+    let config = LexConfig {
+        dtx: true,
+        ..LexConfig::default()
+    };
+    let style = FormatStyle {
+        wrap: WrapMode::Semantic,
+        line_width: 20,
+        ..FormatStyle::default()
+    };
+    assert_eq!(
+        format_with_style_flavored(input, style, config).unwrap(),
+        "% Alpha beta gamma\n% delta epsilon.\n% Next.\n",
+    );
+    check_format_invariants(input, style, config).unwrap();
+}
+
+#[test]
+fn semantic_wrap_table_cells_preserve_dtx_margins() {
+    let config = LexConfig {
+        dtx: true,
+        ..LexConfig::default()
+    };
+    for cell in [
+        "\\emph{First sentence. Second sentence.}",
+        "\\textbf{\\emph{First sentence. Second sentence.}}",
+        "\\emph{First clause\n% second clause}",
+    ] {
+        let input =
+            format!("% \\begin{{tabular}}{{ll}}\n% {cell} & Title \\\\\n% \\end{{tabular}}\n");
+        for line_width in [0, 20, 80] {
+            let style = FormatStyle {
+                wrap: WrapMode::Semantic,
+                line_width,
+                ..FormatStyle::default()
+            };
+            let formatted = format_with_style_flavored(&input, style, config).unwrap();
+            assert!(
+                formatted.lines().all(|line| line.starts_with('%')),
+                "documentation escaped its margin at width {line_width}:\n{formatted}"
+            );
+            check_format_invariants(&input, style, config)
+                .unwrap_or_else(|e| panic!("{input:?}, width {line_width}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn unlimited_line_width_keeps_semantic_and_authored_breaks() {
+    let input = "Alpha beta\ngamma delta epsilon zeta eta theta. Next sentence.\n";
+    let style = FormatStyle {
+        wrap: WrapMode::Semantic,
+        line_width: 0,
+        ..FormatStyle::default()
+    };
+    assert_eq!(
+        format_with_style(input, style).unwrap(),
+        "Alpha beta\ngamma delta epsilon zeta eta theta.\nNext sentence.\n",
+    );
+    check_format_invariants(input, style, LexConfig::default()).unwrap();
+}
+
+#[test]
+fn unlimited_line_width_reflows_without_a_width_limit() {
+    let input = format!("{}\n{}\n", "alpha ".repeat(250), "beta ".repeat(250));
+    let style = FormatStyle {
+        line_width: 0,
+        ..FormatStyle::default()
+    };
+    let expected = format!(
+        "{}\n",
+        input.split_whitespace().collect::<Vec<_>>().join(" ")
+    );
+    assert_eq!(format_with_style(&input, style).unwrap(), expected);
+    check_format_invariants(&input, style, LexConfig::default()).unwrap();
+}
+
+#[test]
+fn unlimited_line_width_keeps_stable_authored_breaks() {
+    let input = "Alpha  beta\ngamma delta epsilon zeta eta theta. Next sentence.\n";
+    let style = FormatStyle {
+        wrap: WrapMode::Stable,
+        line_width: 0,
+        ..FormatStyle::default()
+    };
+    assert_eq!(
+        format_with_style(input, style).unwrap(),
+        "Alpha beta\ngamma delta epsilon zeta eta theta. Next sentence.\n",
+    );
+    check_format_invariants(input, style, LexConfig::default()).unwrap();
+
+    let caption = "\\caption{Alpha beta\ngamma delta epsilon zeta eta theta.}\n";
+    assert_eq!(
+        format_with_style(caption, style).unwrap(),
+        "\\caption{\n  Alpha beta\n  gamma delta epsilon zeta eta theta.\n}\n",
+    );
+    check_format_invariants(caption, style, LexConfig::default()).unwrap();
+}
+
+#[test]
+fn unlimited_line_width_keeps_structural_and_comment_breaks() {
+    let input = "\\section{Alpha beta gamma delta epsilon}\n\\[a+b+c+d+e+f+g+h+i+j\\]\nAlpha beta % keep this comment\ngamma delta.\n\\begin{verbatim}\n  untouched  words\n\\end{verbatim}\n";
+    let style = FormatStyle {
+        line_width: 0,
+        ..FormatStyle::default()
+    };
+    let wide = FormatStyle {
+        line_width: 1000,
+        ..style
+    };
+    let narrow = FormatStyle {
+        line_width: 20,
+        ..style
+    };
+    let actual = format_with_style(input, style).unwrap();
+    assert_eq!(actual, format_with_style(input, wide).unwrap());
+    assert_ne!(actual, format_with_style(input, narrow).unwrap());
+    assert!(actual.contains("% keep this comment\n"));
+    assert!(actual.contains("\\begin{verbatim}\n  untouched  words\n\\end{verbatim}"));
+    check_format_invariants(input, style, LexConfig::default()).unwrap();
+}
+
+#[test]
 fn item_indent_selects_continuation_layout() {
     let input = "\\begin{itemize}\n\\item First sentence. Second sentence.\n\\end{itemize}\n";
     let cases = [

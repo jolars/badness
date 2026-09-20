@@ -21,8 +21,8 @@ pub enum WrapArg {
     Stable,
     /// One sentence per line (line width ignored).
     Sentence,
-    /// Semantic line breaks (sembr.org): keep authored breaks and add breaks at
-    /// sentence boundaries.
+    /// Semantic line breaks (sembr.org): keep authored breaks, add sentence
+    /// breaks, and wrap overlong lines to the line width.
     Semantic,
     /// Leave authored line breaks untouched.
     Preserve,
@@ -142,7 +142,8 @@ pub enum Command {
         /// only the extension is used. Ignored when paths are given.
         #[arg(long, value_name = "PATH")]
         stdin_filepath: Option<PathBuf>,
-        /// Maximum line width before the formatter breaks a line.
+        /// Maximum line width before the formatter breaks a line; 0 disables
+        /// width-based wrapping.
         #[arg(long)]
         line_width: Option<usize>,
         /// Number of spaces per indent step.
@@ -301,7 +302,8 @@ pub enum DebugCommand {
         #[arg(long, value_enum, default_value = "all")]
         checks: DebugChecksArg,
         /// Maximum line width before the formatter breaks a line (overrides
-        /// config; the multi-width corpus sweep's knob).
+        /// config; the multi-width corpus sweep's knob). Use 0 to disable
+        /// width-based wrapping.
         #[arg(long)]
         line_width: Option<usize>,
         /// How to lay out line breaks inside a paragraph (the trivia checks

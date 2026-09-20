@@ -9,7 +9,7 @@
 #![allow(dead_code)]
 
 use super::ir::Ir;
-use super::style::FormatStyle;
+use super::style::{FormatStyle, UNLIMITED_LINE_WIDTH};
 use std::rc::Rc;
 
 /// Lexicographic cost for a source-break-aware paragraph layout.
@@ -276,7 +276,7 @@ impl Writer {
 impl Printer {
     pub(crate) fn new(style: FormatStyle) -> Self {
         Self {
-            line_width: style.line_width,
+            line_width: style.effective_line_width(),
             indent_unit: style.indent_width,
         }
     }
@@ -297,22 +297,23 @@ impl Printer {
 
     /// Render `ir` on a single line (every break primitive laid out flat). Used by
     /// the alignment lowering to measure and emit a table cell's content; callers
-    /// must ensure `ir` carries no unconditional forced break (a `HardLine` would
-    /// still emit a newline in flat mode), which the alignment grid guarantees by
-    /// falling back when any cell `contains_forced_break`. Width is taken as
-    /// effectively infinite so a width-driven `Group`/`ConditionalGroup` inside a
-    /// cell stays flat rather than breaking on the configured line width.
+    /// must ensure `ir` has a flat width and carries no unconditional forced break.
+    /// Both `HardLine` and nonstructural `PreservedLine` emit newlines in flat mode,
+    /// so the alignment grid checks both conditions before flattening a cell.
+    /// Width is taken as effectively infinite so a width-driven
+    /// `Group`/`ConditionalGroup` inside a cell stays flat rather than breaking on
+    /// the configured line width.
     pub(crate) fn print_flat(&self, ir: &Ir) -> String {
         self.wide().run_with_mode(ir, 0, 0, Mode::Flat)
     }
 
     /// A copy of this printer with an effectively infinite line width, so a
-    /// width-driven `Group`/`ConditionalGroup` never breaks and only structural
-    /// `HardLine`s split the output. The probe behind [`Self::print_flat`] and
+    /// width-driven `Group`/`ConditionalGroup` never breaks and only unconditional
+    /// breaks split the output. The probe behind [`Self::print_flat`] and
     /// [`Self::all_lines_fit`].
     fn wide(&self) -> Printer {
         Printer {
-            line_width: usize::MAX / 2,
+            line_width: UNLIMITED_LINE_WIDTH,
             indent_unit: self.indent_unit,
         }
     }
@@ -548,7 +549,7 @@ impl Printer {
                         w.newline(indent, prefix);
                     }
                 }
-                Ir::HardLine => w.newline(indent, prefix),
+                Ir::HardLine | Ir::PreservedLine => w.newline(indent, prefix),
                 Ir::EmptyLine => w.empty_line(indent, prefix),
                 Ir::IfBreak { flat, broken } => {
                     let chosen = if mode == Mode::Break { broken } else { flat };
@@ -939,11 +940,12 @@ impl Printer {
     }
 
     /// The flat-rendered width of `node`, or `None` if it cannot be laid flat
-    /// (it carries a forced line break: a `HardLine`/`EmptyLine` or a multi-line
-    /// `Verbatim`). A single-line force-break `Verbatim` (a comment) *can* share
-    /// a line with what precedes it — it only forces a break *after* — so it
-    /// counts as its text width here. Used by the fill layout's pair-fit test.
-    fn flat_width(&self, node: &Ir) -> Option<usize> {
+    /// (it carries an unconditional line break: a `HardLine`/`PreservedLine`/
+    /// `EmptyLine` or a multi-line `Verbatim`). A single-line force-break
+    /// `Verbatim` (a comment) *can* share a line with what precedes it — it only
+    /// forces a break *after* — so it counts as its text width here. Used by the
+    /// fill layout's pair-fit test and the alignment cell's flat-layout guard.
+    pub(crate) fn flat_width(&self, node: &Ir) -> Option<usize> {
         self.flat_end(0, node, FlatMeasure::Footprint)
     }
 
@@ -988,7 +990,7 @@ impl Printer {
                         AtomStep::Overflow => return None,
                     }
                 }
-                Ir::HardLine | Ir::EmptyLine => return hug.then_some(col),
+                Ir::HardLine | Ir::PreservedLine | Ir::EmptyLine => return hug.then_some(col),
                 Ir::Line | Ir::TightLine => {
                     col = col.saturating_add(1);
                     if measure != FlatMeasure::Footprint && col > self.line_width {
@@ -1289,7 +1291,7 @@ impl Printer {
                         return false;
                     }
                 }
-                Ir::HardLine | Ir::EmptyLine => return true,
+                Ir::HardLine | Ir::PreservedLine | Ir::EmptyLine => return true,
                 Ir::Line | Ir::TightLine => match mode {
                     Mode::Flat | Mode::FlatPrefix => {
                         col += 1;
@@ -1727,6 +1729,30 @@ mod tests {
         ]));
         let ir = Ir::group_hug(Ir::concat([Ir::text("f(a, "), block])).propagate_breaks();
         assert_eq!(printer.print(&ir), "f(a, {\n  x\n  y\n}");
+    }
+
+    #[test]
+    fn preserved_line_prevents_flat_layout_without_forcing_a_block() {
+        let ir = Ir::group(Ir::concat([
+            Ir::text("{"),
+            Ir::indent(Ir::concat([
+                Ir::soft_line(),
+                Ir::text("alpha"),
+                Ir::preserved_line(),
+                Ir::text("beta"),
+            ])),
+            Ir::soft_line(),
+            Ir::text("}"),
+        ]))
+        .propagate_breaks();
+        assert!(!ir.contains_forced_break());
+        for line_width in [0, 20, 80] {
+            let printer = Printer::new(FormatStyle {
+                line_width,
+                ..FormatStyle::default()
+            });
+            assert_eq!(printer.print(&ir), "{\n  alpha\n  beta\n}");
+        }
     }
 
     #[test]

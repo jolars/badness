@@ -710,10 +710,31 @@ a universal pass condition.
 `WrapMode` determines how the printer handles paragraph breaks. The default,
 `Reflow`, fills lines to the configured width. `Stable` keeps acceptable
 authored breaks while balancing overflow, changes, displacement, and raggedness.
-`Preserve` keeps authored breaks. `Sentence` places one sentence on each line,
-while `Semantic` additionally ends a line at each authored newline. The last two
-modes ignore width. Sentence detection uses language-specific abbreviation
-profiles resolved from the format configuration.
+`Preserve` keeps authored breaks. `Sentence` places one sentence on each line
+regardless of width. `Semantic` keeps authored breaks and sentence boundaries,
+then fills each remaining run to the configured width. The two modes share
+sentence detection and citation handling, using language-specific abbreviation
+profiles resolved from the format configuration. Width decisions stay in the
+printer so indentation and documentation margins count toward the limit.
+
+Semantic wrapping preserves the breaks it inserts on subsequent passes. Each
+width-broken run already fits at the same indentation, and sentence breaks and
+authored breaks remain hard boundaries. These boundaries use
+`Ir::PreservedLine`: the printer rejects a flat layout containing one, but
+lowering does not treat it as a structural block break. Otherwise, reparsing a
+width break inside a nested prose argument could select a different enclosing
+optional or group layout and change its indentation. Sentence boundaries use the
+same representation because they become authored breaks on the next pass.
+Increasing the width therefore does not join previously formatted lines. The
+fixture invariants exercise this fixed point, including nested arguments and
+documentation margins.
+
+A zero `line_width` disables width-driven breaking throughout the formatter,
+including BibTeX and display math. The shared width helpers resolve zero to the
+printer's effectively unbounded width; structural breaks remain active. `Stable`
+uses a zero target to lower authored breaks to hard breaks instead of optimizing
+toward an artificial target. Making them explicit in the IR also prevents
+enclosing groups from flattening them away.
 
 Display math has a separate `MathWrap` setting for single-formula bodies, whose
 default follows the effective paragraph mode. Its breaking policy keeps

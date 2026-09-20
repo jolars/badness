@@ -1878,6 +1878,32 @@ fn line_width_from_initialization_options() {
 }
 
 #[test]
+fn formatting_honors_semantic_and_unlimited_line_width() {
+    for (width, expected) in [
+        (20, "Alpha beta gamma\ndelta epsilon.\nNext sentence.\n"),
+        (0, "Alpha beta gamma delta epsilon.\nNext sentence.\n"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("badness.toml"),
+            format!("[format]\nwrap = \"semantic\"\nline-width = {width}\n"),
+        )
+        .unwrap();
+        let uri = path_to_file_uri(&dir.path().join("main.tex"));
+        let (client, server_thread) = start_server(None);
+        did_open(
+            &client,
+            &uri,
+            1,
+            "Alpha beta gamma delta epsilon. Next sentence.\n",
+        );
+        assert!(recv_diagnostics(&client).diagnostics.is_empty());
+        assert_eq!(one_formatting_edit(&client, &uri, 2).new_text, expected);
+        shutdown(&client, server_thread);
+    }
+}
+
+#[test]
 fn formatting_reloads_changed_config_without_watcher_support() {
     // Neovim advertises no dynamic watched-file registration. A config edit must
     // therefore become visible on the next request without relying on a

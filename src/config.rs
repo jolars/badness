@@ -152,8 +152,9 @@ impl Config {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct FormatConfig {
+    /// Width used for layout decisions; zero disables width-based wrapping.
     #[serde(default = "default_line_width")]
-    #[schemars(range(min = 1, max = 1000))]
+    #[schemars(range(min = 0, max = 1000))]
     pub line_width: u32,
     #[serde(default = "default_indent_width")]
     #[schemars(range(min = 1, max = 1000))]
@@ -245,8 +246,8 @@ pub enum WrapModeConfig {
     Stable,
     /// One sentence per line (width ignored).
     Sentence,
-    /// Semantic line breaks (sembr.org): keep authored breaks and add breaks at
-    /// sentence boundaries.
+    /// Semantic line breaks (sembr.org): keep authored breaks, add sentence
+    /// breaks, and wrap overlong lines to the line width.
     Semantic,
     /// Leave authored line breaks untouched.
     Preserve,
@@ -324,8 +325,8 @@ impl FormatConfig {
     /// Validate values, returning a [`ConfigError::InvalidValue`] with the
     /// originating file path (when known) for diagnostics.
     pub fn validate(&self, path: Option<&Path>) -> Result<(), ConfigError> {
-        validate_width("line-width", self.line_width, path)?;
-        validate_width("indent-width", self.indent_width, path)?;
+        validate_width("line-width", self.line_width, 0, path)?;
+        validate_width("indent-width", self.indent_width, MIN_WIDTH, path)?;
         Ok(())
     }
 }
@@ -701,12 +702,17 @@ fn global_config_path() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn validate_width(field: &'static str, value: u32, path: Option<&Path>) -> Result<(), ConfigError> {
-    if !(MIN_WIDTH..=MAX_WIDTH).contains(&value) {
+fn validate_width(
+    field: &'static str,
+    value: u32,
+    min: u32,
+    path: Option<&Path>,
+) -> Result<(), ConfigError> {
+    if !(min..=MAX_WIDTH).contains(&value) {
         return Err(ConfigError::InvalidValue {
             path: path.map(Path::to_path_buf),
             field,
-            message: format!("must be between {MIN_WIDTH} and {MAX_WIDTH}, got {value}"),
+            message: format!("must be between {min} and {MAX_WIDTH}, got {value}"),
         });
     }
     Ok(())
@@ -982,15 +988,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_zero_line_width() {
-        let err = parse("[format]\nline-width = 0\n").expect_err("zero width");
-        match err {
-            ConfigError::InvalidValue { field, message, .. } => {
-                assert_eq!(field, "line-width");
-                assert!(message.contains('0'));
-            }
-            other => panic!("expected InvalidValue, got {other:?}"),
-        }
+    fn accepts_unlimited_line_width() {
+        let config = parse("[format]\nline-width = 0\n").expect("unlimited width");
+        assert_eq!(config.format.line_width, 0);
+        assert_eq!(FormatStyle::from(&config.format).line_width, 0);
     }
 
     #[test]

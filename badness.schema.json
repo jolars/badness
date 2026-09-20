@@ -131,8 +131,9 @@
         },
         "line-width": {
           "default": 80,
+          "description": "Width used for layout decisions; zero disables width-based wrapping.",
           "maximum": 1000,
-          "minimum": 1,
+          "minimum": 0,
           "type": "integer"
         },
         "math-wrap": {
@@ -287,7 +288,7 @@
         },
         {
           "const": "semantic",
-          "description": "Semantic line breaks (sembr.org): keep authored breaks and add breaks at\nsentence boundaries.",
+          "description": "Semantic line breaks (sembr.org): keep authored breaks, add sentence\nbreaks, and wrap overlong lines to the line width.",
           "type": "string"
         },
         {

@@ -9,7 +9,7 @@ The `semantic` wrap mode now considers `line-width` and reflows if the line widt
 ```toml
 [format]
 wrap = "semantic"
-line-width = 0
+line-width = 0 # disable line width limit
 ```
 
 ## [0.23.0](https://github.com/jolars/badness/compare/v0.22.1...v0.23.0) (2026-09-03)

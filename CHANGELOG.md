@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+The `semantic` wrap mode now considers `line-width` and reflows if the line width is exceeded. To get the old behavior, set
+
+```toml
+[format]
+wrap = "semantic"
+line-width = 0
+```
+
 ## [0.23.0](https://github.com/jolars/badness/compare/v0.22.1...v0.23.0) (2026-09-03)
 
 ### Features

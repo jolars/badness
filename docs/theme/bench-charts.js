@@ -1,6 +1,5 @@
-// Renders the benchmark dot plot(s) on the Benchmarks page with Vega-Lite.
-// One block per `.bench-chart-block`, so the formatter and linter charts share
-// this code (each carries its own inline data payload).
+// Renders benchmark figures with Vega-Lite. Each `.bench-chart-block` carries
+// its own inline data payload and an optional `data-chart` for LSP figures.
 //
 // Data is injected by the `doc-utils` mdbook preprocessor as an inline
 // `<script type="application/json" class="bench-data">` next to a
@@ -8,8 +7,6 @@
 // is vendored under theme/vendor/ and loaded before this file via book.toml's
 // `additional-js`, so nothing is fetched at view time.
 //
-// Chart: x = tool, y = time relative to badness (log scale, baseline = 1),
-// color = document, one dot per (document, tool), with a hover tooltip.
 (function () {
   "use strict";
 
@@ -43,8 +40,16 @@
       .filter(function (value) {
         return Number.isFinite(value) && value > 0;
       });
-    var lo = Math.floor(Math.log10(Math.min.apply(null, values.concat([1]))));
-    var hi = Math.ceil(Math.log10(Math.max.apply(null, values.concat([1]))));
+    return logExtent(values.concat([1]));
+  }
+
+  function logExtent(values) {
+    values = values.filter(function (value) {
+      return Number.isFinite(value) && value > 0;
+    });
+    if (!values.length) return [0.1, 10];
+    var lo = Math.floor(Math.log10(Math.min.apply(null, values)));
+    var hi = Math.ceil(Math.log10(Math.max.apply(null, values)));
     if (lo === hi) {
       lo--;
       hi++;
@@ -54,7 +59,7 @@
 
   // Match ggplot2's log ticks: long at powers of ten, medium at five, and
   // short at the other subdivisions. Only powers of ten receive labels.
-  function logAxis(domain, color) {
+  function logAxis(domain, color, absolute) {
     var ticks = [];
     var major = [];
     var middle = [];
@@ -89,9 +94,30 @@
       },
       grid: true,
       gridOpacity: {
-        condition: { test: isMajor + " && datum.value !== 1", value: 1 },
+        condition: {
+          test: isMajor + (absolute ? "" : " && datum.value !== 1"),
+          value: 1,
+        },
         value: 0,
       },
+    };
+  }
+
+  function chartConfig() {
+    var dark = isDark();
+    var fg = dark ? "#c8c9db" : "#333333";
+    var grid = dark ? "#3b3f5c" : "#dddddd";
+    return {
+      background: null,
+      view: { stroke: null },
+      axis: {
+        labelColor: fg,
+        titleColor: fg,
+        gridColor: grid,
+        domainColor: grid,
+        tickColor: grid,
+      },
+      legend: { labelColor: fg, titleColor: fg },
     };
   }
 
@@ -158,32 +184,163 @@
           },
         },
       ],
-      config: {
-        background: null,
-        view: { stroke: null },
-        axis: {
-          labelColor: fg,
-          titleColor: fg,
-          gridColor: grid,
-          domainColor: grid,
-          tickColor: grid,
-        },
-        legend: { labelColor: fg, titleColor: fg },
-      },
+      config: chartConfig(),
     };
   }
 
-  function renderInto(container, points) {
+  function lspSpec(points, kind, caption, compact) {
+    var memory = kind === "lsp-memory";
+    var latency = kind === "lsp-latency";
+    var servers = orderedUnique(points, "server");
+    var metrics = orderedUnique(points, "metric");
+    var color = {
+      field: "server",
+      type: "nominal",
+      title: null,
+      scale: { domain: servers, range: ["#4e79a7", "#f28e2c"] },
+      legend: { orient: "top", direction: "horizontal" },
+    };
+    var tooltip = [
+      { field: "server", title: "Server" },
+      { field: "metric", title: memory ? "Milestone" : "Operation" },
+    ];
+    var chart = {
+      $schema: "https://vega.github.io/schema/vega-lite/v5.json",
+      description: caption,
+      width: "container",
+      height: memory ? 260 : metrics.length * 60,
+      data: { values: points },
+      config: chartConfig(),
+    };
+    if (memory) {
+      tooltip.push(
+        { field: "rss_mb", title: "RSS (MB)", format: ".1f" },
+        { field: "pss_mb", title: "PSS (MB)", format: ".1f" },
+      );
+      chart.encoding = {
+        x: {
+          field: "metric",
+          type: "nominal",
+          sort: metrics,
+          title: null,
+          axis: { labelAngle: 0 },
+        },
+        xOffset: { field: "server", sort: servers },
+        y: {
+          field: "rss_mb",
+          type: "quantitative",
+          title: "Median process-tree RSS (MB)",
+          scale: { zero: true },
+        },
+      };
+      chart.layer = [
+        {
+          mark: { type: "bar", tooltip: true },
+          encoding: { color: color, tooltip: tooltip },
+        },
+        {
+          mark: { type: "text", dy: -8, color: chart.config.axis.labelColor },
+          encoding: { text: { field: "rss_mb", format: ".1f" } },
+        },
+      ];
+      return chart;
+    }
+
+    var lower = latency ? "median_ms" : "min_ms";
+    var upper = latency ? "p95_ms" : "max_ms";
+    var domain = logExtent(
+      points.flatMap(function (point) {
+        return [point.median_ms, point[lower], point[upper]];
+      }),
+    );
+    tooltip.push({ field: "median_ms", title: "Median (ms)", format: ".3f" });
+    if (latency) {
+      tooltip.push(
+        { field: "p95_ms", title: "p95 (ms)", format: ".3f" },
+        { field: "samples", title: "Samples" },
+        { field: "returned_work", title: "Returned work" },
+        { field: "payload_bytes_median", title: "Median result size (bytes)" },
+        { field: "failures", title: "Failed requests" },
+        { field: "empty_results", title: "Empty results" },
+      );
+    } else {
+      tooltip.push(
+        { field: "min_ms", title: "Min (ms)", format: ".3f" },
+        { field: "max_ms", title: "Max (ms)", format: ".3f" },
+      );
+    }
+    chart.encoding = {
+      y: {
+        field: "metric",
+        type: "nominal",
+        sort: metrics,
+        title: null,
+        axis: {
+          labelLimit: compact ? 85 : 150,
+          labelExpr: compact
+            ? "replace(replace(replace(replace(replace(datum.label, 'Document symbols', 'Symbols'), 'Go to definition', 'Definition'), 'Find references', 'References'), 'Workspace ready', 'Workspace'), 'Open files ready', 'Open files')"
+            : "datum.label",
+        },
+      },
+      // Separate servers within a row so equal timings remain visible.
+      yOffset: { field: "server", sort: servers },
+      x: {
+        field: "median_ms",
+        type: "quantitative",
+        title: latency
+          ? "Request latency (ms, log scale)"
+          : "Elapsed time (ms, log scale)",
+        scale: { type: "log", domain: domain, nice: false },
+        axis: logAxis(domain, chart.config.axis.labelColor, true),
+      },
+      color: color,
+      tooltip: tooltip,
+    };
+    chart.layer = [
+      {
+        transform: [
+          { filter: "datum." + lower + " > 0 && datum." + upper + " > 0" },
+        ],
+        mark: { type: "rule", strokeWidth: 2 },
+        encoding: { x: { field: lower }, x2: { field: upper } },
+      },
+      {
+        transform: [{ filter: "datum.median_ms > 0" }],
+        mark: { type: "point", filled: true, size: 85, opacity: 1 },
+        encoding: { shape: { field: "server", scale: { domain: servers } } },
+      },
+    ];
+    return chart;
+  }
+
+  function renderInto(container) {
     if (!window.vegaEmbed) {
       return;
     }
-    var vlSpec = spec(points);
+    var block = container.closest(".bench-chart-block");
+    var kind = block.dataset.chart;
+    var vlSpec = kind
+      ? lspSpec(
+          container.__benchPoints,
+          kind,
+          block.querySelector("figcaption").textContent,
+          container.clientWidth < 500,
+        )
+      : spec(container.__benchPoints);
     // Alt text on the container, mirroring the spec description Vega puts on the
     // rendered SVG, so the chart is labeled for assistive tech either way.
     container.setAttribute("role", "img");
     container.setAttribute("aria-label", vlSpec.description);
     window
       .vegaEmbed(container, vlSpec, { actions: false, renderer: "svg" })
+      .then(function (result) {
+        if (container.__benchView) container.__benchView.finalize();
+        container.__benchView = result.view;
+        if (!container.__benchRendered) {
+          block.querySelector(".bench-table").removeAttribute("open");
+          container.__benchRendered = true;
+        }
+      })
       .catch(function (err) {
         // Leave the fallback table in place; surface the reason for debugging.
         console.error("bench-charts: failed to render", err);
@@ -212,14 +369,14 @@
         return;
       }
       container.__benchPoints = points;
-      renderInto(container, points);
+      renderInto(container);
     });
 
     // Re-render on light/dark toggle so axis and legend colors track the theme.
     var observer = new MutationObserver(function () {
       document.querySelectorAll(".bench-chart").forEach(function (container) {
         if (container.__benchPoints) {
-          renderInto(container, container.__benchPoints);
+          renderInto(container);
         }
       });
     });

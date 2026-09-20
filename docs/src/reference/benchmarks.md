@@ -139,10 +139,11 @@ use the `Aup91` citation in `Chapter1/chapter1.tex`; its definition is in
 constructs a `WorkspaceEdit` without applying it.
 
 Each target gets two unmeasured warmup rounds and 20 measured rounds in every
-fresh session. The tables report the median and p95 over all samples. They also
-show serialized result size and the range of symbols, locations, or edits each
-server returns, including the number of files involved. Those counts expose
-cases in which two fast responses did different amounts of work.
+fresh session. The request-latency figure shows the median and p95 over all
+samples. Tooltips and expandable data tables also show serialized result size
+and the range of symbols, locations, or edits each server returns, including the
+number of files involved. Those counts expose cases in which two fast responses
+did different amounts of work.
 
 On Linux, the harness samples the complete descendant process tree every 150 ms
 from `/proc`. **RSS** is the resident memory commonly reported by process
@@ -152,8 +153,8 @@ physical memory the session occupies. The baseline is recorded after
 initialization settles, the settled value after the open-file workload settles,
 and the peak is the largest sample through the timed requests. A phase is
 settled after five seconds below 5% of one CPU core and fails after 60 seconds.
-The memory table reports the median of three fresh runs; the JSON artifact
-retains each run's measurements.
+The memory figure shows median RSS across three fresh runs, with PSS in the
+tooltips; the JSON artifact retains each run's measurements.
 
 The servers do not provide identical features or analysis, so this compares the
 user-visible latency, returned work, and resident cost rather than efficiency at

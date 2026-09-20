@@ -1,7 +1,7 @@
 //! Rendering for the committed external LSP speed and memory benchmark artifact.
 
 use mdbook_preprocessor::book::Book;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 const META_MARKER: &str = "{{ memory-benchmark-meta }}";
@@ -74,14 +74,25 @@ struct NavigationPosition {
 struct Server {
     label: String,
     summary: Summary,
+    #[serde(default)]
+    runs: Vec<Run>,
+}
+
+#[derive(Deserialize)]
+struct Run {
+    initialize_seconds: Option<f64>,
+    workspace_ready_seconds: Option<f64>,
+    documents_ready_seconds: Option<f64>,
 }
 
 #[derive(Deserialize)]
 struct Summary {
     baseline_rss_mb: f64,
+    baseline_pss_mb: Option<f64>,
     settled_rss_mb: f64,
     settled_pss_mb: f64,
     peak_rss_mb: f64,
+    peak_pss_mb: Option<f64>,
     relative_to_badness: f64,
     #[serde(default)]
     initialize_seconds: Option<f64>,
@@ -93,12 +104,13 @@ struct Summary {
     request_latencies: Vec<RequestLatency>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct RequestLatency {
     key: String,
     label: String,
     median_ms: Option<f64>,
     p95_ms: Option<f64>,
+    samples: Option<u64>,
     #[serde(default)]
     failures: u64,
     #[serde(default)]
@@ -119,6 +131,32 @@ struct RequestLatency {
     result_files_max: Option<u64>,
     #[serde(default)]
     payload_bytes_median: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct ReadinessPoint<'a> {
+    server: &'a str,
+    metric: &'a str,
+    median_ms: f64,
+    min_ms: Option<f64>,
+    max_ms: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct LatencyPoint<'a> {
+    server: &'a str,
+    metric: &'a str,
+    returned_work: String,
+    #[serde(flatten)]
+    latency: &'a RequestLatency,
+}
+
+#[derive(Serialize)]
+struct MemoryPoint<'a> {
+    server: &'a str,
+    metric: &'a str,
+    rss_mb: f64,
+    pss_mb: Option<f64>,
 }
 
 pub(crate) fn insert(book: &mut Book, project_root: &Path) {
@@ -209,39 +247,110 @@ fn render_meta(benchmarks: &MemoryBenchmarks) -> String {
 }
 
 fn render_speed(benchmarks: &MemoryBenchmarks) -> String {
-    let mut output = String::from(
-        "#### Readiness\n\n\
-         | Server | Initialize | Workspace ready | Open files ready |\n\
-         | --- | ---: | ---: | ---: |\n",
+    let mut readiness = Vec::new();
+    let mut table = String::from(
+        "| Server | Wait | Median | Min | Max |\n\
+         | --- | --- | ---: | ---: | ---: |\n",
     );
     for server in &benchmarks.servers {
         let summary = &server.summary;
-        output.push_str(&format!(
-            "| {} | {} | {} | {} |\n",
-            escape_table_cell(&server.label),
-            duration(summary.initialize_seconds),
-            duration(summary.workspace_ready_seconds),
-            duration(summary.documents_ready_seconds),
-        ));
+        for (metric, median, samples) in [
+            (
+                "Initialize",
+                summary.initialize_seconds,
+                server
+                    .runs
+                    .iter()
+                    .filter_map(|r| r.initialize_seconds)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "Workspace ready",
+                summary.workspace_ready_seconds,
+                server
+                    .runs
+                    .iter()
+                    .filter_map(|r| r.workspace_ready_seconds)
+                    .collect(),
+            ),
+            (
+                "Open files ready",
+                summary.documents_ready_seconds,
+                server
+                    .runs
+                    .iter()
+                    .filter_map(|r| r.documents_ready_seconds)
+                    .collect(),
+            ),
+        ] {
+            let min_ms = samples.iter().copied().reduce(f64::min).map(|s| s * 1000.0);
+            let max_ms = samples.iter().copied().reduce(f64::max).map(|s| s * 1000.0);
+            table.push_str(&format!(
+                "| {} | {} | {} | {} | {} |\n",
+                escape_table_cell(&server.label),
+                metric,
+                milliseconds(median.map(|s| s * 1000.0)),
+                milliseconds(min_ms),
+                milliseconds(max_ms),
+            ));
+            if let Some(median) = median {
+                readiness.push(ReadinessPoint {
+                    server: &server.label,
+                    metric,
+                    median_ms: median * 1000.0,
+                    min_ms,
+                    max_ms,
+                });
+            }
+        }
     }
 
-    output.push_str(
-        "\n#### Warm requests\n\n\
-         | Server | Request | Median | p95 | Returned work |\n\
-         | --- | --- | ---: | ---: | --- |\n",
+    let mut output = String::from("#### Readiness\n\n");
+    output.push_str(&chart_block(
+        "lsp-readiness",
+        &readiness,
+        "Language-server readiness on a logarithmic scale. Dots show medians; \
+         lines span the minimum and maximum across fresh processes. Lower is faster.",
+        &table,
+    ));
+
+    let mut latencies = Vec::new();
+    let mut table = String::from(
+        "| Server | Request | Median | p95 | Returned work | Samples |\n\
+         | --- | --- | ---: | ---: | --- | ---: |\n",
     );
     for server in &benchmarks.servers {
         for latency in &server.summary.request_latencies {
-            output.push_str(&format!(
-                "| {} | {} | {} | {} | {} |\n",
+            table.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} |\n",
                 escape_table_cell(&server.label),
                 escape_table_cell(&latency.label),
                 milliseconds(latency.median_ms),
                 milliseconds(latency.p95_ms),
                 returned_work(latency),
+                latency
+                    .samples
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
             ));
+            latencies.push(LatencyPoint {
+                server: &server.label,
+                metric: &latency.label,
+                returned_work: returned_work(latency),
+                latency,
+            });
         }
     }
+
+    output.push_str("\n#### Warm requests\n\n");
+    output.push_str(&chart_block(
+        "lsp-latency",
+        &latencies,
+        "Warm request latency on a logarithmic scale. Dots show medians; lines \
+         extend to p95 and are not confidence intervals. Lower is faster. \
+         Tooltips include sample counts, returned work, and failed or empty responses.",
+        &table,
+    ));
 
     let session = &benchmarks.session;
     let runs = session
@@ -270,23 +379,27 @@ fn render_speed(benchmarks: &MemoryBenchmarks) -> String {
         .servers
         .iter()
         .flat_map(|server| {
-            server.summary.request_latencies.iter().flat_map(move |latency| {
-                let operation = latency.key.replace('_', " ");
-                let mut notes = Vec::new();
-                if latency.failures > 0 {
-                    notes.push(format!(
-                        "{}: {} failed {operation} requests",
-                        server.label, latency.failures
-                    ));
-                }
-                if latency.empty_results > 0 {
-                    notes.push(format!(
-                        "{}: {} {operation} requests returned no result",
-                        server.label, latency.empty_results
-                    ));
-                }
-                notes
-            })
+            server
+                .summary
+                .request_latencies
+                .iter()
+                .flat_map(move |latency| {
+                    let operation = latency.key.replace('_', " ");
+                    let mut notes = Vec::new();
+                    if latency.failures > 0 {
+                        notes.push(format!(
+                            "{}: {} failed {operation} requests",
+                            server.label, latency.failures
+                        ));
+                    }
+                    if latency.empty_results > 0 {
+                        notes.push(format!(
+                            "{}: {} {operation} requests returned no result",
+                            server.label, latency.empty_results
+                        ));
+                    }
+                    notes
+                })
         })
         .collect();
     if !notes.is_empty() {
@@ -296,9 +409,10 @@ fn render_speed(benchmarks: &MemoryBenchmarks) -> String {
 }
 
 fn render_results(benchmarks: &MemoryBenchmarks) -> String {
-    let mut output = String::from(
-        "| Server | Baseline RSS | Settled RSS | Settled PSS | Peak RSS | Relative settled RSS |\n\
-         | --- | ---: | ---: | ---: | ---: | ---: |\n",
+    let mut points = Vec::new();
+    let mut table = String::from(
+        "| Server | Milestone | RSS | PSS | Relative settled RSS |\n\
+         | --- | --- | ---: | ---: | ---: |\n",
     );
     for server in &benchmarks.servers {
         let summary = &server.summary;
@@ -307,17 +421,63 @@ fn render_results(benchmarks: &MemoryBenchmarks) -> String {
         } else {
             format!("{:.2}×", summary.relative_to_badness)
         };
-        output.push_str(&format!(
-            "| {} | {:.1} MB | {:.1} MB | {:.1} MB | {:.1} MB | {} |\n",
-            escape_table_cell(&server.label),
-            summary.baseline_rss_mb,
-            summary.settled_rss_mb,
-            summary.settled_pss_mb,
-            summary.peak_rss_mb,
-            relative,
-        ));
+        for (metric, rss_mb, pss_mb) in [
+            ("Baseline", summary.baseline_rss_mb, summary.baseline_pss_mb),
+            (
+                "Settled",
+                summary.settled_rss_mb,
+                Some(summary.settled_pss_mb),
+            ),
+            ("Peak", summary.peak_rss_mb, summary.peak_pss_mb),
+        ] {
+            table.push_str(&format!(
+                "| {} | {} | {:.1} MB | {} | {} |\n",
+                escape_table_cell(&server.label),
+                metric,
+                rss_mb,
+                pss_mb
+                    .map(|mb| format!("{mb:.1} MB"))
+                    .unwrap_or_else(|| "-".to_string()),
+                if metric == "Settled" { &relative } else { "-" },
+            ));
+            points.push(MemoryPoint {
+                server: &server.label,
+                metric,
+                rss_mb,
+                pss_mb,
+            });
+        }
     }
-    output
+    chart_block(
+        "lsp-memory",
+        &points,
+        "Median whole-process-tree RSS across fresh processes. Baseline follows \
+         initialization; settled follows the open-file workload. Peak is the \
+         largest sample through the timed requests. Tooltips also show PSS.",
+        &table,
+    )
+}
+
+fn chart_block(kind: &str, points: &impl Serialize, caption: &str, table: &str) -> String {
+    // Escaping '<' keeps labels containing '</script>' inside the JSON payload.
+    let data = serde_json::to_string(points)
+        .unwrap()
+        .replace('<', "\\u003c");
+    format!(
+        "<div class=\"bench-chart-block\" data-chart=\"{kind}\">\n\
+         <figure class=\"bench-figure\">\n\
+         <div class=\"bench-chart\"></div>\n\
+         <script type=\"application/json\" class=\"bench-data\">{data}</script>\n\
+         <figcaption>{caption}</figcaption>\n\
+         </figure>\n\
+         <noscript>The data table below contains the benchmark results. \
+         Enable JavaScript for the interactive figure.</noscript>\n\
+         <details class=\"bench-table\" open>\n\
+         <summary>Data table</summary>\n\n\
+         {table}\n\
+         </details>\n\
+         </div>\n",
+    )
 }
 
 fn repository_name(repository: &str) -> &str {
@@ -332,17 +492,9 @@ fn escape_table_cell(value: &str) -> String {
     value.replace('|', "\\|")
 }
 
-fn duration(seconds: Option<f64>) -> String {
-    match seconds {
-        Some(value) if value < 1.0 => format!("{:.0} ms", value * 1000.0),
-        Some(value) => format!("{value:.2} s"),
-        None => "-".to_string(),
-    }
-}
-
 fn milliseconds(value: Option<f64>) -> String {
     value
-        .map(|value| format!("{value:.2} ms"))
+        .map(|value| format!("{value:.3} ms"))
         .unwrap_or_else(|| "-".to_string())
 }
 
@@ -353,9 +505,7 @@ fn returned_work(latency: &RequestLatency) -> String {
         latency.result_count_max,
         latency.result_unit.as_deref(),
     ) {
-        (Some(min), Some(median), Some(max), Some(unit)) => {
-            quantity_range(min, median, max, unit)
-        }
+        (Some(min), Some(median), Some(max), Some(unit)) => quantity_range(min, median, max, unit),
         _ => return "-".to_string(),
     };
     if let (Some(min), Some(median), Some(max)) = (
@@ -442,23 +592,25 @@ mod tests {
     #[test]
     fn renders_memory_table_relative_to_badness() {
         let rendered = render_results(&fixture());
-        assert!(rendered.contains("| Badness | 18.0 MB | 25.0 MB | 22.0 MB | 27.0 MB | baseline |"));
-        assert!(rendered.contains("| TexLab | 22.0 MB | 30.0 MB | 27.0 MB | 31.0 MB | 1.20× |"));
+        assert!(rendered.contains("| Badness | Settled | 25.0 MB | 22.0 MB | baseline |"));
+        assert!(rendered.contains("| TexLab | Settled | 30.0 MB | 27.0 MB | 1.20× |"));
     }
 
     #[test]
     fn renders_readiness_latency_and_returned_work() {
         let rendered = render_speed(&fixture());
-        assert!(rendered.contains("| Badness | 20 ms | 80 ms | 120 ms |"));
+        assert!(rendered.contains("| Badness | Initialize | 20.000 ms | - | - |"));
+        assert!(rendered.contains("| Badness | Workspace ready | 80.000 ms | - | - |"));
+        assert!(rendered.contains("| Badness | Open files ready | 120.000 ms | - | - |"));
         assert!(
             rendered.contains(
-                "| Badness | Go to definition | 0.30 ms | 0.45 ms | 1 location in 1 file, 180 B |"
+                "| Badness | Go to definition | 0.300 ms | 0.450 ms | 1 location in 1 file, 180 B | 60 |"
             ),
             "{rendered}"
         );
         assert!(
             rendered.contains(
-                "| Badness | Find references | 4.20 ms | 5.10 ms | 2 locations in 2 files, 16 KiB |"
+                "| Badness | Find references | 4.200 ms | 5.100 ms | 2 locations in 2 files, 16 KiB | 60 |"
             ),
             "{rendered}"
         );

@@ -40,7 +40,7 @@ pub struct LineCol {
 /// How an LSP `Position.character` counts columns within a line — the position
 /// encoding negotiated at `initialize` from the client's
 /// `general.positionEncodings`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PositionEncoding {
     /// `character` counts UTF-8 code units (bytes). Preferred when the client
     /// offers it: a column is then a plain byte distance, no per-line re-count.

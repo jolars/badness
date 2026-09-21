@@ -3549,6 +3549,51 @@ fn lsp_rename_cite_key_rewrites_entry_and_uses() {
 }
 
 #[test]
+fn lsp_citation_rename_refreshes_cached_positions_after_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let main_path = dir.path().join("main.tex");
+    let bib_path = dir.path().join("refs.bib");
+    let main = "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\begin{document}\n𝕏 \\cite{key}\n\\end{document}\n";
+    let bib = "@article{KEY, title={Title}}\n";
+    std::fs::write(&main_path, main).unwrap();
+    std::fs::write(&bib_path, bib).unwrap();
+    let main_uri = path_to_file_uri(&main_path);
+    let bib_uri = path_to_file_uri(&bib_path);
+    let (client, server_thread) = start_server(None);
+    did_open(&client, &main_uri, 1, main);
+    let _ = recv_diagnostics(&client);
+
+    for (round, text, bibliography) in [
+        (0, main.to_owned(), bib.to_owned()),
+        (1, format!("% edited\r\n{main}"), format!("% 𝕏\r\n{bib}")),
+    ] {
+        if round == 1 {
+            did_change_full(&client, &main_uri, 2, &text);
+            did_open(&client, &bib_uri, 1, &bibliography);
+        }
+        let idx = badness::text::LineIndex::new(&text);
+        let (line, character) = idx.position(text.find("{key}").unwrap() + 1);
+        let changes = rename(
+            &client,
+            2 + round,
+            &main_uri,
+            Position::new(line, character),
+            "new",
+        );
+        assert_eq!(changes.len(), 2);
+        assert_eq!(
+            apply_edits(&text, &changes[&main_uri]),
+            text.replace("{key}", "{new}")
+        );
+        assert_eq!(
+            apply_edits(&bibliography, &changes[&bib_uri]),
+            bibliography.replace("{KEY,", "{new,")
+        );
+    }
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_lone_fragment_has_no_cross_file_diagnostics() {
     // A bare chapter opened standalone (no `\documentclass`): its namespace is
     // rootless, so `undefined-ref` stays inert even though `\ref{x}` resolves to

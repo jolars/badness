@@ -1092,8 +1092,7 @@ enum WorkerJob {
     },
 }
 
-/// A result from a worker (the lint thread or a read-pool job) back to the main
-/// loop, which forwards it to the client.
+/// A worker result that requires the main loop's document state or request IDs.
 enum Outbound {
     /// Push diagnostics for `uri` at `version` (gated against the live buffer).
     Diagnostics {
@@ -1101,8 +1100,6 @@ enum Outbound {
         version: i32,
         diags: Vec<Diagnostic>,
     },
-    /// A request response (e.g. a formatting edit array).
-    Response(Response),
     /// Answer an execute-command by *pushing* `edit` to the client — a
     /// `workspace/applyEdit` server→client request (allocated a fresh request id by
     /// the main loop), followed by a `null` response to the originating request
@@ -1116,6 +1113,25 @@ enum Outbound {
     /// cross-file resolution may have changed for *every* open document. Re-lint
     /// them all.
     RelintAll,
+}
+
+/// Ordinary responses need no live-state checks, so send them straight to the
+/// transport writer. Diagnostics and client edit requests still pass through
+/// the main loop for version checks and request-ID allocation.
+#[derive(Clone)]
+struct WorkerSender {
+    events: Sender<Outbound>,
+    responses: Sender<Message>,
+}
+
+impl WorkerSender {
+    fn send(&self, event: Outbound) {
+        let _ = self.events.send(event);
+    }
+
+    fn respond(&self, response: Response) {
+        let _ = self.responses.send(Message::Response(response));
+    }
 }
 
 /// Map a document URI to the path the salsa file cache is keyed by. For a `file:`
@@ -1332,7 +1348,11 @@ fn main_loop(
 
     let read_pool = TaskPool::new("badness-lsp-read", read_pool_size());
     let (job_tx, job_rx) = unbounded::<WorkerJob>();
-    let (out_tx, out_rx) = unbounded::<Outbound>();
+    let (events, out_rx) = unbounded::<Outbound>();
+    let out_tx = WorkerSender {
+        events,
+        responses: connection.sender.clone(),
+    };
     let worker = spawn_worker(job_rx, out_tx, read_pool.spawner(), encoding);
 
     loop {
@@ -2737,9 +2757,6 @@ fn forward_outbound(
                 send_diagnostics(connection, uri, diags, Some(version));
             }
         }
-        Outbound::Response(resp) => {
-            let _ = connection.sender.send(Message::Response(resp));
-        }
         Outbound::ApplyEdit { id, label, edit } => {
             let params = ApplyWorkspaceEditParams {
                 label: Some(label),
@@ -2929,7 +2946,7 @@ fn decide(inflight: Option<(&Uri, i32)>, pending: &HashMap<Uri, i32>) -> Dispatc
 /// writer) and drives diagnostics analyzes onto the read pool.
 fn spawn_worker(
     job_rx: Receiver<WorkerJob>,
-    out_tx: Sender<Outbound>,
+    out_tx: WorkerSender,
     read_spawner: Spawner,
     encoding: PositionEncoding,
 ) -> JoinHandle<()> {
@@ -2955,7 +2972,7 @@ fn spawn_worker(
 
 struct Worker {
     db: IncrementalDatabase,
-    out_tx: Sender<Outbound>,
+    out_tx: WorkerSender,
     /// Read-phase workers signal completion here so the worker can free the
     /// in-flight slot and dispatch the next pending analyze.
     done_tx: Sender<AnalyzeDone>,
@@ -3124,7 +3141,7 @@ impl Worker {
                     crate::project::bibliography::resolve_bibliography_file,
                 );
                 if membership_grew {
-                    let _ = self.out_tx.send(Outbound::RelintAll);
+                    self.out_tx.send(Outbound::RelintAll);
                 }
                 self.enqueue(AnalyzeRequest {
                     uri,
@@ -3144,7 +3161,7 @@ impl Worker {
             }
             WorkerJob::WatchedChange { path, deleted } => {
                 if self.apply_watched_change(&path, deleted) {
-                    let _ = self.out_tx.send(Outbound::RelintAll);
+                    self.out_tx.send(Outbound::RelintAll);
                 }
             }
             WorkerJob::Format {
@@ -3660,7 +3677,7 @@ impl Worker {
                 FileKind::Bib => analyze_bib(&snapshot, &path, &rules, enc),
             }));
             if let Ok(Some(diags)) = result {
-                let _ = out_tx.send(Outbound::Diagnostics {
+                out_tx.send(Outbound::Diagnostics {
                     uri: uri.clone(),
                     version,
                     diags,
@@ -3863,7 +3880,7 @@ fn run_document_diagnostic(
     previous_result_id: Option<String>,
     rules: &RuleSelection,
     enc: PositionEncoding,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let items = compute_diagnostics(snapshot, path, text, kind, rules, enc);
     let result_id = result_id_for(&items);
@@ -3883,7 +3900,7 @@ fn run_document_diagnostic(
     };
     let value = serde_json::to_value(DocumentDiagnosticReportResult::Report(report))
         .unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
+    out_tx.respond(Response::new_ok(id, value));
 }
 
 /// The diagnostics for a pull, computed **on demand**.
@@ -3999,7 +4016,7 @@ fn run_code_action(
     only: Option<&[CodeActionKind]>,
     rules: &RuleSelection,
     enc: PositionEncoding,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let findings = compute_lint_findings(snapshot, path, text, kind, rules);
     // Only the LaTeX rules are catalogued in the published reference, so the
@@ -4029,7 +4046,7 @@ fn run_code_action(
         CodeActionOrCommand::Command(_) => only.is_none(),
     });
     let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, value)));
+    out_tx.respond(Response::new_ok(id, value));
 }
 
 fn code_action_kind_requested(kind: &CodeActionKind, only: Option<&[CodeActionKind]>) -> bool {
@@ -4190,13 +4207,13 @@ fn run_format(
     style: FormatStyle,
     kind: FileKind,
     sentence: SentenceOptions<'_>,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let result = match compute_format(snapshot, path, text, style, kind, sentence) {
         Some(edit) => serde_json::to_value(vec![edit]).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Produce the whole-document replacing edit, or `None` for a no-op / refusal /
@@ -4292,13 +4309,13 @@ fn run_range_format(
     kind: FileKind,
     range: Range,
     sentence: SentenceOptions<'_>,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let result = match compute_range_format(snapshot, path, text, style, kind, range, sentence) {
         Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Produce the minimal edits that range-format `sel_range`, `Some(vec![])` for a
@@ -4419,14 +4436,14 @@ fn run_on_type_format(
     kind: FileKind,
     position: Position,
     sentence: SentenceOptions<'_>,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let result = match compute_on_type_format(snapshot, path, text, style, kind, position, sentence)
     {
         Some(edits) => serde_json::to_value(edits).unwrap_or(serde_json::Value::Null),
         None => serde_json::Value::Null,
     };
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Produce the minimal edits that re-indent the block around a just-typed `}`, an
@@ -4560,7 +4577,7 @@ fn run_symbols(
     text: &TextBuffer,
     kind: FileKind,
     build: &BuildConfig,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let symbols = match kind {
         FileKind::Tex
@@ -4573,7 +4590,7 @@ fn run_symbols(
     };
     let result = serde_json::to_value(DocumentSymbolResponse::Nested(symbols))
         .unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Compute the LaTeX outline for `text`, preferring the snapshot's cached tree and
@@ -4650,7 +4667,7 @@ fn run_workspace_symbols(
     id: RequestId,
     query: &str,
     enc: PositionEncoding,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let needle = query.to_ascii_lowercase();
     let mut symbols = Vec::new();
@@ -4681,7 +4698,7 @@ fn run_workspace_symbols(
     }
     let result = serde_json::to_value(WorkspaceSymbolResponse::Nested(symbols))
         .unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Recursively flatten an [`OutlineItem`] tree into [`WorkspaceSymbol`]s, keeping
@@ -4721,11 +4738,11 @@ fn run_folding(
     path: &Path,
     text: &TextBuffer,
     kind: FileKind,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let ranges = compute_folding(snapshot, path, text, kind);
     let result = serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Compute LaTeX folding ranges for `text`, preferring the snapshot's cached tree and
@@ -4768,11 +4785,11 @@ fn run_selection_range(
     text: &TextBuffer,
     kind: FileKind,
     positions: &[Position],
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let ranges = compute_selection_range(snapshot, path, text, kind, positions);
     let result = serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Compute the LaTeX expand-selection chains for each cursor in `positions`, preferring
@@ -4828,11 +4845,11 @@ fn run_document_link(
     text: &TextBuffer,
     kind: FileKind,
     texmf: &TexmfConfig,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let links = compute_document_link(snapshot, path, text, kind, texmf);
     let result = serde_json::to_value(links).unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Compute the clickable links in `text`, preferring the snapshot's cached tree and
@@ -5106,7 +5123,7 @@ fn run_completion(
     text: &TextBuffer,
     position: Position,
     texmf: &TexmfConfig,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     // The salsa-key path is derived from the URI (the same mapping `on_completion` uses).
     let path = uri_to_path(uri);
@@ -5121,7 +5138,7 @@ fn run_completion(
         items,
     }))
     .unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Resolve a highlighted [`CompletionItem`] on the read pool, attaching lazy
@@ -5132,14 +5149,14 @@ fn run_completion_resolve(
     snapshot: &Analysis,
     id: RequestId,
     item: CompletionItem,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let resolved = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         completion_resolve::resolve(snapshot, item.clone())
     }))
     .unwrap_or(item);
     let result = serde_json::to_value(resolved).unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Compute completion items at `position`. A `.bib` cursor goes through the bib
@@ -5415,12 +5432,12 @@ fn run_hover(
     text: &TextBuffer,
     position: Position,
     build: &BuildConfig,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let result = hover::compute_hover(snapshot, path, text, position, build)
         .and_then(|hover| serde_json::to_value(hover).ok())
         .unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Locate the cursor file's compiled PDF, launch the configured viewer at
@@ -5446,7 +5463,7 @@ fn run_forward_search(
     build: &BuildConfig,
     executable: &str,
     args: &[String],
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     // A cancelled read leaves the root unresolved; fall back to the cursor's own
     // file rather than failing the request, since a single-file project resolves
@@ -5482,7 +5499,7 @@ fn run_forward_search(
         None => ForwardSearchStatus::Failure,
     };
     let result = serde_json::to_value(status.result()).unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Describe the command/environment whose argument the cursor is typing in and
@@ -5495,12 +5512,12 @@ fn run_signature_help(
     text: &TextBuffer,
     position: Position,
     enc: PositionEncoding,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let result = signature_help::compute_signature_help(snapshot, path, text, position, enc)
         .and_then(|help| serde_json::to_value(help).ok())
         .unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Resolve the `\ref`/`\cite` under the cursor and reply with the matching
@@ -5514,12 +5531,12 @@ fn run_goto_definition(
     position: Position,
     texmf: &TexmfConfig,
     enc: PositionEncoding,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let locations = compute_goto_definition(snapshot, path, text, position, texmf, enc);
     let result = serde_json::to_value(GotoDefinitionResponse::Array(locations))
         .unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Resolve the label/key under the cursor and reply with every use [`Location`]
@@ -5533,11 +5550,11 @@ fn run_references(
     position: Position,
     include_declaration: bool,
     enc: PositionEncoding,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let locations = compute_references(snapshot, path, text, position, include_declaration, enc);
     let result = serde_json::to_value(locations).unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Resolve the label/cite key under the cursor and reply with its key-token range +
@@ -5545,18 +5562,18 @@ fn run_references(
 /// `key_range` (not the whole-command range) is what anchors the client's rename UI.
 /// Resolve the cross-reference key under the cursor and reply with every same-key
 /// occurrence in the buffer as `DocumentHighlight`s (an empty array when nothing
-/// resolves), serialized to the read pool's outbound channel.
+/// resolves), sent directly to the transport writer.
 fn run_document_highlight(
     snapshot: &Analysis,
     id: RequestId,
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let highlights = compute_document_highlight(snapshot, path, text, position);
     let result = serde_json::to_value(highlights).unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5566,7 +5583,7 @@ fn run_prepare_rename(
     path: &Path,
     text: &TextBuffer,
     position: Position,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let result = compute_prepare_rename(snapshot, path, text, position)
         .map(|(range, placeholder)| {
@@ -5574,7 +5591,7 @@ fn run_prepare_rename(
                 .unwrap_or(serde_json::Value::Null)
         })
         .unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Resolve the label/cite key under the cursor and reply with the project-wide
@@ -5589,12 +5606,12 @@ fn run_rename(
     position: Position,
     new_name: &str,
     enc: PositionEncoding,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     let result = compute_rename(snapshot, path, text, position, new_name, enc)
         .and_then(|edit| serde_json::to_value(edit).ok())
         .unwrap_or(serde_json::Value::Null);
-    let _ = out_tx.send(Outbound::Response(Response::new_ok(id, result)));
+    out_tx.respond(Response::new_ok(id, result));
 }
 
 /// Answer a `changeEnvironment` execute-command: push the begin/end name rewrite
@@ -5610,7 +5627,7 @@ fn run_change_environment(
     text: &TextBuffer,
     position: Position,
     new_name: &str,
-    out_tx: &Sender<Outbound>,
+    out_tx: &WorkerSender,
 ) {
     match compute_change_environment(snapshot, path, text, position) {
         Some((old_name, ranges)) => {
@@ -5624,14 +5641,14 @@ fn run_change_environment(
                 ..Default::default()
             };
             let label = format!("change environment: {old_name} -> {new_name}");
-            let _ = out_tx.send(Outbound::ApplyEdit { id, label, edit });
+            out_tx.send(Outbound::ApplyEdit { id, label, edit });
         }
         None => {
-            let _ = out_tx.send(Outbound::Response(Response::new_err(
+            out_tx.respond(Response::new_err(
                 id,
                 ErrorCode::RequestFailed as i32,
                 "no environment around the cursor".to_owned(),
-            )));
+            ));
         }
     }
 }
@@ -6664,15 +6681,21 @@ fn rename_citation_edits(
         let Some(file) = snapshot.lookup_file(member) else {
             continue;
         };
+        let mut matches = snapshot
+            .semantic_model(file)
+            .citations()
+            .iter()
+            .filter(|c| names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)))
+            .peekable();
+        if matches.peek().is_none() {
+            continue;
+        }
         let Some(uri) = path_to_uri(member) else {
             continue;
         };
-        let text = snapshot.file_text(file);
-        let idx = LineIndex::with_encoding(text, enc);
-        for c in snapshot.semantic_model(file).citations() {
-            if names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)) {
-                push_edit(&mut changes, &uri, &idx, c.key_range, new_name);
-            }
+        let idx = snapshot.file_buffer(file, enc).line_index();
+        for c in matches {
+            push_edit(&mut changes, &uri, &idx, c.key_range, new_name);
         }
     }
     match kind {
@@ -6790,15 +6813,21 @@ fn push_bib_entry_edits(
     let Some(file) = snapshot.lookup_file(bib_path) else {
         return;
     };
+    let mut matches = snapshot
+        .bib_semantic_model(file)
+        .entries()
+        .iter()
+        .filter(|entry| names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)))
+        .peekable();
+    if matches.peek().is_none() {
+        return;
+    }
     let Some(uri) = path_to_uri(bib_path) else {
         return;
     };
-    let text = snapshot.file_text(file);
-    let idx = LineIndex::with_encoding(text, enc);
-    for entry in snapshot.bib_semantic_model(file).entries() {
-        if names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)) {
-            push_edit(changes, &uri, &idx, entry.key_range, new_name);
-        }
+    let idx = snapshot.file_buffer(file, enc).line_index();
+    for entry in matches {
+        push_edit(changes, &uri, &idx, entry.key_range, new_name);
     }
 }
 
@@ -8233,6 +8262,85 @@ mod tests {
         // On the `\label` definition (not a reference) → nothing to jump *from*.
         let at_label = offset_of(text, "\\label{a}") + 1;
         assert!(reference_under_cursor(&model, at_label).is_none());
+    }
+
+    #[test]
+    fn worker_responses_do_not_wait_for_the_main_loop() {
+        let (server, client) = Connection::memory();
+        let (events, pending) = unbounded();
+        let sender = WorkerSender {
+            events,
+            responses: server.sender.clone(),
+        };
+        sender.send(Outbound::Diagnostics {
+            uri: uri("file:///test.tex"),
+            version: 1,
+            diags: Vec::new(),
+        });
+        assert!(
+            client.receiver.is_empty(),
+            "diagnostics still need the version gate"
+        );
+
+        sender.respond(Response::new_ok(
+            RequestId::from(7),
+            serde_json::Value::Null,
+        ));
+        let Message::Response(response) = client.receiver.try_recv().unwrap() else {
+            panic!("expected a response without servicing the main loop");
+        };
+        assert_eq!(response.id, RequestId::from(7));
+        assert!(matches!(
+            pending.try_recv().unwrap(),
+            Outbound::Diagnostics { .. }
+        ));
+    }
+
+    #[test]
+    fn citation_rename_indexes_only_matching_files_and_reuses_them() {
+        use crate::incremental::{IncrementalDb, QueryKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let bib = dir.path().join("refs.bib");
+        let unrelated = dir.path().join("other.tex");
+        let mut db = IncrementalDatabase::default();
+        for (path, text) in [
+            (
+                &main,
+                "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\input{other}\n\\cite{key}\n",
+            ),
+            (&bib, "@article{KEY, title={Title}}\n"),
+            (&unrelated, "\\cite{different}\n"),
+        ] {
+            let file = db.upsert_file(path, text);
+            db.reparse_stage_edits(file, None);
+        }
+        let snapshot = db.snapshot();
+        let (_, citations) = snapshot.resolve_project();
+        db.clear_query_log();
+        for _ in 0..2 {
+            let changes = rename_citation_edits(
+                &snapshot,
+                citations,
+                &main,
+                FileKind::Tex,
+                &[SmolStr::new("key")],
+                "new",
+                PositionEncoding::Utf16,
+            );
+            assert_eq!(changes.len(), 2);
+            assert!(changes.contains_key(&path_to_uri(&main).unwrap()));
+            assert!(changes.contains_key(&path_to_uri(&bib).unwrap()));
+        }
+        let indexed: Vec<_> = db
+            .query_log()
+            .into_iter()
+            .filter(|q| q.kind == QueryKind::FileBuffer)
+            .map(|q| q.file)
+            .collect();
+        assert_eq!(indexed.len(), 2);
+        assert!(!indexed.contains(&db.lookup_file(&unrelated)));
     }
 
     #[test]

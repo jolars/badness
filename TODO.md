@@ -322,6 +322,26 @@ sources below are missing.
 
 ## Performance & hardening
 
+- [x] **Reuse citation rename indexes and send responses directly.** Against
+  `a3558a5`, the pinned thesis `Aup91` rename falls from 94.4 to 79.5 µs median
+  across three fresh sessions of 300 requests on the Ryzen 9 7900, with
+  identical edits in two files. A separate comparison interleaving requests
+  across live builds measures 114.1 to 99.8 µs (9,000 requests per build).
+  Citation renames now index only matching files, reuse a salsa-backed
+  `TextBuffer` for the snapshot's exact text, and send ordinary responses
+  directly to the transport writer. Diagnostics retain the main-loop version
+  gate. Measurements and validation are in `target/perf-investigation/rename-fix/`.
+
+- [ ] **Reduce configuration validation cost without weakening freshness.**
+  Temporary phase timers on `f45c259b` attribute 19.4 µs per warm request to
+  declaration and configuration publication:
+  `CachedSettings::is_fresh` canonicalizes the anchor and checks ancestor
+  candidates on every request, producing eight `readlink` and eleven `statx`
+  calls in this checkout. Preserve config creation/change/deletion detection
+  when reducing this work, including clients without working file watchers.
+  Texlab still takes 49.4 µs in the latest serial rename comparison. The remaining
+  incoming worker handoff preserves write ordering and declaration publication.
+
 - [ ] **Borrowed token text, maybe.** Tokens are `SmolStr`
   (`Token` in `parser/lexer.rs`, same in `bib/lexer.rs`), so short tokens are
   already allocation-free and the fatou-sized win (-60% lexing from `&'src str`

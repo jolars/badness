@@ -1018,6 +1018,11 @@ that information separate from parser shape and formatter signature resolution.
 The server uses `lsp-server` and `lsp-types`, with a synchronous main loop and
 thread pool that accommodate salsa's unwind-based cancellation.
 
+Read jobs send ordinary responses directly to the transport writer through
+`WorkerSender`. Diagnostics still return to the main loop for version checks,
+and client edit requests return there for request-ID allocation. Incoming jobs
+remain ordered through the single writer, including declaration publication.
+
 ### The live buffer
 
 An open document is an immutable `TextBuffer` containing an `Arc<str>`, the
@@ -1026,6 +1031,13 @@ loop and worker jobs share it through `Arc<TextBuffer>`. Each job therefore
 keeps a consistent text and index even if a later edit has already produced a
 new buffer. Handlers use `line_index()` to share the table for that document
 version.
+
+Cross-file citation renames obtain a `TextBuffer` from the salsa `file_buffer`
+query, keyed by source file and negotiated encoding. The query shares the
+snapshot's text allocation and invalidates when that text changes. It keeps the
+table and text together even for a bibliography with no open editor buffer.
+Rename requests create URI and index data only for files with matching keys;
+repeated requests reuse those indexes without rescanning the source.
 
 `LineTable` stores line-start offsets and a flag identifying lines with
 non-ASCII bytes. `LineIndex` pairs that table with its source text and answers

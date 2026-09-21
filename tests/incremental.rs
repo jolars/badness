@@ -8,6 +8,46 @@ use badness::declarations::{Declarations, ResolvedDeclarations};
 use badness::incremental::{IncrementalDatabase, IncrementalDb, QueryKind};
 use badness::parser::Edit;
 use badness::syntax::SyntaxKind;
+use badness::text::PositionEncoding;
+
+#[test]
+fn file_buffers_share_indexes_and_refresh_only_for_their_text() {
+    let mut db = IncrementalDatabase::default();
+    let file = db.add_file("a𝕏b\r\nnext\n");
+    let other = db.add_file("unrelated");
+    db.clear_query_log();
+
+    for _ in 0..2 {
+        let snapshot = db.snapshot();
+        let utf8 = snapshot.file_buffer(file, PositionEncoding::Utf8);
+        let utf16 = snapshot.file_buffer(file, PositionEncoding::Utf16);
+        assert_eq!(utf8.line_index().position("a𝕏".len()), (0, 5));
+        assert_eq!(utf16.line_index().position("a𝕏".len()), (0, 3));
+        assert_eq!(utf8.line_index().offset_at(1, 0), "a𝕏b\r\n".len());
+    }
+    assert_eq!(db.query_log().len(), 2);
+    assert!(
+        db.query_log()
+            .iter()
+            .all(|q| q.kind == QueryKind::FileBuffer)
+    );
+
+    db.set_file_text(other, "a different unrelated text");
+    db.clear_query_log();
+    db.snapshot()
+        .file_buffer(file, PositionEncoding::Utf8)
+        .line_index();
+    assert!(db.query_log().is_empty());
+
+    // Equal byte lengths do not imply equal line boundaries or UTF-16 columns.
+    db.set_file_text(file, "a\n𝕏b\rnext\n");
+    let snapshot = db.snapshot();
+    let buffer = snapshot.file_buffer(file, PositionEncoding::Utf16);
+    assert_eq!(buffer.text(), "a\n𝕏b\rnext\n");
+    assert_eq!(buffer.line_index().position("a\n𝕏".len()), (1, 2));
+    assert_eq!(buffer.line_index().offset_at(2, 0), "a\n𝕏b\r".len());
+    assert_eq!(db.query_log().len(), 1);
+}
 
 /// A byte-range edit, the currency the reparse side channel stages.
 fn edit(range: std::ops::Range<usize>, insert: &str) -> Edit {

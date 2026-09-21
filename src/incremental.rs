@@ -44,6 +44,7 @@ use crate::semantic::{
     scan_definitions,
 };
 use crate::syntax::SyntaxNode;
+use crate::text::{PositionEncoding, TextBuffer};
 
 #[salsa::input]
 pub struct SourceFile {
@@ -179,6 +180,8 @@ fn semantic_declarations_of(db: &dyn IncrementalDb) -> &ResolvedDeclarations {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum QueryKind {
     ParsedDocument,
+    /// A file's text paired with its lazily initialized position index.
+    FileBuffer,
     /// A file's per-file label/reference model ([`semantic_model`]).
     SemanticModel,
     /// A file's scanned `\newcommand`/`\newenvironment`/xparse signatures
@@ -398,6 +401,22 @@ pub trait IncrementalDb: salsa::Database {
     /// For the case where the buffer the base describes is *gone* rather than
     /// merely changed — a `didClose`, a revert to disk.
     fn reparse_evict(&self, _file: SourceFile) {}
+}
+
+/// Cross-file position queries share an index for this exact source revision.
+/// The buffer owns both the shared text and its table, so a live editor buffer
+/// cannot supply a newer table to an older analysis snapshot.
+#[salsa::tracked(returns(ref), no_eq)]
+pub fn file_buffer(
+    db: &dyn IncrementalDb,
+    file: SourceFile,
+    encoding: PositionEncoding,
+) -> TextBuffer {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::FileBuffer,
+        file: Some(file),
+    });
+    TextBuffer::new(Arc::clone(file.text(db)), encoding)
 }
 
 #[salsa::tracked(returns(ref), no_eq, unsafe(non_salsa_values))]
@@ -1393,6 +1412,11 @@ impl IncrementalDatabase {
 pub struct Analysis(IncrementalDatabase);
 
 impl Analysis {
+    /// The snapshot's text and reusable position index for a cross-file result.
+    pub fn file_buffer(&self, file: SourceFile, encoding: PositionEncoding) -> &TextBuffer {
+        file_buffer(&self.0, file, encoding)
+    }
+
     /// The `SourceFile` input currently tracked for `path`, if any.
     pub fn lookup_file(&self, path: &Path) -> Option<SourceFile> {
         self.0.lookup_file(path)

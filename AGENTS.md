@@ -134,8 +134,6 @@ comparison, not a byte target.
   `task bib-fields:sync`, or `task math-symbols:sync`, as appropriate; do not
   edit generated artifacts by hand. `signatures.json`, `colors.json`, and
   `tikz_libraries.json` are curated data and may be edited directly.
-- When parser behavior changes, update tests, snapshots, losslessness checks,
-  and the parser rationale in `docs/src/development/architecture.md`.
 
 ## Formatter
 
@@ -284,8 +282,6 @@ comparison, not a byte target.
 
 ## Documentation and generated files
 
-- Keep architectural rationale and history in
-  `docs/src/development/architecture.md`.
 - Keep active roadmap and debugging notes in `TODO.md`.
 - Keep contributor processes and rule-authoring instructions in
   `CONTRIBUTING.md`.

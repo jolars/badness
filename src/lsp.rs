@@ -537,47 +537,117 @@ fn config_file_stamp(path: &Path) -> Option<ConfigFileStamp> {
     })
 }
 
-/// Snapshot every project-config candidate consulted by the ancestor walk. The
-/// absent entries matter: if a nearer `badness.toml` is created, it must displace
-/// the cached parent, environment, global, or default configuration.
-fn project_config_fingerprint(anchor: &Path) -> Option<Vec<(PathBuf, Option<ConfigFileStamp>)>> {
-    let canonical = anchor.canonicalize().ok()?;
-    let mut fingerprint = Vec::new();
-    for dir in canonical.ancestors() {
-        let candidate = dir.join(crate::config::CONFIG_FILE_NAME);
-        let stamp = config_file_stamp(&candidate);
-        let found = stamp.is_some();
-        fingerprint.push((candidate, stamp));
-        if found || dir.join(".git").exists() {
-            break;
+fn canonical_anchor_is_current(anchor: &Path, canonical: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    if anchor == canonical {
+        use rustix::fs::{CWD, Mode, OFlags, ResolveFlags, openat2};
+
+        // Success proves that no component redirects the already canonical
+        // spelling. Unlike O_NOFOLLOW, this checks ancestors too. The temporary
+        // O_PATH descriptor neither reads the directory nor retains a handle.
+        if openat2(
+            CWD,
+            anchor,
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS,
+        )
+        .is_ok()
+        {
+            return true;
         }
     }
-    Some(fingerprint)
+    // Symlinks, unsupported kernels, and failed probes use the same proof as
+    // ordinary discovery. Other platforms always take this path.
+    anchor.canonicalize().is_ok_and(|path| path == canonical)
+}
+
+/// The discovery predicates are fixed until a candidate or the canonical anchor
+/// changes. Retaining their paths avoids rebuilding the walk on every request.
+#[derive(Debug, Clone)]
+struct ProjectConfigFingerprint {
+    canonical_anchor: PathBuf,
+    candidates: Vec<(PathBuf, Option<ConfigFileStamp>)>,
+    git_boundaries: Vec<(PathBuf, bool)>,
+}
+
+impl ProjectConfigFingerprint {
+    fn new(anchor: &Path) -> Option<Self> {
+        let canonical_anchor = anchor.canonicalize().ok()?;
+        let mut candidates = Vec::new();
+        let mut git_boundaries = Vec::new();
+        for dir in canonical_anchor.ancestors() {
+            let candidate = dir.join(crate::config::CONFIG_FILE_NAME);
+            let stamp = config_file_stamp(&candidate);
+            let found = stamp.is_some();
+            candidates.push((candidate, stamp));
+            if found {
+                break;
+            }
+            let boundary = dir.join(".git");
+            let exists = boundary.exists();
+            git_boundaries.push((boundary, exists));
+            if exists {
+                break;
+            }
+        }
+        Some(Self {
+            canonical_anchor,
+            candidates,
+            git_boundaries,
+        })
+    }
+
+    fn is_fresh(&self, anchor: &Path) -> bool {
+        // Equal stamps alone cannot detect a symlink redirecting discovery to
+        // another directory, whose config also supplies relative path settings.
+        canonical_anchor_is_current(anchor, &self.canonical_anchor)
+            && self
+                .candidates
+                .iter()
+                .all(|(path, stamp)| *stamp == config_file_stamp(path))
+            && self
+                .git_boundaries
+                .iter()
+                .all(|(path, existed)| *existed == path.exists())
+    }
 }
 
 #[derive(Debug, Clone)]
 struct CachedSettings {
     resolved: ResolvedSettings,
-    project_fingerprint: Option<Vec<(PathBuf, Option<ConfigFileStamp>)>>,
+    project_fingerprint: Option<ProjectConfigFingerprint>,
     /// The resolved environment/global file may live outside the project walk.
     source_fingerprint: Option<(PathBuf, Option<ConfigFileStamp>)>,
 }
 
 impl CachedSettings {
     fn new(resolved: ResolvedSettings, anchor: &Path, source: Option<PathBuf>) -> Self {
-        let source_fingerprint = source.map(|path| {
-            let stamp = config_file_stamp(&path);
-            (path, stamp)
-        });
+        let project_fingerprint = ProjectConfigFingerprint::new(anchor);
+        let source_fingerprint = source
+            .filter(|path| {
+                !project_fingerprint.as_ref().is_some_and(|project| {
+                    project
+                        .candidates
+                        .iter()
+                        .any(|(candidate, _)| candidate == path)
+                })
+            })
+            .map(|path| {
+                let stamp = config_file_stamp(&path);
+                (path, stamp)
+            });
         Self {
             resolved,
-            project_fingerprint: project_config_fingerprint(anchor),
+            project_fingerprint,
             source_fingerprint,
         }
     }
 
     fn is_fresh(&self, anchor: &Path) -> bool {
-        self.project_fingerprint == project_config_fingerprint(anchor)
+        self.project_fingerprint
+            .as_ref()
+            .is_some_and(|project| project.is_fresh(anchor))
             && self
                 .source_fingerprint
                 .as_ref()
@@ -8218,6 +8288,168 @@ mod tests {
         assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
 
         std::fs::remove_file(nearer).expect("remove nearer config");
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
+    }
+
+    #[test]
+    fn resolve_settings_detects_git_boundary_creation_and_deletion() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repo.path().join("badness.toml"),
+            "[format]\nline-width = 60\n",
+        )
+        .unwrap();
+        let nested = repo.path().join("chapters");
+        std::fs::create_dir(&nested).unwrap();
+        let uri = file_uri_in(&nested);
+        let mut state = state_with_editor(EditorSettings {
+            line_width: Some(40),
+            ..Default::default()
+        });
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
+
+        // A worktree's `.git` file stops discovery just like a directory does.
+        let boundary = nested.join(".git");
+        std::fs::write(&boundary, "gitdir: elsewhere\n").unwrap();
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
+        std::fs::remove_file(boundary).unwrap();
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
+    }
+
+    #[test]
+    fn cached_settings_detects_external_source_changes() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join(".git")).unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let source = external.path().join("config.toml");
+        std::fs::write(&source, "[format]\nline-width = 40\n").unwrap();
+        let snapshot = || {
+            CachedSettings::new(
+                ResolvedSettings::from_editor(&EditorSettings::default()),
+                project.path(),
+                Some(source.clone()),
+            )
+        };
+        let cached = snapshot();
+        assert!(cached.is_fresh(project.path()));
+
+        let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+        std::fs::write(&source, "[format]\nline-width = 60\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_modified(modified + std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(!cached.is_fresh(project.path()));
+        let cached = snapshot();
+        assert!(cached.is_fresh(project.path()));
+        std::fs::remove_file(&source).unwrap();
+        assert!(!cached.is_fresh(project.path()));
+    }
+
+    #[test]
+    fn canonical_anchor_validation_tracks_directory_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let anchor = dir.path().join("chapters");
+        std::fs::create_dir(&anchor).unwrap();
+        let canonical = anchor.canonicalize().unwrap();
+        assert!(canonical_anchor_is_current(&anchor, &canonical));
+        assert!(!canonical_anchor_is_current(&anchor, dir.path()));
+        std::fs::remove_dir(&anchor).unwrap();
+        assert!(!canonical_anchor_is_current(&anchor, &canonical));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn canonical_anchor_validation_detects_new_ancestor_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("original");
+        let moved = dir.path().join("moved");
+        let anchor = parent.join("chapters");
+        std::fs::create_dir_all(&anchor).unwrap();
+        let canonical = anchor.canonicalize().unwrap();
+        assert!(canonical_anchor_is_current(&anchor, &canonical));
+        // The anchor keeps its inode, but its physical ancestors have changed.
+        std::fs::rename(&parent, &moved).unwrap();
+        symlink(&moved, &parent).unwrap();
+        assert!(!canonical_anchor_is_current(&anchor, &canonical));
+        assert!(canonical_anchor_is_current(
+            &anchor,
+            &anchor.canonicalize().unwrap()
+        ));
+
+        let unnormalized = parent.join("..").join("original").join("chapters");
+        assert!(canonical_anchor_is_current(
+            &unnormalized,
+            &unnormalized.canonicalize().unwrap()
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_settings_detects_retargeted_anchor_with_identical_config_stamps() {
+        use std::os::unix::fs::symlink;
+
+        let repo = tempfile::tempdir().unwrap();
+        let first = repo.path().join("first");
+        let second = repo.path().join("second");
+        let alias = repo.path().join("alias");
+        let modified = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        for (dir, width) in [(&first, 40), (&second, 60)] {
+            std::fs::create_dir_all(dir.join("chapters")).unwrap();
+            let config = dir.join("badness.toml");
+            std::fs::write(&config, format!("[format]\nline-width = {width}\n")).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(config)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+        }
+        symlink(&first, &alias).unwrap();
+        let uri = file_uri_in(&alias.join("chapters"));
+        let mut state = state_with_editor(EditorSettings::default());
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
+
+        std::fs::remove_file(&alias).unwrap();
+        symlink(&second, &alias).unwrap();
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_settings_detects_dangling_config_and_git_symlink_targets() {
+        use std::os::unix::fs::symlink;
+
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repo.path().join("badness.toml"),
+            "[format]\nline-width = 60\n",
+        )
+        .unwrap();
+        let nested = repo.path().join("chapters");
+        std::fs::create_dir(&nested).unwrap();
+        let config_target = repo.path().join("external.toml");
+        let git_target = repo.path().join("gitdir");
+        symlink(&config_target, nested.join("badness.toml")).unwrap();
+        symlink(&git_target, nested.join(".git")).unwrap();
+        let uri = file_uri_in(&nested);
+        let mut state = state_with_editor(EditorSettings {
+            line_width: Some(30),
+            ..Default::default()
+        });
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
+
+        std::fs::write(&config_target, "[format]\nline-width = 40\n").unwrap();
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
+        std::fs::remove_file(config_target).unwrap();
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
+        std::fs::create_dir(&git_target).unwrap();
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 30);
+        std::fs::remove_dir(git_target).unwrap();
         assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
     }
 

@@ -126,6 +126,7 @@ dependencies = [
  "memchr",
  "rayon",
  "rowan 0.17.0",
+ "rustix",
  "salsa",
  "schemars",
  "serde",

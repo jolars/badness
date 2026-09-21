@@ -4256,6 +4256,30 @@ fn lsp_declared_reference_command_drives_diagnostics_completion_and_definition()
 }
 
 #[test]
+fn lsp_requests_reload_declarations_without_watcher_notifications() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.tex");
+    let config = dir.path().join("badness.toml");
+    let doc = "\\label{first}\n\\eqrefs{first}\n";
+    std::fs::write(&path, doc).unwrap();
+    let uri = path_to_file_uri(&path);
+    let (client, server_thread) = start_server(None);
+    did_open(&client, &uri, 1, doc);
+    let _ = recv_diagnostics(&client);
+    assert!(definition(&client, 2, &uri, Position::new(1, 10)).is_empty());
+
+    std::fs::write(&config, "[commands.eqrefs]\nlike = 'cref'\n").unwrap();
+    let locations = definition(&client, 3, &uri, Position::new(1, 10));
+    assert_eq!(locations.len(), 1);
+    assert_eq!(locations[0].uri, uri);
+    assert_eq!(locations[0].range.start, Position::new(0, 0));
+
+    std::fs::remove_file(config).unwrap();
+    assert!(definition(&client, 4, &uri, Position::new(1, 10)).is_empty());
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_a_request_is_answered_under_its_own_workspace_declarations() {
     // The declarations ride a project-wide *singleton* salsa input, so a session
     // holding two workspaces overwrites it as attention crosses between them. A

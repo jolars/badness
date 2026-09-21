@@ -124,6 +124,22 @@ changed or deleted config and a newly created nearer one even when the editor
 cannot register file watchers. Watcher notifications provide earlier
 invalidation when available.
 
+The cache retains the candidate paths and Git boundary predicates, but validates
+them against the filesystem on each request. It checks a discovered source only
+once and checks an environment or global source separately.
+
+Anchor validation must still detect symlinks that redirect discovery to another
+ancestor chain, even when both config files have identical timestamps and
+lengths. On Linux, an anchor whose spelling already matches its cached canonical
+path can use `openat2` with `O_PATH | O_DIRECTORY | O_CLOEXEC` and
+`RESOLVE_NO_SYMLINKS`. Success proves that the path still resolves without
+following a symlink, replacing a `readlink` call per component with an open and
+close. The descriptor is closed immediately. Symlinks, noncanonical spellings,
+failed probes, and platforms without this operation use ordinary
+canonicalization. No client watcher capability or time-based validity window
+substitutes for these checks. See the [Linux `openat2`
+contract](https://man7.org/linux/man-pages/man2/openat2.2.html).
+
 ### Declarations
 
 Declarations let a project describe constructs whose meaning cannot be inferred

@@ -332,15 +332,18 @@ sources below are missing.
   directly to the transport writer. Diagnostics retain the main-loop version
   gate. Measurements and validation are in `target/perf-investigation/rename-fix/`.
 
-- [ ] **Reduce configuration validation cost without weakening freshness.**
-  Temporary phase timers on `f45c259b` attribute 19.4 µs per warm request to
-  declaration and configuration publication:
-  `CachedSettings::is_fresh` canonicalizes the anchor and checks ancestor
-  candidates on every request, producing eight `readlink` and eleven `statx`
-  calls in this checkout. Preserve config creation/change/deletion detection
-  when reducing this work, including clients without working file watchers.
-  Texlab still takes 49.4 µs in the latest serial rename comparison. The remaining
-  incoming worker handoff preserves write ordering and declaration publication.
+- [x] **Reduce configuration validation cost without weakening freshness.**
+  Retain config candidate and Git boundary paths, check a discovered source only
+  once, and use Linux `openat2(RESOLVE_NO_SYMLINKS)` to validate an already
+  canonical anchor with one open and close. Symlinks and failed or unsupported
+  probes fall back to canonicalization. Warm pinned-thesis `Aup91` rename falls
+  from 68.5 to 63.7 µs median against `f3ca05c` across three fresh sessions of
+  1,000 requests per build on the Ryzen 9 7900; texlab measures 50.3 µs. This
+  checkout now needs 13 filesystem calls per rename instead of 19. Config
+  creation, edits, deletion, and Git boundary changes remain checked on every
+  request without depending on client watchers. The incoming worker handoff
+  still preserves write ordering and declaration publication. Measurements and
+  validation are in `target/perf-investigation/config-validation/`.
 
 - [ ] **Borrowed token text, maybe.** Tokens are `SmolStr`
   (`Token` in `parser/lexer.rs`, same in `bib/lexer.rs`), so short tokens are

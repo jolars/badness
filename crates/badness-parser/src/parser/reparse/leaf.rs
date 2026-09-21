@@ -451,6 +451,7 @@ mod tests {
 
     const GRAMMAR_SOURCES: &[(&str, &str)] = &[
         ("grammar.rs", include_str!("../grammar.rs")),
+        ("grammar/gates.rs", include_str!("../grammar/gates.rs")),
         ("grammar/math.rs", include_str!("../grammar/math.rs")),
         ("grammar/prescan.rs", include_str!("../grammar/prescan.rs")),
         ("grammar/expl3.rs", include_str!("../grammar/expl3.rs")),

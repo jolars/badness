@@ -13,14 +13,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [~] **Keep carving `grammar.rs`.** The math sublanguage now lives in
-  `grammar/math.rs`, including `math_environment_body`. The earlier cuts moved
-  facts, trivia, the prescan, and expl3 attachment into their own modules.
-  Remaining work, each in its own commit:
-
-  - The **gate machinery** (`WalkKey`, `GateBatch`, `VerdictSink`, the policy
-    vocabulary, `trait GatePolicy`, and the nine gate policies), ~805 lines.
-    It drags the `scan_work` linearity tests along.
+- [~] **Finish parser event markers.** The module extractions are done:
+  `grammar/math.rs` owns math bodies and scripts, and `grammar/gates.rs` owns
+  gate policies, the shared scan, memoization, and scan-linearity tests. Facts,
+  trivia, the prescan, and expl3 attachment also have their own modules.
 
   The rest of the hygiene item is done: the shadow counters, the DOC_COMMENT
   precede dedup (`precede`/`extend_back`/`doc_comment_bind`), the `PreScan`

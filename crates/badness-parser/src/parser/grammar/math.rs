@@ -4,7 +4,7 @@
 //! Entry gates live with the grammar's shared shape-gate machinery.
 
 use super::trivia::CommentMode;
-use super::{Block, LEFT_CMD, PARSER_STEP_LIMIT, Parser, RIGHT_CMD, peek_end_name};
+use super::{Block, LEFT_CMD, Parser, RIGHT_CMD, peek_end_name};
 use crate::parser::events::Event;
 use crate::semantic::signature::ArgumentDomain;
 use crate::syntax::SyntaxKind;
@@ -275,7 +275,7 @@ impl Parser<'_> {
     ///
     /// **Caller contract: the cursor must not be at EOF.** The `None` arm below
     /// consumes nothing and emits nothing, so a caller that reaches it from a
-    /// loop spins until [`PARSER_STEP_LIMIT`] and panics far from the mistake.
+    /// loop spins until [`super::PARSER_STEP_LIMIT`] and panics far from the mistake.
     /// Every loop that reaches here guards EOF already — the four math bodies
     /// with an explicit `None` arm, `math_environment_body` through
     /// [`Self::at_block_end`], and [`Self::math_script_arg`] through its own

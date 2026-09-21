@@ -32,6 +32,9 @@ when TeX binds a script to a single character.
 The LaTeX grammar keeps math bodies, script attachment, and paired
 `\left`/`\right` delimiters in `grammar/math.rs`. Named math environments use
 that same module's body parser, so delimiter and script recovery stays shared.
+`grammar/gates.rs` owns the shape-gate policies, shared forward scan, and
+verdict caches. Its tests count token visits to check that repeated and nested
+queries stay linear; grammar callers only ask whether a delimiter can pair.
 
 The formatter lowers the tree to a `Doc` intermediate representation and prints
 it. The linter collects diagnostics through a shared traversal. The language

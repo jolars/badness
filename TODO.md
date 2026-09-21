@@ -13,15 +13,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [ ] **Keep carving `grammar.rs`** (4,331 lines; the first cut took
-  `grammar/facts.rs`, `grammar/trivia.rs`, and `grammar/prescan.rs`, and
-  `grammar/expl3.rs` came out later). Two candidates remain, each its own
-  commit:
-
-  - The **math / `\left…\right` sublanguage** (`dollar_math` through
-    `stray_right`, plus `split_math_word`), ~460 lines and highly
-    self-contained. `math_environment_body` currently sits in the environment
-    section and is the one routine the split has to decide about.
+- [~] **Keep carving `grammar.rs`.** The math sublanguage now lives in
+  `grammar/math.rs`, including `math_environment_body`. The earlier cuts moved
+  facts, trivia, the prescan, and expl3 attachment into their own modules.
+  Remaining work, each in its own commit:
 
   - The **gate machinery** (`WalkKey`, `GateBatch`, `VerdictSink`, the policy
     vocabulary, `trait GatePolicy`, and the nine gate policies), ~805 lines.

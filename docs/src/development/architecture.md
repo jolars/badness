@@ -29,6 +29,10 @@ builder feeds the events into rowan and attaches trivia, retaining every byte of
 the source. A specialized `SubTok` event lets math parsing split a lexer token
 when TeX binds a script to a single character.
 
+The LaTeX grammar keeps math bodies, script attachment, and paired
+`\left`/`\right` delimiters in `grammar/math.rs`. Named math environments use
+that same module's body parser, so delimiter and script recovery stays shared.
+
 The formatter lowers the tree to a `Doc` intermediate representation and prints
 it. The linter collects diagnostics through a shared traversal. The language
 server uses salsa queries to combine syntax and semantic information across

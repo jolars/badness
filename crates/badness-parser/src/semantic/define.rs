@@ -899,8 +899,9 @@ fn adjacent_sibling_command(command: &SyntaxNode) -> Option<SyntaxNode> {
 }
 
 /// `\NewDocumentEnvironment{name}{spec}{begin}{end}` → an [`EnvironmentSig`] with
-/// args from the xparse spec. The begin-code (group 2 — after `{name}` and `{spec}`)
-/// is recorded for verbatim detection, as in [`scan_newenvironment`].
+/// args and any verbatim body capture declared by the xparse spec. The begin-code
+/// (group 2 — after `{name}` and `{spec}`) is also recorded for verbatim detection,
+/// as in [`scan_newenvironment`].
 fn scan_xparse_environment(
     command: &SyntaxNode,
     db: &mut SignatureDb,
@@ -917,10 +918,10 @@ fn scan_xparse_environment(
         return;
     };
     record_body(env_bodies, name, nth_group(command, 2).as_ref());
-    db.insert_environment(
-        name,
-        environment_sig(xparse::parse_spec(&group_inner_source(&spec))),
-    );
+    let (args, verbatim_body) = xparse::parse_environment_spec(&group_inner_source(&spec));
+    let mut sig = environment_sig(args);
+    sig.verbatim_body = verbatim_body;
+    db.insert_environment(name, sig);
 }
 
 /// The `(arity, first_arg_optional)` pair for a LaTeX2e definition: the integer in
@@ -973,8 +974,8 @@ fn latex2e_args(arity: usize, first_optional: bool) -> Vec<ArgSpec> {
 }
 
 /// An [`EnvironmentSig`] for a scanned environment with the given args: a
-/// reflowable, non-math, non-verbatim body (the only shape LaTeX2e/xparse
-/// definitions give us without package-specific knowledge).
+/// reflowable, non-math, non-verbatim body. Callers add any verbatim evidence
+/// obtained from the argument specification or replacement text.
 fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
     EnvironmentSig {
         args: args.into(),
@@ -1126,6 +1127,21 @@ mod tests {
                 .iter()
                 .all(|arg| arg.domain == crate::semantic::ArgumentDomain::Unknown)
         );
+    }
+
+    #[test]
+    fn xparse_verbatim_body_spec() {
+        for definer in [
+            "NewDocumentEnvironment",
+            "RenewDocumentEnvironment",
+            "ProvideDocumentEnvironment",
+            "DeclareDocumentEnvironment",
+        ] {
+            let db = db_of(&format!("\\{definer}{{demo}}{{O{{code}} c}}{{#2}}{{}}\n"));
+            let sig = db.environment("demo").expect("demo defined");
+            assert!(sig.verbatim_body, "{definer}");
+            assert_eq!(arg_kinds(&sig.args), vec![ArgKind::Bracket]);
+        }
     }
 
     #[test]

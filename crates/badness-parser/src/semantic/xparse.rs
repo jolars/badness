@@ -22,28 +22,38 @@
 //! greedy parser actually attaches, which is what the formatter counts. Modifiers
 //! (`+`, `!`) and argument processors (`>{…}`) are skipped. Unknown type letters
 //! stop the scan (conservative: never panic, never invent slots).
+//! A final `c` yields no slot but can prove verbatim body capture for environments
+//! when every preceding type has a supported brace or bracket shape.
 
 use super::signature::{ArgKind, ArgSpec, ContentKind};
 
 /// Parse an xparse argument-spec string into the `{…}`/`[…]` argument slots it
 /// declares, in order. See the module docs for the type-by-type mapping.
 pub fn parse_spec(spec: &str) -> Vec<ArgSpec> {
+    parse_environment_spec(spec).0
+}
+
+/// Read argument slots and whether a final `c` proves a verbatim environment body.
+/// Every leading type must map to a slot the verbatim lexer's header scan can
+/// consume; skipping a star, token, or custom delimiter would misplace the body.
+pub(crate) fn parse_environment_spec(spec: &str) -> (Vec<ArgSpec>, bool) {
     let chars: Vec<char> = spec.chars().collect();
     let mut cursor = Cursor {
         chars: &chars,
         i: 0,
     };
     let mut args = Vec::new();
+    let mut capture_supported = true;
 
     loop {
-        cursor.skip_modifiers();
+        capture_supported &= cursor.skip_modifiers();
         cursor.skip_ws();
         let Some(c) = cursor.bump() else { break };
         match c {
             'm' => args.push(brace(true)),
             'o' => args.push(bracket(false)),
             'O' => {
-                cursor.skip_group();
+                capture_supported &= cursor.skip_group();
                 args.push(bracket(false));
             }
             // Required (`r`/`R`) and optional (`d`/`D`) delimited args: a slot only
@@ -53,7 +63,7 @@ pub fn parse_spec(spec: &str) -> Vec<ArgSpec> {
                 let open = cursor.read_token();
                 let close = cursor.read_token();
                 if matches!(c, 'R' | 'D') {
-                    cursor.skip_group(); // the {default}
+                    capture_supported &= cursor.skip_group();
                 }
                 if let Some(kind) = delimiter_kind(open.as_deref(), close.as_deref()) {
                     args.push(ArgSpec {
@@ -63,26 +73,35 @@ pub fn parse_spec(spec: &str) -> Vec<ArgSpec> {
                         domain: crate::semantic::ArgumentDomain::Unknown,
                         verbatim: false,
                     });
+                } else {
+                    capture_supported = false;
                 }
             }
             't' => {
                 cursor.read_token(); // the test token; yields no node
+                capture_supported = false;
             }
             'e' => {
                 cursor.skip_group(); // {<tokens>}
+                capture_supported = false;
             }
             'E' => {
                 cursor.skip_group(); // {<tokens>}
                 cursor.skip_group(); // {<defaults>}
+                capture_supported = false;
             }
             // `s` (star), `v` (verbatim): consumed, no `{…}`/`[…]` node.
-            's' | 'v' => {}
+            's' | 'v' => capture_supported = false,
+            'c' => {
+                cursor.skip_ws();
+                return (args, capture_supported && cursor.peek().is_none());
+            }
             // Unknown letter: stop rather than guess and miscount.
             _ => break,
         }
     }
 
-    args
+    (args, false)
 }
 
 fn brace(required: bool) -> ArgSpec {
@@ -141,18 +160,20 @@ impl Cursor<'_> {
 
     /// Skip the type-prefix modifiers that may precede any argument type: `+`
     /// (long), `!` (no-leading-space), and `>{processor}` argument processors.
-    fn skip_modifiers(&mut self) {
+    fn skip_modifiers(&mut self) -> bool {
+        let mut complete = true;
         loop {
             self.skip_ws();
             match self.peek() {
                 Some('+') | Some('!') => self.i += 1,
                 Some('>') => {
                     self.i += 1;
-                    self.skip_group();
+                    complete &= self.skip_group();
                 }
                 _ => break,
             }
         }
+        complete
     }
 
     /// Read a single spec token after optional whitespace: a control sequence
@@ -179,25 +200,30 @@ impl Cursor<'_> {
 
     /// If the next non-whitespace char opens a `{…}` group, skip the whole balanced
     /// group (nested braces included). A no-op otherwise — tolerant of a malformed
-    /// spec missing the group a type would normally carry.
-    fn skip_group(&mut self) {
+    /// spec missing the group a type would normally carry. Returns whether a
+    /// complete group was consumed, for callers that require a proven shape.
+    fn skip_group(&mut self) -> bool {
         self.skip_ws();
         if self.peek() != Some('{') {
-            return;
+            return false;
         }
         let mut depth = 0;
         while let Some(c) = self.bump() {
             match c {
+                '\\' => {
+                    self.bump();
+                }
                 '{' => depth += 1,
                 '}' => {
                     depth -= 1;
                     if depth == 0 {
-                        return;
+                        return true;
                     }
                 }
                 _ => {}
             }
         }
+        false
     }
 }
 
@@ -241,6 +267,27 @@ mod tests {
     #[test]
     fn verbatim_yields_no_slot() {
         assert_eq!(kinds("v"), vec![]);
+    }
+
+    #[test]
+    fn verbatim_body_requires_complete_supported_header() {
+        for spec in [
+            "c",
+            " O{code and example} c ",
+            "m o c",
+            "!O{\\ttfamily} c",
+            ">{\\TrimSpaces} m c",
+            "d[] R[]{default} c",
+            "O{\\{c} c",
+        ] {
+            assert!(parse_environment_spec(spec).1, "{spec}");
+        }
+        for spec in [
+            "", "O{c}", "t c", "s c", "v c", "e{c}", "E{x}{c}", "d<> c", "X c", "b", "c m", "c c",
+            "O c", "O{c", "> c", ">{c", "R[] c",
+        ] {
+            assert!(!parse_environment_spec(spec).1, "{spec}");
+        }
     }
 
     #[test]

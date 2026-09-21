@@ -6,8 +6,8 @@ This is a **soft gauge, not a quality gate.** It projects badness's generic CST 
 
 - **Corpus:** corpus (`tests/corpus/*.tex`)
 - **Skeleton similarity:** 64.5%  _(Dice coefficient over skeleton lines)_
-- **File concordance:** 18.0%  (9/50 files identical after projection)
-- **Intentional deviations:** 41  ·  **Unexplained divergences:** 0
+- **File concordance:** 17.6%  (9/51 files identical after projection)
+- **Intentional deviations:** 42  ·  **Unexplained divergences:** 0
 - **Skipped:** 1 (badness could not parse cleanly)
 - **texlab parse errors:** 4 (badness-clean inputs texlab flagged — see the gate, `parse_oracle.rs`)
 
@@ -58,4 +58,5 @@ Listed in `tests/parse_compat_allowlist.toml`. These diverge from texlab on purp
 | `verbatim_env_defined_by_package.tex` | 71.8% | Package-defined verbatim environments are a bounded text-derived fact: badness recognizes `\\lstnewenvironment`/`\\DefineVerbatimEnvironment` definitions in the file and captures each defined environment's body as opaque `VERBATIM_BODY`. texlab does not apply those definitions, so it parses literal listing content (`\\begin{table}`, an unmatched `\\end{oops}`, math, and `%`) as live structure. badness is the faithful reading. |
 | `verbatim_filecontents.tex` | 28.6% | The kernel's `filecontents` writes its body byte-for-byte (it `\\@makeother`s `\\dospecials`, `%` included), so badness curates it verbatim-body: the `%` inside a date literal is data and the `}` after it still closes its field group. texlab has no `filecontents` signature and parses into the body, reading the `%` as a comment that swallows the closing brace. Same deliberate family as verbatim_env.tex (smoke-test issue #98). |
 | `verbatim_ltxexample.tex` | 21.1% | ltxdockit's `ltxcode`/`ltxexample` are `\\lstnewenvironment`-defined example environments curated verbatim-body (smoke-test issue #98, same mechanism as pgfmanual's `codeexample` and ltxdoc's `oldcomments`): their bodies quote whole documents, so a `\\begin{document}` with no closer and a stray `}` are data. texlab has no signature for either name and parses into the body, manufacturing an unclosed `(env)` and an unmatched brace. badness is the more faithful reading; the file is also on the parse_oracle exception list. |
+| `xparse_verbatim_body.tex` | 60.0% | The NewDocumentEnvironment family's final c argument type captures the body verbatim (issue #184). Badness derives that lexer mode from the local definition and keeps the incomplete table example opaque; texlab parses its table and tabular delimiters as live environments. LuaLaTeX accepts the example, confirming Badness's reading. |
 

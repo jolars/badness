@@ -246,12 +246,20 @@ every `macrocode` body.
 Verbatim commands and environments capture their bodies as single tokens.
 Curated signatures describe built-ins, while a bounded two-pass definition scan
 recognizes user definitions from catcode-changing patterns and known definers
-such as `\lstnewenvironment`. A command can also have one positional verbatim
-argument: `\href` captures its URL but leaves its visible text parsed. Such a
-capture requires the expected balanced group, and a local redefinition
-suppresses a colliding built-in mode. Short-verb declarations such as
-`\MakeShortVerb{\|}` allow `|…|` on one line to form an opaque token; `.dtx`
-mode and curated documentation classes enable `|` initially.
+such as `\lstnewenvironment`. The `\NewDocumentEnvironment` family also declares
+a verbatim body with a final `c` argument type. The scan recognizes that type
+only when every preceding argument has a brace or bracket shape the verbatim
+lexer can consume. Stars, token tests, and other unsupported header shapes
+withhold capture so they cannot shift its starting point. A `c` inside a default
+or delimiter is ordinary specification data. This keeps incomplete code examples
+opaque without interpreting the environment's replacement text.
+
+A command can also have one positional verbatim argument: `\href` captures its
+URL but leaves its visible text parsed. Such a capture requires the expected
+balanced group, and a local redefinition suppresses a colliding built-in mode.
+Short-verb declarations such as `\MakeShortVerb{\|}` allow `|…|` on one line to
+form an opaque token; `.dtx` mode and curated documentation classes enable `|`
+initially.
 
 Definition bodies need different treatment from running document text. Inside
 curated command and environment definers, `\begin` and `\end` remain ordinary

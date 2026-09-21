@@ -892,6 +892,39 @@ fn user_defined_verbatim_environment_body_is_opaque() {
 }
 
 #[test]
+fn xparse_verbatim_body_is_opaque() {
+    let out = tree(include_str!("corpus/xparse_verbatim_body.tex"));
+    assert!(!out.contains("error @"), "{out}");
+    assert!(out.contains("VERBATIM_BODY@"), "{out}");
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn xparse_verbatim_body_requires_a_supported_spec() {
+    for spec in ["O{c}", "t c", "s c", "d<> c", "v c", "b", "c m", "X c"] {
+        let out = tree(&format!(
+            "\\NewDocumentEnvironment{{demo}}{{{spec}}}{{}}{{}}\n\\begin{{demo}}$x$\\end{{demo}}\n"
+        ));
+        assert!(!out.contains("VERBATIM_BODY@"), "{spec}: {out}");
+        assert!(out.contains("INLINE_MATH@"), "{spec}: {out}");
+    }
+}
+
+#[test]
+fn xparse_verbatim_body_keeps_headers_and_following_syntax() {
+    for header in ["", "[code only]"] {
+        let input = format!(
+            "\\NewDocumentEnvironment{{demo}}{{O{{code}} c}}{{}}{{}}\n\\begin{{demo}}{header}\n{{ $ % literal\n\\end{{demo}}\n$x$\n"
+        );
+        let out = tree(&input);
+        assert!(!out.contains("error @"), "{out}");
+        assert!(out.contains("VERBATIM_BODY@"), "{out}");
+        assert!(out.contains("INLINE_MATH@"), "{out}");
+        assert_eq!(out.contains("OPTIONAL@"), !header.is_empty(), "{out}");
+    }
+}
+
+#[test]
 fn undefined_command_argument_is_not_verbatim() {
     // The fast path: with no catcode-othering definition, the same call site stays
     // ordinary — a single parse pass, and `$b$` lexes as inline math. Guards against

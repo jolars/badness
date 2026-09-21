@@ -1,0 +1,54 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: out
+---
+ROOT@0..172
+  PARAGRAPH@0..171
+    COMMAND@0..61
+      CONTROL_WORD@0..23 "\\NewDocumentEnvironment"
+      GROUP@23..34
+        L_BRACE@23..24 "{"
+        WORD@24..33 "LaTeXdemo"
+        R_BRACE@33..34 "}"
+      GROUP@34..57
+        L_BRACE@34..35 "{"
+        WORD@35..36 "O"
+        GROUP@36..54
+          L_BRACE@36..37 "{"
+          WORD@37..41 "code"
+          WHITESPACE@41..42 " "
+          WORD@42..45 "and"
+          WHITESPACE@45..46 " "
+          WORD@46..53 "example"
+          R_BRACE@53..54 "}"
+        WHITESPACE@54..55 " "
+        WORD@55..56 "c"
+        R_BRACE@56..57 "}"
+      GROUP@57..59
+        L_BRACE@57..58 "{"
+        R_BRACE@58..59 "}"
+      GROUP@59..61
+        L_BRACE@59..60 "{"
+        R_BRACE@60..61 "}"
+    NEWLINE@61..62 "\n"
+    ENVIRONMENT@62..171
+      BEGIN@62..90
+        CONTROL_WORD@62..68 "\\begin"
+        NAME_GROUP@68..79
+          L_BRACE@68..69 "{"
+          WORD@69..78 "LaTeXdemo"
+          R_BRACE@78..79 "}"
+        OPTIONAL@79..90
+          L_BRACKET@79..80 "["
+          WORD@80..84 "code"
+          WHITESPACE@84..85 " "
+          WORD@85..89 "only"
+          R_BRACKET@89..90 "]"
+      VERBATIM_BODY@90..156 "\n  \\begin{table}\n    \\sisetup{...}\n    \\begin{tabular}{S}\n    ...\n"
+      END@156..171
+        CONTROL_WORD@156..160 "\\end"
+        NAME_GROUP@160..171
+          L_BRACE@160..161 "{"
+          WORD@161..170 "LaTeXdemo"
+          R_BRACE@170..171 "}"
+  NEWLINE@171..172 "\n"

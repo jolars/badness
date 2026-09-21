@@ -2909,6 +2909,16 @@ fn user_verbatim_environment_body_is_protected() {
     assert_format_invariants(input);
 }
 
+#[test]
+fn xparse_verbatim_body_is_protected() {
+    let input = include_str!("../../badness-parser/tests/corpus/xparse_verbatim_body.tex");
+    let formatted = format(input).expect("formats");
+    let body = input.split_once("[code only]").unwrap().1;
+    assert!(formatted.ends_with(body), "{formatted}");
+    insta::assert_snapshot!(formatted);
+    assert_format_invariants(input);
+}
+
 /// Environments carrying the `noIndent` signature flag (`document`) keep their body
 /// flush against the surrounding indentation, while environments nested inside them
 /// still indent normally. This pins the convention that `\begin{document}` content

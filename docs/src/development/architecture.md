@@ -1054,6 +1054,13 @@ Read jobs send ordinary responses directly to the transport writer through
 and client edit requests return there for request-ID allocation. Incoming jobs
 remain ordered through the single writer, including declaration publication.
 
+Diagnostics supersession cancels only the old analysis snapshot through its
+Salsa cancellation token. The worker may already have queued a rename or another
+request against the updated text, so global cancellation at dispatch would
+discard a current response without another edit. Database writes still cancel
+all outstanding readers. A superseded diagnostics job may finish unwinding after
+its replacement starts; its completion cannot release the replacement's slot.
+
 ### The live buffer
 
 An open document is an immutable `TextBuffer` containing an `Arc<str>`, the

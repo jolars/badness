@@ -1412,6 +1412,11 @@ impl IncrementalDatabase {
 pub struct Analysis(IncrementalDatabase);
 
 impl Analysis {
+    /// Allow diagnostics supersession to cancel this reader without affecting other snapshots.
+    pub(crate) fn cancellation_token(&self) -> salsa::CancellationToken {
+        salsa::Database::cancellation_token(&self.0)
+    }
+
     /// The snapshot's text and reusable position index for a cross-file result.
     pub fn file_buffer(&self, file: SourceFile, encoding: PositionEncoding) -> &TextBuffer {
         file_buffer(&self.0, file, encoding)

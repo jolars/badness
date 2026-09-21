@@ -113,7 +113,6 @@ use lsp_types::{
     WorkspaceSymbolResponse,
 };
 use rowan::{TextRange, TextSize};
-use salsa::Database as _;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
@@ -2962,10 +2961,11 @@ struct AnalyzeDone {
     version: i32,
 }
 
-/// The single in-flight analyze, if any.
+/// The current analyze, excluding superseded jobs that may still be unwinding.
 struct InflightAnalyze {
     uri: Uri,
     version: i32,
+    cancellation: salsa::CancellationToken,
 }
 
 /// A queued analyze request: the latest pending edit for a URI.
@@ -3051,9 +3051,8 @@ struct Worker {
     /// read job so its `LineIndex` conversions count columns in the negotiated
     /// unit (see [`negotiate_position_encoding`]).
     encoding: PositionEncoding,
-    /// The single in-flight analyze, if any. At most one runs at a time: the
-    /// write-phase needs exclusive `&mut db`, and salsa cancellation is global, so
-    /// a second concurrent analyze couldn't be cancelled selectively.
+    /// The current diagnostics job. Superseded jobs may still be unwinding, but
+    /// their completion must not clear this slot.
     inflight: Option<InflightAnalyze>,
     /// Coalesced analyze queue: the latest pending request per URI.
     pending: HashMap<Uri, AnalyzeRequest>,
@@ -3703,11 +3702,12 @@ impl Worker {
             DispatchAction::Wait => return,
             DispatchAction::Start(uri) => uri,
             DispatchAction::SupersedeAndStart(uri) => {
-                // The write-phase already tripped cancellation on a real edit, but
-                // make it explicit and robust: block until the old clone drops.
-                // Safe — this thread holds no clone.
-                self.db.trigger_cancellation();
-                self.inflight = None;
+                // Request snapshots may already include the edit that superseded
+                // these diagnostics. Canceling the database here would discard
+                // those current reads too, even though no further write occurred.
+                if let Some(inflight) = self.inflight.take() {
+                    inflight.cancellation.cancel();
+                }
                 uri
             }
         };
@@ -3735,6 +3735,7 @@ impl Worker {
         self.inflight = Some(InflightAnalyze {
             uri: uri.clone(),
             version,
+            cancellation: snapshot.cancellation_token(),
         });
         self.read_spawner.spawn(move || {
             let result = salsa::Cancelled::catch(AssertUnwindSafe(|| match kind {
@@ -3753,9 +3754,8 @@ impl Worker {
                     diags,
                 });
             }
-            // The clone MUST drop before we signal `done`: the next write-phase /
-            // `trigger_cancellation` blocks until it's gone, so a premature `done`
-            // could let the worker start a write that deadlocks on this clone.
+            // Completion releases the slot only after this read has released
+            // its snapshot, which would otherwise hold up the next write.
             drop(snapshot);
             let _ = done_tx.send(AnalyzeDone { uri, version });
         });
@@ -8526,6 +8526,113 @@ mod tests {
             pending.try_recv().unwrap(),
             Outbound::Diagnostics { .. }
         ));
+    }
+
+    #[test]
+    fn superseding_diagnostics_preserves_queued_rename() {
+        let timeout = std::time::Duration::from_secs(5);
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let bib = dir.path().join("refs.bib");
+        let main_uri = path_to_uri(&main).unwrap();
+        let bib_uri = path_to_uri(&bib).unwrap();
+        let source = "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\cite{key}\n";
+        let text = Arc::new(TextBuffer::new(source, PositionEncoding::Utf16));
+        let mut db = IncrementalDatabase::default();
+        for (path, source) in [(&main, source), (&bib, "@article{KEY, title={Title}}\n")] {
+            let file = db.upsert_file(path, source);
+            db.reparse_stage_edits(file, None);
+        }
+
+        let (server, client) = Connection::memory();
+        let (events, event_rx) = unbounded();
+        let (done_tx, done_rx) = unbounded();
+        let pool = TaskPool::new("test-supersede", 1);
+        let (release_tx, release_rx) = unbounded::<()>();
+        // Hold both reads until supersession has run, so their relative speed
+        // cannot hide cancellation of the rename snapshot.
+        pool.spawner().spawn(move || {
+            let _ = release_rx.recv();
+        });
+        let mut worker = Worker {
+            db,
+            out_tx: WorkerSender {
+                events,
+                responses: server.sender.clone(),
+            },
+            done_tx,
+            read_spawner: pool.spawner(),
+            encoding: PositionEncoding::Utf16,
+            inflight: None,
+            pending: HashMap::new(),
+            seeded_dirs: HashSet::new(),
+            bib_lookups: HashMap::new(),
+        };
+        worker.start_analyze(AnalyzeRequest {
+            uri: main_uri.clone(),
+            path: main.clone(),
+            version: 1,
+            kind: FileKind::Tex,
+            rules: RuleSelection::resolve(None, &[]).0,
+        });
+        // A higher version with identical bytes still supersedes diagnostics,
+        // but performs no database write that could cancel either read.
+        worker.handle_job(WorkerJob::Edit {
+            uri: main_uri.clone(),
+            path: main.clone(),
+            text: Arc::clone(&text),
+            version: 2,
+            kind: FileKind::Tex,
+            rules: RuleSelection::resolve(None, &[]).0,
+            exclude: ExcludeFilter::none(),
+            edits: None,
+        });
+        worker.handle_job(WorkerJob::Rename {
+            id: RequestId::from(7),
+            path: main,
+            text,
+            position: Position::new(2, 6),
+            new_name: "new".to_owned(),
+        });
+
+        let (dispatched_tx, dispatched_rx) = unbounded();
+        let scheduler = std::thread::spawn(move || {
+            worker.try_dispatch();
+            dispatched_tx.send(()).unwrap();
+        });
+        let dispatched = dispatched_rx.recv_timeout(timeout);
+        // Release the reads even on failure so a global cancellation cannot
+        // leave the scheduler waiting for snapshots held by this test.
+        release_tx.send(()).unwrap();
+        scheduler.join().unwrap();
+
+        let Message::Response(response) = client.receiver.recv_timeout(timeout).unwrap() else {
+            panic!("expected the rename response");
+        };
+        assert_eq!(response.id, RequestId::from(7));
+        let edit: Option<WorkspaceEdit> =
+            serde_json::from_value(response.response_result.unwrap()).unwrap();
+        let changes = edit
+            .expect("diagnostics supersession must not cancel rename")
+            .changes
+            .unwrap();
+        assert_eq!(changes.len(), 2);
+        for uri in [&main_uri, &bib_uri] {
+            assert_eq!(changes[uri].len(), 1);
+            assert_eq!(changes[uri][0].new_text, "new");
+        }
+        dispatched.expect("diagnostics supersession must not wait for unrelated reads");
+        for version in [1, 2] {
+            let done = done_rx.recv_timeout(timeout).unwrap();
+            assert_eq!(done.uri, main_uri);
+            assert_eq!(done.version, version);
+        }
+        let Outbound::Diagnostics { uri, version, .. } = event_rx.try_recv().unwrap() else {
+            panic!("expected replacement diagnostics");
+        };
+        assert_eq!(uri, main_uri);
+        assert_eq!(version, 2, "the superseded analyze must publish nothing");
+        assert!(event_rx.try_recv().is_err());
     }
 
     #[test]

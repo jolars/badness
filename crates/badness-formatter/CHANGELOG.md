@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/jolars/badness/compare/badness-formatter-v0.8.3...badness-formatter-v0.9.0) (2026-09-21)
+
+### Features
+- **format:** honor width in semantic wrapping ([`fc6feee`](https://github.com/jolars/badness/commit/fc6feee476e9c88a4f3acb90e43ae3b2a96840ac)), closes [#183](https://github.com/jolars/badness/issues/183)
+
+### Bug Fixes
+- **parser:** capture xparse `c` environment bodies ([`a3558a5`](https://github.com/jolars/badness/commit/a3558a5c054821ee48b2ee1a7e38b0e1f81c146c)), fixes [#184](https://github.com/jolars/badness/issues/184)
+- **formatter:** preserve glued opaque environments ([`cab55f6`](https://github.com/jolars/badness/commit/cab55f6e8d396afc803fe7b80702bce47b46e272))
+
+### Dependencies
+- updated crates/badness-parser to v0.10.0
+
 ## [0.8.3](https://github.com/jolars/badness/compare/badness-formatter-v0.8.2...badness-formatter-v0.8.3) (2026-09-03)
 
 ### Bug Fixes

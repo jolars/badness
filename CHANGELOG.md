@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.24.0](https://github.com/jolars/badness/compare/v0.23.0...v0.24.0) (2026-09-21)
 
 ### Breaking Changes
 
@@ -11,6 +11,28 @@ The `semantic` wrap mode now considers `line-width` and reflows if the line widt
 wrap = "semantic"
 line-width = 0 # disable line width limit
 ```
+
+### Features
+- **lsp:** add expl3 completion ([`17ab28b`](https://github.com/jolars/badness/commit/17ab28b91a0a92924a0469a05d88b54a11396403))
+- **format:** honor width in semantic wrapping ([`fc6feee`](https://github.com/jolars/badness/commit/fc6feee476e9c88a4f3acb90e43ae3b2a96840ac)), closes [#183](https://github.com/jolars/badness/issues/183)
+- **lint:** add expl3 semantic checks ([`7e1ad2c`](https://github.com/jolars/badness/commit/7e1ad2c4c3b7f192137a21d96c310120d195ca7f))
+
+### Bug Fixes
+- **linter:** avoid uncertain duplicate warnings ([`3dfe033`](https://github.com/jolars/badness/commit/3dfe033132b687f564294ca6e3c7c26687c8543d)), fixes [#185](https://github.com/jolars/badness/issues/185)
+- fix rename race ([`b6d7b7f`](https://github.com/jolars/badness/commit/b6d7b7f631cad08f516db2aeb814e788fd6ff2ed))
+- **parser:** capture xparse `c` environment bodies ([`a3558a5`](https://github.com/jolars/badness/commit/a3558a5c054821ee48b2ee1a7e38b0e1f81c146c)), fixes [#184](https://github.com/jolars/badness/issues/184)
+- **lint:** accept exam question parts without arguments ([`3e4ff7c`](https://github.com/jolars/badness/commit/3e4ff7ccde7c97d7d4297e497b019eee787b33bb)), fixes [#181](https://github.com/jolars/badness/issues/181)
+- **formatter:** preserve glued opaque environments ([`cab55f6`](https://github.com/jolars/badness/commit/cab55f6e8d396afc803fe7b80702bce47b46e272))
+
+### Performance Improvements
+- **lsp:** reduce repeated hover lookup work ([`6ef4bf8`](https://github.com/jolars/badness/commit/6ef4bf8715663d819fa28ccbef512b39033cf871))
+- **lsp:** reduce configuration validation overhead ([`ae34296`](https://github.com/jolars/badness/commit/ae34296ca1eb8dc600d71dfeddd298d12c468d06))
+- **lsp:** reduce warm rename overhead ([`132a112`](https://github.com/jolars/badness/commit/132a112ac453713774cb6fd32c7ce6d34cda2a62))
+- **build:** enable ThinLTO with one codegen unit ([`2e9414c`](https://github.com/jolars/badness/commit/2e9414cef0e782b503531fd4075d22221a79dec1))
+
+### Dependencies
+- updated crates/badness-formatter to v0.9.0
+- updated crates/badness-parser to v0.10.0
 
 ## [0.23.0](https://github.com/jolars/badness/compare/v0.22.1...v0.23.0) (2026-09-03)
 

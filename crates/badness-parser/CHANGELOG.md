@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.0](https://github.com/jolars/badness/compare/badness-parser-v0.9.0...badness-parser-v0.10.0) (2026-09-21)
+
+### Features
+- **lsp:** add expl3 completion ([`17ab28b`](https://github.com/jolars/badness/commit/17ab28b91a0a92924a0469a05d88b54a11396403))
+
+### Bug Fixes
+- **linter:** avoid uncertain duplicate warnings ([`3dfe033`](https://github.com/jolars/badness/commit/3dfe033132b687f564294ca6e3c7c26687c8543d)), fixes [#185](https://github.com/jolars/badness/issues/185)
+- **parser:** capture xparse `c` environment bodies ([`a3558a5`](https://github.com/jolars/badness/commit/a3558a5c054821ee48b2ee1a7e38b0e1f81c146c)), fixes [#184](https://github.com/jolars/badness/issues/184)
+
 ## [0.9.0](https://github.com/jolars/badness/compare/badness-parser-v0.8.1...badness-parser-v0.9.0) (2026-09-03)
 
 ### Features

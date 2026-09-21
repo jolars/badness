@@ -6,9 +6,9 @@ and the wasm build. Run `task fmt` before committing Rust changes.
 
 ## Match checks to the changed path
 
-- **LaTeX parser:** `cargo test -p badness-parser`, including snapshots,
-  round trips, property losslessness, and incremental-reparse tests. For
-  parser/CST changes that can affect concordance, follow
+- **LaTeX parser:** `cargo test -p badness-parser`, including snapshots, round
+  trips, property losslessness, and incremental-reparse tests. For parser/CST
+  changes that can affect concordance, follow
   [parse-compat](../../parse-compat/SKILL.md). Preserve error vectors as well as
   source reconstruction.
 - **BibTeX parser:** include the crate's `bib_parser`, `bib_roundtrip`, and
@@ -43,6 +43,13 @@ For retained-history memory changes, run `task bench:lsp-memory-gate` with its
 paired controls. These local gates are distinct from `task check`; keep their
 timing and retention thresholds in the harnesses rather than adding duplicate
 assertions elsewhere. Do not run them on shared CI as timing gates.
+
+When adding a cache or changing its lifetime, verify retention with paired
+histories that exercise the affected production path. Populate the cache and
+trigger invalidation through repeated edits or project changes, as applicable.
+Compare live allocations at equivalent final states with the cache populated in
+both histories. An existing memory gate counts as this check only if its
+scenario exercises that cache.
 
 ## Evidence to retain
 

@@ -93,7 +93,7 @@ linkcolor=blue}
 
 ## `duplicate-label`
 
-Flag a label key defined more than once in the same label namespace -- within one file, or across files that share a document when a project view is available. LaTeX itself only warns and silently keeps the last definition. Definitions in mutually exclusive branches of a TeX conditional (`\iftrue...\else...\fi`, `\newif`-defined conditionals included) are not duplicates and are not flagged. No autofix: resolving a collision (rename vs delete) is the author's call.
+Flag a label key defined more than once in the same label namespace -- within one file, or across files that share a document when a project view is available. LaTeX itself only warns and silently keeps the last definition. Within a file, a warning requires a prior definition in the same conditional branch or an enclosing context. Separate conditional tests are treated as uncertain and do not trigger a warning. Recognizes `\if...\else...\fi` and common macros with complete braced arguments, including `\ifthenelse`, `\iftoggle`, and `\IfFileExists`. Predicates are not evaluated, and coverage across branches is not combined. Cross-file checks use label namespaces. No autofix: resolving a collision (rename vs delete) is the author's call.
 
 This rule is **enabled by default**.
 
@@ -897,7 +897,7 @@ warning: verbatim-trailing-text
 
 ## `duplicate-package`
 
-Flag a package loaded more than once in the same file with `\usepackage`/`\RequirePackage` (which share one package namespace). LaTeX loads a given package only once; a second load is redundant and, when the options disagree, an option-clash error. Loads in mutually exclusive branches of a TeX conditional (`\iftrue...\else...\fi`, `\newif`-defined conditionals included) are not duplicates and are not flagged; `if`-named macros that take brace arguments instead of a `\fi` terminator (`\ifthenelse` and friends) carry no recognized branches. No autofix: removing a load can drop options the survivor lacks, and which load to keep is the author's call. Class loads (`\documentclass`/`\LoadClass`) are a separate concern and are not flagged.
+Flag a package loaded more than once in the same file with `\usepackage`/`\RequirePackage` (which share one package namespace). LaTeX loads a given package only once; a second load is redundant and, when the options disagree, an option-clash error. A warning requires a prior load in the same conditional branch or an enclosing context (including an unconditional prior). Separate conditional tests are treated as uncertain and do not trigger a warning. Recognizes `\if...\else...\fi` and common macros with complete braced arguments, including `\ifthenelse`, `\iftoggle`, and `\IfFileExists`. Predicates are not evaluated, and coverage across branches is not combined. No autofix: removing a load can drop options the survivor lacks, and which load to keep is the author's call. Class loads (`\documentclass`/`\LoadClass`) are a separate concern and are not flagged.
 
 This rule is **enabled by default**.
 

@@ -1247,6 +1247,28 @@ fn duplicate_package_flags_second_load() {
 }
 
 #[test]
+fn duplicate_rules_require_a_guaranteed_prior_in_conditional_code() {
+    let src = concat!(
+        "\\ifthenelse{\\equal{\\format}{a4}}{\\usepackage[a4paper]{geometry}\\label{layout}}{}\n",
+        "\\ifthenelse{\\equal{\\format}{kindle}}{\\usepackage[papersize={90mm,122mm}]{geometry}\\label{layout}}{}\n",
+        "\\ifthenelse{\\equal{\\format}{tablet}}{\\usepackage[papersize={30em,485em}]{geometry}\\label{layout}}{}\n",
+        "\\usepackage{xcolor}\n\\usepackage{xcolor}\n",
+        "\\label{repeated}\n\\label{repeated}\n",
+    );
+    let parsed = parse(src);
+    assert!(parsed.errors.is_empty());
+    assert_eq!(SyntaxNode::new_root(parsed.green).to_string(), src);
+    let out = lint(src);
+    for rule in ["duplicate-package", "duplicate-label"] {
+        assert_eq!(
+            out.iter().filter(|(id, _)| *id == rule).count(),
+            1,
+            "{out:?}"
+        );
+    }
+}
+
+#[test]
 fn missing_provides_fires_only_for_package_sources() {
     // A `.sty` without `\ProvidesPackage` is flagged...
     assert!(lint_at("mypkg.sty", "\\RequirePackage{xcolor}\n").contains(&"missing-provides"));

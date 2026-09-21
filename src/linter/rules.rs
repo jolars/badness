@@ -121,7 +121,7 @@ pub struct RuleContext<'a> {
     /// Effective text/math/unknown mode, computed once for all mode-sensitive
     /// rules.
     mode_index: ModeIndex,
-    /// The `\if…\else…\fi` branch path per byte offset, precomputed once so the
+    /// The primitive and macro conditional path per byte offset, computed once so the
     /// duplicate-detection rules share one conditional tracker instead of each
     /// interpreting `\else`/`\fi` tokens themselves (see
     /// [`crate::linter::conditional`]). Same posture as `math_regions`: a
@@ -178,8 +178,8 @@ impl<'a> RuleContext<'a> {
     }
 
     /// The conditional branch path in effect at byte `offset` — empty when the
-    /// offset is not inside any `\if…\fi`. Compare two sites with
-    /// [`crate::linter::conditional::mutually_exclusive`]. `pub(crate)` (unlike
+    /// offset is not inside a recognized conditional branch. Compare sites with
+    /// [`crate::linter::conditional::guaranteed_before`]. `pub(crate)` (unlike
     /// [`RuleContext::in_math`]) so `Frame` stays out of the crate's public API.
     pub(crate) fn conditional_path_at(&self, offset: usize) -> &[super::conditional::Frame] {
         self.conditionals.path_at(offset)

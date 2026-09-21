@@ -1,57 +1,46 @@
-//! Shared conditional-branch pre-pass: which `\if…\else…\fi` branches a byte
-//! offset sits in, so duplicate-detection rules can treat loads or labels in
-//! mutually exclusive branches as non-duplicates
-//! (`\iftrue\usepackage{p}\else\usepackage{p}\fi` loads `p` exactly once no
-//! matter which branch TeX takes).
+//! Shared conditional paths for duplicate-package and duplicate-label checks.
 //!
-//! Computed once per file by [`super::rules::RuleContext`] — the same
-//! precomputed, read-only, tree-derived side index as `math_regions` — and
-//! queried by byte offset ([`ConditionalIndex::path_at`]). Rules never track
-//! conditional state themselves.
+//! Computed once per file by [`super::rules::RuleContext`] and queried by byte
+//! offset ([`ConditionalIndex::path_at`]). A prior occurrence establishes a
+//! duplicate only when its path is an ancestor of, or identical to, the later
+//! path. Separate tests are unrelated: uncertainty should not produce a warning.
 //!
-//! **Pair-and-trust.** Any control word with a lowercase `if` prefix opens a
-//! frame, and its branches count as mutually exclusive — `\iftrue` and a
-//! `\newif`-defined `\ifmyflag` alike. Pairing `\else`/`\or`/`\fi` against
-//! *every* `if*` opener (rather than a curated primitive list) is what keeps
-//! the stack in sync: an unrecognized conditional's `\else` must bump its own
-//! frame, never an enclosing one.
+//! **Primitive conditionals.** Any lowercase `if`-prefixed control word opens
+//! a frame unless the shared [`badness_parser::parser::conditional::OpenerScan`]
+//! recognizes a brace-argument macro or an operand slot. Pairing every opener
+//! keeps a user-defined conditional's `\else` from changing an enclosing frame.
+//! This recognition is shared with the parser's `CONDITIONAL` shape gate.
 //!
-//! Recognition itself — the denylist of `if*`-named brace-argument macros, the
-//! operand slots of `\ifx`/`\newif`/`\let`, and the `\ifcsname` body — lives in
-//! [`badness_parser::parser::conditional`] and is driven here through
-//! [`OpenerScan`]. The parser's `CONDITIONAL` shape gate reads the same set, so
-//! the linter's branch paths and the CST's conditional nodes cannot disagree
-//! about what an opener is. Capital-`If` commands (`\IfFileExists`, xparse
-//! `\IfValueTF`) never match the lowercase prefix.
+//! **Macro conditionals.** [`macro_branches`] recognizes curated commands such
+//! as `\ifthenelse`, `\iftoggle`, and `\IfFileExists`, provided their arguments
+//! are complete and braced. Predicates are opaque. Each branch gets a frame and
+//! its own primitive scan; leaving the argument restores the enclosing state.
+//! This is linter semantics over ordinary command/group syntax, not a parser
+//! attachment rule. Extra greedily attached groups retain their outer context.
 //!
-//! One further source of stray conditional tokens is neutralized here rather
-//! than in the shared scan, because it needs the tree:
+//! **Definition bodies.** Tokens inside `\newcommand{\x}{\else}` or
+//! `\def\stopit{\fi}` are carried code, not live flow. The span of a definition
+//! command (per [`crate::semantic::define::is_definition_command`]) is skipped.
+//! Loads and labels inside definitions are still counted by the rules.
 //!
-//! - **Definition bodies.** Tokens inside `\newcommand{\x}{\else}` or
-//!   `\def\stopit{\fi}` are code carried, not executed; the span of a
-//!   definition command (per [`crate::semantic::define::is_definition_command`])
-//!   is skipped wholesale. (The parser needs no equivalent: a `\fi` inside a
-//!   definition body sits inside a brace group, which its shape gate already
-//!   refuses to pair across.)
-//!
-//! Known limitations, accepted rather than chased: `\def\x#1{\fi}` (parameter
-//! text between name and body) may under-cover the definition span, and a live
-//! opener sitting in an operand slot (`\if ab\ifsomething`) fails to open a
-//! frame — in both cases the flow-word handling degrades gracefully (a stray
-//! `\fi` on an empty stack is a no-op). Loads and labels *inside* definition
-//! bodies keep being counted by the rules; only conditional interpretation is
-//! suppressed there.
+//! No predicates are evaluated or correlated, including literal `\iftrue`.
+//! The analysis does not combine all branches into a guaranteed prior or infer
+//! custom macro semantics. These limits prefer missed duplicates to noise.
+//! Existing primitive-scan approximations remain: parameter text can under-cover
+//! a `\def` body, and textual operands can consume a subsequent opener's scan
+//! slot. See [`OpenerScan`] for the operand policy.
+
+use std::collections::HashMap;
 
 use badness_parser::parser::conditional::{FlowWord, OpenerScan, Word};
-use rowan::TextSize;
+use rowan::{TextRange, TextSize, WalkEvent};
 
-use crate::ast::command_name;
+use crate::ast::{AstNode, Command, Group};
 use crate::semantic::define::is_definition_command;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
 /// One open conditional at a point in the document: `id` names the specific
-/// `\if…\fi` instance (assigned in document order when it opens), `branch`
-/// counts the `\else`/`\or` tokens seen inside it so far.
+/// primitive or macro conditional instance; `branch` identifies one arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Frame {
     id: u32,
@@ -61,59 +50,86 @@ pub(crate) struct Frame {
 /// The conditional branch path at every state-change offset, for binary-search
 /// lookup by byte offset.
 pub(crate) struct ConditionalIndex {
-    /// `(offset, path)` per conditional token, in strictly increasing offset
-    /// order (each snapshot comes from a distinct `COMMAND` node in preorder).
-    /// The path is the state *after* the token. Cloning the whole stack per
-    /// state change is cheap: real documents hold a handful of conditional
-    /// tokens, and nesting is shallow.
+    /// State after each branch boundary, in strictly increasing offset order.
+    /// Cloning the whole stack is cheap for the shallow nesting of real files.
     snapshots: Vec<(TextSize, Vec<Frame>)>,
 }
 
-/// Whether two branch paths are provably mutually exclusive: some conditional
-/// instance contains both sites in *different* branches. The positional zip is
-/// sound because a frame id always occupies one nesting depth — two paths that
-/// share a frame share every frame above it, at the same positions.
-pub(crate) fn mutually_exclusive(a: &[Frame], b: &[Frame]) -> bool {
-    a.iter()
-        .zip(b)
-        .any(|(x, y)| x.id == y.id && x.branch != y.branch)
+/// Whether an earlier site executes whenever the later site does, according to
+/// their conditional paths. An enclosing or identical path proves this; merely
+/// failing to prove exclusivity does not. Predicates are never evaluated, and
+/// separate conditionals remain unrelated even when their tests look identical.
+pub(crate) fn guaranteed_before(earlier: &[Frame], later: &[Frame]) -> bool {
+    later.starts_with(earlier)
 }
 
 impl ConditionalIndex {
-    /// Walk `root`'s `COMMAND` nodes in preorder (document order) and record a
-    /// path snapshot at every conditional state change.
+    /// Record branch boundaries in document order. Braced macro branches save
+    /// and restore their enclosing state, so a predicate's control words and an
+    /// incomplete primitive conditional cannot affect a sibling branch.
     pub(crate) fn compute(root: &SyntaxNode) -> Self {
         let mut stack: Vec<Frame> = Vec::new();
         let mut next_id = 0u32;
         let mut snapshots: Vec<(TextSize, Vec<Frame>)> = Vec::new();
         let mut scan = OpenerScan::new();
         let mut suppress_until = TextSize::from(0);
+        let mut branch_groups = HashMap::new();
+        let mut scopes: Vec<BranchScope> = Vec::new();
 
-        for node in root.descendants() {
-            if node.kind() != SyntaxKind::COMMAND {
-                continue;
-            }
+        for event in root.preorder() {
+            let node = match event {
+                WalkEvent::Enter(node) => node,
+                WalkEvent::Leave(node) => {
+                    if node.kind() == SyntaxKind::GROUP
+                        && scopes.last().is_some_and(|s| s.group == node.text_range())
+                    {
+                        let scope = scopes.pop().expect("matching branch scope");
+                        stack = scope.path;
+                        scan = scope.scan;
+                        snapshot(&mut snapshots, node.text_range().end(), &stack);
+                    }
+                    continue;
+                }
+            };
             let start = node.text_range().start();
             if start < suppress_until {
                 continue;
             }
-            let Some(name) = command_name(&node) else {
+            if node.kind() == SyntaxKind::GROUP
+                && let Some(frame) = branch_groups.remove(&start)
+            {
+                scopes.push(BranchScope {
+                    group: node.text_range(),
+                    path: stack.clone(),
+                    scan: std::mem::take(&mut scan),
+                });
+                stack.push(frame);
+                snapshot(&mut snapshots, start, &stack);
+            }
+            let Some(command) = Command::cast(node.clone()) else {
+                continue;
+            };
+            let Some(name) = command.name() else {
                 continue;
             };
             if is_definition_command(&name) {
                 suppress_until = suppress_until.max(definition_span_end(&node));
                 continue;
             }
+            // A primitive closer inside an argument cannot close the macro's
+            // branch frame or alter the conditional surrounding that argument.
+            let branch_depth = scopes.last().map_or(0, |s| s.path.len() + 1);
             match scan.visit(&name) {
                 Word::Flow(FlowWord::Else | FlowWord::Or) => {
-                    if let Some(top) = stack.last_mut() {
-                        top.branch += 1;
-                        snapshots.push((start, stack.clone()));
+                    if stack.len() > branch_depth {
+                        stack.last_mut().expect("open primitive").branch += 1;
+                        snapshot(&mut snapshots, start, &stack);
                     }
                 }
                 Word::Flow(FlowWord::Fi) => {
-                    if stack.pop().is_some() {
-                        snapshots.push((start, stack.clone()));
+                    if stack.len() > branch_depth {
+                        stack.pop();
+                        snapshot(&mut snapshots, start, &stack);
                     }
                 }
                 Word::Opens => {
@@ -122,9 +138,26 @@ impl ConditionalIndex {
                         branch: 0,
                     });
                     next_id += 1;
-                    snapshots.push((start, stack.clone()));
+                    snapshot(&mut snapshots, start, &stack);
                 }
-                Word::Inert => {}
+                Word::Inert => {
+                    if let Some(branches) = macro_branches(&command, &name) {
+                        // Test arguments are data, including control sequences
+                        // passed to predicates such as `\boolean`.
+                        suppress_until = branches[0].start();
+                        for (branch, range) in branches.into_iter().enumerate() {
+                            branch_groups.insert(
+                                range.start(),
+                                Frame {
+                                    id: next_id,
+                                    branch: branch as u32,
+                                },
+                            );
+                        }
+                        next_id += 1;
+                    }
+                }
+                Word::Suppressed => {}
             }
         }
         Self { snapshots }
@@ -142,6 +175,58 @@ impl ConditionalIndex {
             &self.snapshots[i - 1].1
         }
     }
+}
+
+struct BranchScope {
+    group: TextRange,
+    path: Vec<Frame>,
+    scan: OpenerScan,
+}
+
+fn snapshot(snapshots: &mut Vec<(TextSize, Vec<Frame>)>, at: TextSize, path: &[Frame]) {
+    // A group end and the following command can share an offset. Keep only the
+    // final state there so binary-search lookup has one unambiguous answer.
+    if let Some((last_at, last_path)) = snapshots.last_mut()
+        && *last_at == at
+    {
+        path.clone_into(last_path);
+    } else {
+        snapshots.push((at, path.to_vec()));
+    }
+}
+
+/// Curated semantics belong here, not in parser attachment. Require complete,
+/// positionally braced arguments: filtering out optionals or guessing unbraced
+/// operands would assign branch meaning to the wrong source ranges.
+fn macro_branches(command: &Command, name: &str) -> Option<[TextRange; 2]> {
+    let tests = match name {
+        "ifthenelse" | "iflanguage" | "iftoggle" | "ifbool" | "ifboolexpr" | "ifboolexpe"
+        | "ifcsdef" | "ifcsundef" | "ifcsmacro" | "ifcsempty" | "ifcsvoid" | "ifstrempty"
+        | "ifblank" | "ifnumodd" | "IfFileExists" | "IfValueTF" | "IfNoValueTF" | "IfBooleanTF"
+        | "IfPackageLoadedTF" | "IfClassLoadedTF" | "@ifpackageloaded" | "@ifclassloaded"
+        | "@ifundefined" => 1,
+        "ifstrequal" | "ifcsstring" | "ifcsequal" | "ifnumequal" | "ifnumgreater" | "ifnumless"
+        | "ifdimequal" | "ifdimgreater" | "ifdimless" => 2,
+        "ifnumcomp" | "ifdimcomp" => 3,
+        _ => return None,
+    };
+    let mut arguments = command
+        .syntax()
+        .children_with_tokens()
+        .skip(1)
+        .filter(|el| !is_trivia(el.kind()));
+    let mut branches = [TextRange::default(); 2];
+    for i in 0..tests + 2 {
+        let element = arguments.next()?;
+        let group = Group::cast(element.into_node()?)?;
+        if group.syntax().last_child_or_token()?.kind() != SyntaxKind::R_BRACE {
+            return None;
+        }
+        if i >= tests {
+            branches[i - tests] = group.syntax().text_range();
+        }
+    }
+    Some(branches)
 }
 
 /// The end of a definition command's span, mirroring the definition scanner's
@@ -218,15 +303,15 @@ mod tests {
         let src = "\\iftrue\\usepackage{a}\\else\\usepackage{a}\\fi\n";
         let idx = index(src);
         let (a, b) = paths_at_loads(&idx, src);
-        assert!(mutually_exclusive(a, b));
+        assert!(!guaranteed_before(a, b));
     }
 
     #[test]
-    fn same_branch_is_not_exclusive() {
+    fn same_branch_guarantees_a_prior_occurrence() {
         let src = "\\iftrue\\usepackage{a}\\usepackage{a}\\else x\\fi\n";
         let idx = index(src);
         let (a, b) = paths_at_loads(&idx, src);
-        assert!(!mutually_exclusive(a, b));
+        assert!(guaranteed_before(a, b));
     }
 
     #[test]
@@ -236,19 +321,20 @@ mod tests {
         let a = idx.path_at(offset(src, "\\usepackage", 0));
         let b = idx.path_at(offset(src, "\\usepackage", 1));
         let c = idx.path_at(offset(src, "\\usepackage", 2));
-        assert!(mutually_exclusive(a, b));
-        assert!(mutually_exclusive(b, c));
-        assert!(mutually_exclusive(a, c));
+        assert!(!guaranteed_before(a, b));
+        assert!(!guaranteed_before(b, c));
+        assert!(!guaranteed_before(a, c));
     }
 
     #[test]
-    fn unconditional_site_is_never_exclusive() {
+    fn unconditional_prior_is_guaranteed_but_conditional_prior_is_not() {
         let src = "\\iftrue\\usepackage{a}\\fi\n\\usepackage{a}\n";
         let idx = index(src);
         let (a, b) = paths_at_loads(&idx, src);
         assert!(b.is_empty());
-        assert!(!mutually_exclusive(a, b));
-        assert!(!mutually_exclusive(b, b));
+        assert!(!guaranteed_before(a, b));
+        assert!(guaranteed_before(b, a));
+        assert!(guaranteed_before(b, b));
     }
 
     #[test]
@@ -258,7 +344,7 @@ mod tests {
         let src = "\\iftrue\\usepackage{a}\\else\\ifodd 1 \\usepackage{a}\\fi\\fi\n";
         let idx = index(src);
         let (a, b) = paths_at_loads(&idx, src);
-        assert!(mutually_exclusive(a, b));
+        assert!(!guaranteed_before(a, b));
     }
 
     #[test]
@@ -266,7 +352,7 @@ mod tests {
         let src = "\\ifmyflag\\usepackage{a}\\else\\usepackage{a}\\fi\n";
         let idx = index(src);
         let (a, b) = paths_at_loads(&idx, src);
-        assert!(mutually_exclusive(a, b));
+        assert!(!guaranteed_before(a, b));
     }
 
     #[test]
@@ -276,7 +362,7 @@ mod tests {
         let src = "\\iftrue\\ifmyflag x\\fi\\usepackage{a}\\else\\usepackage{a}\\fi\n";
         let idx = index(src);
         let (a, b) = paths_at_loads(&idx, src);
-        assert!(mutually_exclusive(a, b));
+        assert!(!guaranteed_before(a, b));
     }
 
     #[test]
@@ -286,7 +372,7 @@ mod tests {
         let src = "\\iftrue\\usepackage{a}\\ifmyflag\\else\\usepackage{a}\\fi\\fi\n";
         let idx = index(src);
         let (a, b) = paths_at_loads(&idx, src);
-        assert!(!mutually_exclusive(a, b));
+        assert!(guaranteed_before(a, b));
     }
 
     #[test]
@@ -312,7 +398,7 @@ mod tests {
         let src = "\\if ab\\usepackage{a}\\else\\usepackage{a}\\fi\n";
         let idx = index(src);
         let (a, b) = paths_at_loads(&idx, src);
-        assert!(mutually_exclusive(a, b));
+        assert!(!guaranteed_before(a, b));
     }
 
     #[test]
@@ -334,7 +420,7 @@ mod tests {
         let src = "\\ifcsname iftex\\endcsname\\usepackage{a}\\else\\usepackage{a}\\fi\n done";
         let idx = index(src);
         let (a, b) = paths_at_loads(&idx, src);
-        assert!(mutually_exclusive(a, b));
+        assert!(!guaranteed_before(a, b));
         assert!(idx.path_at(offset(src, "done", 0)).is_empty());
     }
 
@@ -350,11 +436,107 @@ mod tests {
     }
 
     #[test]
-    fn denylisted_macros_open_no_frames() {
+    fn macro_branches_do_not_escape_their_groups() {
         let src = "\\ifthenelse{\\boolean{x}}{a}{b} $a \\iff b$\n done";
         let idx = index(src);
         assert!(idx.path_at(offset(src, "done", 0)).is_empty());
-        assert!(idx.snapshots.is_empty());
+        assert!(!idx.snapshots.is_empty());
+    }
+
+    #[test]
+    fn braced_macros_track_branch_slots_and_restore_the_outer_path() {
+        for head in [
+            "\\ifthenelse{\\boolean{x}}",
+            "\\iftoggle{x}",
+            "\\ifbool{x}",
+            "\\ifboolexpr{bool {x}}",
+            "\\iflanguage{english}",
+            "\\ifstrequal{a}{b}",
+            "\\ifnumcomp{1}{<}{2}",
+            "\\IfFileExists{example.tex}",
+            "\\IfNoValueTF{#1}",
+        ] {
+            let src = format!(
+                "\\ifouter {head}% comment before the branches\n\
+                 {{\\usepackage{{a}}\\usepackage{{a}}}}% comment between branches\n\
+                 {{\\usepackage{{a}}}}\\usepackage{{a}}\\fi done"
+            );
+            let idx = index(&src);
+            let paths: Vec<_> = (0..4)
+                .map(|n| idx.path_at(offset(&src, "\\usepackage", n)))
+                .collect();
+            assert!(guaranteed_before(paths[0], paths[1]), "{src}");
+            assert!(!guaranteed_before(paths[0], paths[2]), "{src}");
+            assert!(!guaranteed_before(paths[0], paths[3]), "{src}");
+            assert_eq!(paths[0].len(), 2, "{src}");
+            assert_eq!(paths[3].len(), 1, "{src}");
+            assert!(idx.path_at(offset(&src, "done", 0)).is_empty(), "{src}");
+            assert!(idx.snapshots.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        }
+    }
+
+    #[test]
+    fn nested_macro_branches_retain_their_enclosing_path() {
+        let src = "\\ifthenelse{x}{\\usepackage{a}\\iftoggle{y}{\\usepackage{a}}{\\usepackage{a}}}{\\usepackage{a}}";
+        let idx = index(src);
+        let path = |n| idx.path_at(offset(src, "\\usepackage", n));
+        assert!(guaranteed_before(path(0), path(1)));
+        assert!(guaranteed_before(path(0), path(2)));
+        assert!(!guaranteed_before(path(1), path(2)));
+        assert!(!guaranteed_before(path(0), path(3)));
+    }
+
+    #[test]
+    fn extra_attached_groups_are_not_branches() {
+        let src = "\\ifthenelse{x}{\\usepackage{a}}{}{\\usepackage{a}}";
+        let idx = index(src);
+        let (a, b) = paths_at_loads(&idx, src);
+        assert_eq!(a.len(), 1);
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn malformed_macro_arguments_do_not_get_branch_positions() {
+        for src in [
+            "\\ifthenelse[x]{test}{\\usepackage{a}}{\\usepackage{a}}",
+            "\\ifthenelse{x}{\\usepackage{a}}",
+            "\\ifthenelse{x}{\\usepackage{a}}{unclosed",
+        ] {
+            let idx = index(src);
+            assert!(
+                idx.path_at(offset(src, "\\usepackage", 0)).is_empty(),
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn macro_predicates_and_definition_bodies_do_not_change_outer_state() {
+        let src = "\\ifouter\\usepackage{a}\\ifthenelse{\\iffoo\\else\\fi}{}{}\\newcommand{\\x}{\\ifthenelse{x}{\\fi}{\\else}}\\usepackage{a}\\fi done";
+        let idx = index(src);
+        let (a, b) = paths_at_loads(&idx, src);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 1);
+        assert!(idx.path_at(offset(src, "done", 0)).is_empty());
+    }
+
+    #[test]
+    fn primitive_state_cannot_escape_a_macro_branch() {
+        for body in ["\\iffoo", "\\else\\or\\fi", "\\ifdefined", "\\ifcsname"] {
+            let src = format!(
+                "\\ifouter\\ifthenelse{{x}}{{{body}}}{{\\usepackage{{a}}\\ifinner\\usepackage{{a}}\\fi}}\\usepackage{{a}}\\fi done"
+            );
+            let idx = index(&src);
+            let a = idx.path_at(offset(&src, "\\usepackage", 0));
+            let b = idx.path_at(offset(&src, "\\usepackage", 1));
+            let c = idx.path_at(offset(&src, "\\usepackage", 2));
+            assert_eq!(a.len(), 2, "{src}");
+            assert_eq!(b.len(), 3, "{src}");
+            assert_eq!(c.len(), 1, "{src}");
+            assert!(guaranteed_before(a, b), "{src}");
+            assert!(!guaranteed_before(a, c), "{src}");
+            assert!(idx.path_at(offset(&src, "done", 0)).is_empty(), "{src}");
+        }
     }
 
     #[test]

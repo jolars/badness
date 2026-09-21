@@ -154,8 +154,10 @@ pub enum Word {
     Opens,
     /// Divides or closes the innermost open conditional.
     Flow(FlowWord),
-    /// Neither — an ordinary command, or an `\ifX` sitting in an operand slot.
+    /// An ordinary command, neither a primitive opener nor a flow word.
     Inert,
+    /// An operand or `\ifcsname` body token, excluded from control flow.
+    Suppressed,
 }
 
 /// The running state that turns [`is_conditional_opener`] into a positional
@@ -195,10 +197,10 @@ impl OpenerScan {
         if self.in_csname {
             if name == CSNAME_CLOSER {
                 self.in_csname = false;
-                return Word::Inert;
+                return Word::Suppressed;
             }
             if flow.is_none() {
-                return Word::Inert;
+                return Word::Suppressed;
             }
             // Malformed input (an `\ifcsname` never closed): a flow word
             // re-enables interpretation rather than going dark to EOF.
@@ -207,7 +209,7 @@ impl OpenerScan {
         if self.pending_skips > 0 {
             if flow.is_none() {
                 self.pending_skips -= 1;
-                return Word::Inert;
+                return Word::Suppressed;
             }
             self.pending_skips = 0;
         }
@@ -247,14 +249,14 @@ mod tests {
 
     #[test]
     fn newif_declares_rather_than_opens() {
-        assert_eq!(scan(&["newif", "if@foo"]), [Word::Inert, Word::Inert]);
+        assert_eq!(scan(&["newif", "if@foo"]), [Word::Inert, Word::Suppressed]);
     }
 
     #[test]
-    fn ifx_operands_are_inert_even_when_if_named() {
+    fn ifx_operands_are_suppressed_even_when_if_named() {
         assert_eq!(
             scan(&["ifx", "ifpdf", "iftrue"]),
-            [Word::Opens, Word::Inert, Word::Inert]
+            [Word::Opens, Word::Suppressed, Word::Suppressed]
         );
     }
 
@@ -262,7 +264,23 @@ mod tests {
     fn let_aliases_two_tokens_without_opening() {
         assert_eq!(
             scan(&["let", "ifpdf", "iftrue"]),
-            [Word::Inert, Word::Inert, Word::Inert]
+            [Word::Inert, Word::Suppressed, Word::Suppressed]
+        );
+    }
+
+    #[test]
+    fn macro_names_are_suppressed_only_in_operand_positions() {
+        assert_eq!(
+            scan(&["ifdefined", "IfFileExists", "IfFileExists"]),
+            [Word::Opens, Word::Suppressed, Word::Inert]
+        );
+        assert_eq!(
+            scan(&["let", "saved", "ifthenelse", "ifthenelse"]),
+            [Word::Inert, Word::Suppressed, Word::Suppressed, Word::Inert]
+        );
+        assert_eq!(
+            scan(&["ifcsname", "IfFileExists", "endcsname", "IfFileExists"]),
+            [Word::Opens, Word::Suppressed, Word::Suppressed, Word::Inert]
         );
     }
 
@@ -280,7 +298,7 @@ mod tests {
             scan(&["ifx", "ifone", "else", "ifnum"]),
             [
                 Word::Opens,
-                Word::Inert,
+                Word::Suppressed,
                 Word::Flow(FlowWord::Else),
                 Word::Opens
             ]
@@ -291,7 +309,7 @@ mod tests {
     fn csname_bodies_hold_no_conditionals() {
         assert_eq!(
             scan(&["ifcsname", "ifnum", "endcsname", "ifdim"]),
-            [Word::Opens, Word::Inert, Word::Inert, Word::Opens]
+            [Word::Opens, Word::Suppressed, Word::Suppressed, Word::Opens]
         );
     }
 
@@ -301,7 +319,7 @@ mod tests {
             scan(&["ifcsname", "ifnum", "fi", "ifdim"]),
             [
                 Word::Opens,
-                Word::Inert,
+                Word::Suppressed,
                 Word::Flow(FlowWord::Fi),
                 Word::Opens
             ]

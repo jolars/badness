@@ -8,15 +8,11 @@
 //! duplicate regardless of any unanalyzed includes (adding files only reveals
 //! *more* duplicates).
 //!
-//! **Branch exclusivity (intra-file).** Two definitions in different branches
-//! of one `\if…\else…\fi` never both run, so they are not a duplicate —
-//! `\iftrue\label{a}\else\label{a}\fi` defines `a` exactly once. Branch
-//! membership comes from the shared [`crate::linter::conditional`] pre-pass
-//! (pair-and-trust; see its docs for the `\ifthenelse`-style denylist). A
-//! definition is flagged only when some earlier definition of the same key can
-//! coexist with it, and the related location points at the first such
-//! coexisting definition. The cross-file branch stays name-only by design and
-//! is untouched.
+//! **Conditional certainty (intra-file).** A definition is flagged only when
+//! a prior definition has an identical or enclosing conditional path, according
+//! to the shared [`crate::linter::conditional`] pre-pass. The related location
+//! points at the first such guaranteed prior. Unrelated conditional paths stay
+//! quiet. Cross-file resolution retains its name-only namespace policy.
 //!
 //! [`ResolvedLabels`]: crate::project::ResolvedLabels
 
@@ -25,7 +21,7 @@ use std::path::PathBuf;
 
 use rowan::TextRange;
 
-use crate::linter::conditional::{Frame, mutually_exclusive};
+use crate::linter::conditional::{Frame, guaranteed_before};
 use crate::linter::diagnostic::{Diagnostic, RelatedInfo, Severity};
 
 use super::{Example, Rule, RuleContext};
@@ -50,9 +46,13 @@ impl Rule for DuplicateLabel {
         "Flag a label key defined more than once in the same label \
          namespace -- within one file, or across files that share a document \
          when a project view is available. LaTeX itself only warns and silently \
-         keeps the last definition. Definitions in mutually exclusive branches \
-         of a TeX conditional (`\\iftrue...\\else...\\fi`, `\\newif`-defined \
-         conditionals included) are not duplicates and are not flagged. No \
+         keeps the last definition. Within a file, a warning requires a prior \
+         definition in the same conditional branch or an enclosing context. \
+         Separate conditional tests are treated as uncertain and do not trigger \
+         a warning. Recognizes `\\if...\\else...\\fi` and common macros with \
+         complete braced arguments, including `\\ifthenelse`, `\\iftoggle`, and \
+         `\\IfFileExists`. Predicates are not evaluated, and coverage across \
+         branches is not combined. Cross-file checks use label namespaces. No \
          autofix: resolving a collision (rename vs delete) is the author's \
          call."
     }
@@ -62,26 +62,21 @@ impl Rule for DuplicateLabel {
     }
 
     fn check_file(&self, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        // Track every prior definition of each key with its conditional branch
-        // path. Within a file, flag a definition only when some earlier one can
-        // coexist with it (all-exclusive priors mean at most one runs), and
-        // point the secondary at the first coexisting prior — the definition
-        // LaTeX would actually clash with. On a key's *first* occurrence in
-        // this file, the cross-file branch instead checks whether another file
-        // in the namespace defines it (the intra-file branch already owns the
-        // 2nd+ occurrences, so no overlap).
+        // Keep uncertain priors too: a later definition in their own branch
+        // can still be a duplicate. The first occurrence retains the cross-file
+        // check; subsequent occurrences are owned by the intra-file check.
         let mut seen: HashMap<&str, Vec<(TextRange, &[Frame])>> = HashMap::new();
         for label in ctx.model.labels() {
             let path_here = ctx.conditional_path_at(usize::from(label.range.start()));
             let priors = seen.entry(label.name.as_str()).or_default();
-            let coexisting = priors
+            let guaranteed = priors
                 .iter()
-                .find(|(_, p)| !mutually_exclusive(p, path_here))
+                .find(|(_, p)| guaranteed_before(p, path_here))
                 .map(|&(key_range, _)| key_range);
-            let (message, related) = match coexisting {
+            let (message, related) = match guaranteed {
                 Some(first) => (
                     Some(format!("label `{}` is defined more than once", label.name)),
-                    // The secondary points at the first coexisting definition,
+                    // The secondary points at the first guaranteed prior definition,
                     // in this file.
                     vec![RelatedInfo {
                         path: ctx.path.to_path_buf(),
@@ -94,8 +89,8 @@ impl Rule for DuplicateLabel {
                     .resolution
                     .and_then(|resolution| cross_file_finding(ctx, resolution, &label.name))
                     .map_or((None, Vec::new()), |(msg, related)| (Some(msg), related)),
-                // Later definitions that are exclusive with every prior get no
-                // finding at all (and no cross-file re-report).
+                // Uncertain priors provide no intra-file finding or cross-file
+                // re-report.
                 None => (None, Vec::new()),
             };
             priors.push((label.key_range, path_here));
@@ -244,28 +239,49 @@ mod tests {
     }
 
     #[test]
-    fn unconditional_definition_after_exclusive_pair_is_flagged_once() {
-        // The two conditional definitions are mutually exclusive, but the
-        // third, unconditional one can coexist with whichever branch ran; its
-        // related location is the *first* coexisting prior (the then-branch
-        // definition's key, bytes 15..16).
-        let src = "\\iftrue\\label{a}\\else\\label{a}\\fi\\label{a}\n";
+    fn related_location_skips_uncertain_prior_definitions() {
+        let src = "\\iffoo\\label{a}\\fi\\label{a}\\label{a}\n";
         let out = findings(src);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].related.len(), 1);
         let ri = &out[0].related[0];
-        assert_eq!((ri.start, ri.end), (14, 15));
+        assert_eq!(ri.start, src.match_indices("{a}").nth(1).unwrap().0 + 1);
         assert_eq!(&src[ri.start..ri.end], "a");
     }
 
     #[test]
-    fn ifthenelse_arguments_carry_no_recognized_branches() {
-        // `\ifthenelse` is a brace-argument macro, not a `\fi`-terminated
-        // conditional: denylisted, so the pair is flagged as before.
-        assert_eq!(
-            findings("\\ifthenelse{\\boolean{x}}{\\label{a}}{\\label{a}}\n").len(),
-            1
-        );
+    fn ifthenelse_branches_are_not_flagged() {
+        assert!(findings("\\ifthenelse{\\boolean{x}}{\\label{a}}{\\label{a}}\n").is_empty());
+    }
+
+    #[test]
+    fn macro_conditional_operands_do_not_hide_duplicates() {
+        for src in [
+            "\\ifdefined\\IfFileExists{}{\\label{a}}{\\label{a}}\\fi",
+            "\\ifdefined\\ifthenelse{}{\\label{a}}{\\label{a}}\\fi",
+            "\\let\\saved\\IfFileExists{}{\\label{a}}{\\label{a}}",
+            "\\ifx\\relax\\IfFileExists{}{\\label{a}}{\\label{a}}\\fi",
+        ] {
+            let out = findings(src);
+            assert_eq!(out.len(), 1, "{src}");
+            assert_eq!(out[0].start, src.rfind("\\label").unwrap(), "{src}");
+        }
+    }
+
+    #[test]
+    fn only_guaranteed_prior_definitions_are_flagged() {
+        for (src, count) in [
+            ("\\iffoo\\label{a}\\fi\\ifbar\\label{a}\\fi", 0),
+            ("\\label{a}\\iffoo\\label{a}\\fi", 1),
+            (
+                "\\ifthenelse{x}{\\label{a}}{}\\ifthenelse{y}{\\label{a}}{}",
+                0,
+            ),
+            ("\\ifthenelse{x}{\\label{a}\\label{a}}{}", 1),
+            ("\\ifthenelse{x}{\\label{a}}{}\\label{a}", 0),
+        ] {
+            assert_eq!(findings(src).len(), count, "{src}");
+        }
     }
 
     #[test]

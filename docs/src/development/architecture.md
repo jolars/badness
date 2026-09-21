@@ -1096,6 +1096,30 @@ Read jobs check the captured text against the database through
 requests can coalesce. The edit chain used for incremental parsing travels with
 the buffer update, as described under [Intra-file reparse](#intra-file-reparse).
 
+### Expl3 completion
+
+The pinned TeXstudio `expl3-commands.cwl` contributes a sorted `expl3Names` list
+through `task cwl:sync`. The build script embeds this list as static data. It
+supplies names only: expl3's single-token and parameter-text arguments do not
+fit the brace-based signature database, so this catalog never assigns formatter
+or linter signatures.
+
+The shared `semantic::expl3::calls` reader identifies complete calls, literal
+operands, and recognized executable bodies. Both semantic lint rules and the
+completion symbol collector use it. The collector records functions, variables,
+constants, conditional forms, and generated variants without interpreting macros
+or asserting execution order. Separate Salsa queries cache the position-free
+symbol sets and merge the current file with transitively loaded local packages
+and classes. Name-preserving edits backdate the merged symbol query.
+
+A separate completion mode index follows the lexer's toggle names and `.dtx`
+macrocode mode transitions; it does not use the formatter's layout ownership
+gates. Built-in expl3 suggestions and local names requiring `_` or `:` appear
+only at expl3 command positions. Command completions carry explicit replacement
+edits for the full name, excluding the backslash, using the live buffer's
+negotiated position encoding. Fresh-parse fallbacks use the same collector and
+mode classifier for the captured document.
+
 ### Project and installation data
 
 Shipped CTAN metadata maps package names to descriptions and catalog identifiers

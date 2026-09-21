@@ -2126,6 +2126,181 @@ fn lsp_signature_help_active_argument_and_null() {
 }
 
 #[test]
+fn lsp_expl3_completion_catalog_and_local_names() {
+    let (client, server_thread) = start_server(None);
+    for (i, (source, expected)) in [
+        ("\\ExplSyntaxOn\n\\tl_|\n", "tl_set:Nn"),
+        ("\\ExplSyntaxOn\n\\seq_|\n", "seq_map_inline:Nn"),
+        ("\\ExplSyntaxOn\n\\cs_new:|\n", "cs_new:Npn"),
+        ("\\ExplSyntaxOn\n\\l_tmpa_|\n", "l_tmpa_tl"),
+        (
+            "\\ExplSyntaxOn\n\\cs_new:Npn \\my_demo:n #1 {#1}\n\\my_|\n",
+            "my_demo:n",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\tl_new:N \\l_demo_tl\n\\l_demo|\n",
+            "l_demo_tl",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\cs_generate_variant:Nn \\my_demo:nn { V }\n\\my_demo:|\n",
+            "my_demo:Vn",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\tl_const:Nn \\c_demo_tl {text}\n\\c_demo|\n",
+            "c_demo_tl",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\tl_const:Nx \\c_demo_tl {text}\n\\c_demo|\n",
+            "c_demo_tl",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\tl_const:cx {c_demo_tl} {text}\n\\c_demo|\n",
+            "c_demo_tl",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\seq_const_from_clist:Nn \\c_demo_seq {a,b}\n\\c_demo|\n",
+            "c_demo_seq",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\prop_const_from_keyval:Nn \\c_demo_prop {a=b}\n\\c_demo|\n",
+            "c_demo_prop",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\intarray_const_from_clist:Nn \\c_demo_intarray {1,2}\n\\c_demo|\n",
+            "c_demo_intarray",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\prop_new_linked:N \\l_demo_prop\n\\l_demo|\n",
+            "l_demo_prop",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\cs_new:Npn \\PlainDemo #1 {#1}\n\\ExplSyntaxOff\n\\PlainD|\n",
+            "PlainDemo",
+        ),
+        (
+            "\\ExplSyntaxOn\n\\cs_new:Nn \\tl_set:Nn {#1#2}\n\\tl_set:|\n",
+            "tl_set:Nn",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let uri: Uri = format!("file:///expl3-complete-{i}.tex").parse().unwrap();
+        let (before, after) = source.split_once('|').unwrap();
+        did_open(&client, &uri, 1, &format!("{before}{after}"));
+        let position = Position::new(
+            before.matches('\n').count() as u32,
+            before.rsplit('\n').next().unwrap().len() as u32,
+        );
+        let items = complete_draining(&client, 10 + i as i32, &uri, position);
+        assert!(
+            labels(&items).contains(&expected),
+            "missing {expected} for {source}: {:?}",
+            labels(&items)
+        );
+        let matching: Vec<_> = items.iter().filter(|item| item.label == expected).collect();
+        assert_eq!(matching.len(), 1, "duplicate completion for {expected}");
+        let kind = if expected.starts_with("l_") {
+            CompletionItemKind::VARIABLE
+        } else if expected.starts_with("c_") {
+            CompletionItemKind::CONSTANT
+        } else {
+            CompletionItemKind::FUNCTION
+        };
+        assert_eq!(matching[0].kind, Some(kind));
+    }
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_expl3_completion_replaces_the_whole_name() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///expl3-edit.tex".parse().unwrap();
+    let source = "\\ExplSyntaxOn\n\\tl_set:garbage\n";
+    did_open(&client, &uri, 1, source);
+    let items = complete_draining(&client, 2, &uri, Position::new(1, 8));
+    let item = items
+        .iter()
+        .find(|item| item.label == "tl_set:Nn")
+        .expect("expl3 candidate");
+    let Some(lsp_types::CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+        panic!("command completion must carry an explicit replacement edit");
+    };
+    assert_eq!(
+        apply_edits(source, std::slice::from_ref(edit)),
+        "\\ExplSyntaxOn\n\\tl_set:Nn\n"
+    );
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_expl3_completion_respects_regions() {
+    let (client, server_thread) = start_server(None);
+    for (i, (source, extension, expected)) in [
+        ("\\tl", "tex", false),
+        ("% \\ExplSyntaxOn\n\\tl", "tex", false),
+        ("\\ExplSyntaxOn\n\\ExplSyntaxOff\n\\tl", "tex", false),
+        (
+            "\\ProvidesExplPackage{demo}{2026/01/01}{1}{Demo}\n\\tl",
+            "sty",
+            true,
+        ),
+        ("%<@@=demo>\n%    \\begin{macrocode}\n\\tl", "dtx", true),
+        ("\\ExplSyntaxOn\n\\", "tex", true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let uri: Uri = format!("file:///expl3-regions-{i}.{extension}")
+            .parse()
+            .unwrap();
+        did_open(&client, &uri, 1, source);
+        let position = Position::new(
+            source.matches('\n').count() as u32,
+            source.rsplit('\n').next().unwrap().len() as u32,
+        );
+        let items = complete_draining(&client, 20 + i as i32, &uri, position);
+        assert_eq!(labels(&items).contains(&"tl_set:Nn"), expected, "{source}");
+    }
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_expl3_completion_tracks_loaded_package_buffers() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let pkg = dir.path().join("mypkg.sty");
+    let source = "\\usepackage{mypkg}\n\\ExplSyntaxOn\n\\pkg_\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&pkg, "\\ExplSyntaxOn\n\\cs_new:Nn \\pkg_old:n {#1}\n").unwrap();
+    std::fs::write(
+        dir.path().join("unrelated.sty"),
+        "\\ExplSyntaxOn\n\\cs_new:Nn \\pkg_unrelated:n {#1}\n",
+    )
+    .unwrap();
+    let uri = path_to_file_uri(&main);
+    let pkg_uri = path_to_file_uri(&pkg);
+    let (client, server_thread) = start_server(None);
+    did_open(&client, &uri, 1, source);
+    let items = complete_draining(&client, 2, &uri, Position::new(2, 5));
+    assert!(labels(&items).contains(&"pkg_old:n"));
+    assert!(!labels(&items).contains(&"pkg_unrelated:n"));
+    did_open(
+        &client,
+        &pkg_uri,
+        1,
+        "\\ExplSyntaxOn\n\\cs_new:Nn \\pkg_new:n {#1}\n",
+    );
+    let items = complete_draining(&client, 3, &uri, Position::new(2, 5));
+    assert!(labels(&items).contains(&"pkg_new:n"));
+    assert!(!labels(&items).contains(&"pkg_old:n"));
+    did_change_full(&client, &pkg_uri, 2, "\\ExplSyntaxOn\n");
+    let items = complete_draining(&client, 4, &uri, Position::new(2, 5));
+    assert!(!labels(&items).contains(&"pkg_new:n"));
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_completion_commands_environments_and_refs() {
     let (client, server_thread) = start_server(None);
     let uri: Uri = "file:///complete.tex".parse().unwrap();

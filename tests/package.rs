@@ -172,6 +172,37 @@ fn scope_signatures_prefers_sty_over_dtx() {
 }
 
 #[test]
+fn expl3_completion_scope_backdates_without_changing_signatures() {
+    use badness::incremental::scope_expl3_symbols;
+    let (mut db, main, pkg) = main_pkg(
+        "\\usepackage{mypkg}\nhello\n",
+        "\\ExplSyntaxOn\n\\cs_new:Nn \\pkg_demo:n {#1}\n",
+    );
+    assert!(
+        scope_expl3_symbols(&db, main)
+            .iter()
+            .any(|s| s.name == "pkg_demo:n")
+    );
+    assert!(scope_signatures(&db, main).command("pkg_demo:n").is_none());
+    db.clear_query_log();
+    db.set_file_text(main, "\\usepackage{mypkg}\nhello world\n");
+    assert!(
+        scope_expl3_symbols(&db, main)
+            .iter()
+            .any(|s| s.name == "pkg_demo:n")
+    );
+    assert!(
+        !db.query_log()
+            .iter()
+            .any(|q| q.kind == QueryKind::ScopeExpl3Symbols)
+    );
+    db.set_file_text(pkg, "\\ExplSyntaxOn\n\\tl_new:N \\l_pkg_tl\n");
+    let symbols = scope_expl3_symbols(&db, main);
+    assert!(symbols.iter().any(|s| s.name == "l_pkg_tl"));
+    assert!(!symbols.iter().any(|s| s.name == "pkg_demo:n"));
+}
+
+#[test]
 fn scope_signatures_backdates_on_prose_edit() {
     // Editing main's prose changes neither its loads nor its definitions, so
     // `scope_signatures` backdates: the package-defined macro stays in scope and

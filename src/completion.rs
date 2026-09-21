@@ -15,7 +15,7 @@
 //! bibliography (a cross-file snapshot query), so the LSP layer resolves them; the
 //! pure [`candidates`] here yields nothing for them.
 
-use rowan::{TextSize, TokenAtOffset};
+use rowan::{TextRange, TextSize, TokenAtOffset};
 
 use crate::ast::command_name;
 use crate::declarations::ResolvedDeclarations;
@@ -25,6 +25,10 @@ use crate::semantic::completion::{
     arg_enum_values, class_names, color_models, color_names, package_names, pgf_libraries,
     tikz_libraries,
 };
+use crate::semantic::expl3::{
+    mode::ModeIndex,
+    symbols::{Symbol, SymbolKind},
+};
 use crate::semantic::signature::{SignatureDb, builtin, cwl};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -32,7 +36,13 @@ use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompletionContext {
     /// Typing a control-word name after `\` (the `\` stripped from `prefix`).
-    CommandName { prefix: String },
+    CommandName {
+        prefix: String,
+        /// The complete name token, excluding its leading backslash.
+        replace: TextRange,
+        /// Whether the name was lexed with expl3's extended letter set.
+        expl3: bool,
+    },
     /// Inside a `\begin{…}` / `\end{…}` name group. `closing` is true for `\end`.
     EnvironmentName { prefix: String, closing: bool },
     /// Inside the key group of a `\ref`-family command (`\ref`, `\cref`, …).
@@ -117,6 +127,8 @@ impl FileArgKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CandidateKind {
     Command,
+    Variable,
+    Constant,
     Environment,
     Label,
     /// A `.sty`/`.cls` package or class name (`\usepackage`/`\documentclass`).
@@ -156,6 +168,16 @@ pub fn classify_context_with_declarations(
     offset: usize,
     declared: &ResolvedDeclarations,
 ) -> CompletionContext {
+    classify_context_with_modes(root, offset, declared, None)
+}
+
+/// Reuse a cached mode index when the caller has the document's file flavor.
+pub(crate) fn classify_context_with_modes(
+    root: &SyntaxNode,
+    offset: usize,
+    declared: &ResolvedDeclarations,
+    modes: Option<&ModeIndex>,
+) -> CompletionContext {
     let offset = TextSize::new(offset.min(u32::MAX as usize) as u32);
     let (left, right) = match root.token_at_offset(offset) {
         TokenAtOffset::None => return CompletionContext::None,
@@ -165,8 +187,22 @@ pub fn classify_context_with_declarations(
 
     // Typing a command name extends the token to the *left* of the cursor.
     if let Some(left) = &left
-        && let Some(ctx) = command_name_context(left, offset)
+        && let Some(mut ctx) = command_name_context(left, offset)
     {
+        let computed;
+        let modes = match modes {
+            Some(modes) => modes,
+            None => {
+                let dtx = root
+                    .descendants_with_tokens()
+                    .any(|el| el.kind() == SyntaxKind::DOC_MARGIN);
+                computed = ModeIndex::build(root, dtx);
+                &computed
+            }
+        };
+        if let CompletionContext::CommandName { expl3, .. } = &mut ctx {
+            *expl3 = modes.at_command(left.text_range().start());
+        }
         return ctx;
     }
 
@@ -194,6 +230,8 @@ fn command_name_context(token: &SyntaxToken, offset: TextSize) -> Option<Complet
             let typed = token.text().get(..rel).unwrap_or(token.text());
             Some(CompletionContext::CommandName {
                 prefix: typed.trim_start_matches('\\').to_string(),
+                replace: TextRange::new(range.start() + TextSize::from(1), range.end()),
+                expl3: false,
             })
         }
         // A lone `\` just typed (no letters yet): offer every command name.
@@ -202,6 +240,8 @@ fn command_name_context(token: &SyntaxToken, offset: TextSize) -> Option<Complet
         {
             Some(CompletionContext::CommandName {
                 prefix: String::new(),
+                replace: TextRange::empty(token.text_range().end()),
+                expl3: false,
             })
         }
         _ => None,
@@ -438,9 +478,20 @@ pub fn candidates_with_declarations(
     model: &SemanticModel,
     declared: &ResolvedDeclarations,
 ) -> Vec<CompletionCandidate> {
+    candidates_with_symbols(context, user_sigs, model, declared, &[])
+}
+
+/// Include completion-only local expl3 symbols without assigning signatures.
+pub fn candidates_with_symbols(
+    context: &CompletionContext,
+    user_sigs: &SignatureDb,
+    model: &SemanticModel,
+    declared: &ResolvedDeclarations,
+    symbols: &[Symbol],
+) -> Vec<CompletionCandidate> {
     match context {
-        CompletionContext::CommandName { prefix } => {
-            command_candidates(user_sigs, declared, prefix)
+        CompletionContext::CommandName { prefix, expl3, .. } => {
+            command_candidates(user_sigs, declared, prefix, *expl3, symbols)
         }
         CompletionContext::EnvironmentName { prefix, closing } => {
             environment_candidates(user_sigs, prefix, *closing)
@@ -552,6 +603,8 @@ fn command_candidates(
     user_sigs: &SignatureDb,
     declared: &ResolvedDeclarations,
     prefix: &str,
+    expl3: bool,
+    symbols: &[Symbol],
 ) -> Vec<CompletionCandidate> {
     let mut names = union_names(
         builtin()
@@ -561,13 +614,46 @@ fn command_candidates(
             .chain(cwl().command_names()),
         prefix,
     );
+    let mut kinds = std::collections::HashMap::new();
+    if expl3 {
+        for &name in crate::semantic::completion::expl3_names() {
+            if name.starts_with(prefix) {
+                names.push(name.to_owned());
+                let kind = if name.starts_with("c_") {
+                    CandidateKind::Constant
+                } else if name.starts_with("l_") || name.starts_with("g_") {
+                    CandidateKind::Variable
+                } else {
+                    CandidateKind::Command
+                };
+                kinds.insert(name, kind);
+            }
+        }
+    }
+    for symbol in symbols {
+        if symbol.name.starts_with(prefix) {
+            names.push(symbol.name.clone());
+            kinds.insert(
+                symbol.name.as_str(),
+                match symbol.kind {
+                    SymbolKind::Function => CandidateKind::Command,
+                    SymbolKind::Variable => CandidateKind::Variable,
+                    SymbolKind::Constant => CandidateKind::Constant,
+                },
+            );
+        }
+    }
+    names.retain(|name| expl3 || !name.contains(['_', ':']));
     names.sort();
     names.dedup();
     names
         .into_iter()
         .map(|label| CompletionCandidate {
+            kind: kinds
+                .get(label.as_str())
+                .copied()
+                .unwrap_or(CandidateKind::Command),
             label,
-            kind: CandidateKind::Command,
             insert_text: None,
             snippet: false,
         })
@@ -686,7 +772,9 @@ mod tests {
         assert_eq!(
             classify(src, at(src, "\\se")),
             CompletionContext::CommandName {
-                prefix: "se".to_string()
+                prefix: "se".to_string(),
+                replace: TextRange::new(1.into(), 3.into()),
+                expl3: false,
             }
         );
     }
@@ -773,7 +861,9 @@ mod tests {
         assert_eq!(
             ctx,
             CompletionContext::CommandName {
-                prefix: String::new()
+                prefix: String::new(),
+                replace: TextRange::empty(1.into()),
+                expl3: false,
             }
         );
     }

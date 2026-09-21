@@ -5,6 +5,13 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
+include!(concat!(env!("OUT_DIR"), "/expl3_names.rs"));
+
+/// Public expl3 names from the pinned CWL catalog, without argument signatures.
+pub fn expl3_names() -> &'static [&'static str] {
+    EXPL3_NAMES
+}
+
 // The baked `.sty`/`.cls` name lists are generated from TeX Live's tlpdb. File
 // order is completion rank; comments and the primary/secondary separator are not
 // candidates.
@@ -124,6 +131,23 @@ pub fn package_metadata(name: &str) -> Option<&'static PackageMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expl3_catalog_is_sorted_and_separate_from_signatures() {
+        let names = expl3_names();
+        assert_eq!(names.len(), 4708);
+        assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+        for name in ["tl_set:Nn", "seq_map_inline:Nn", "cs_new:Npn", "l_tmpa_tl"] {
+            assert!(names.binary_search(&name).is_ok());
+            assert!(crate::semantic::signature::cwl().command(name).is_none());
+            assert!(
+                crate::semantic::signature::builtin()
+                    .command(name)
+                    .is_none()
+            );
+        }
+        assert!(names.iter().all(|name| !name.contains("__")));
+    }
 
     #[test]
     fn arg_enums_load_and_resolve() {

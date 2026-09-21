@@ -313,6 +313,8 @@ fn server_capabilities(
                 "{".to_owned(),
                 "/".to_owned(),
                 "@".to_owned(),
+                "_".to_owned(),
+                ":".to_owned(),
             ]),
             // A highlighted item is sent back via `completionItem/resolve` to gain
             // its signature/citation detail lazily (see [`completion_resolve`]).
@@ -5278,7 +5280,7 @@ fn compute_tex_completion(
     snapshot: &Analysis,
     uri: &Uri,
     path: &Path,
-    text: &str,
+    text: &TextBuffer,
     offset: usize,
     texmf: &TexmfConfig,
 ) -> Vec<CompletionItem> {
@@ -5289,10 +5291,11 @@ fn compute_tex_completion(
             && snapshot.text_is_current(file, text)
         {
             let root = snapshot.parsed_tree(file);
-            let ctx = crate::completion::classify_context_with_declarations(
+            let ctx = crate::completion::classify_context_with_modes(
                 &root,
                 offset,
                 snapshot.declarations(),
+                Some(snapshot.expl3_modes(file)),
             );
             return match ctx {
                 // Citations are not prefix-filtered server-side: the full namespace is
@@ -5313,6 +5316,12 @@ fn compute_tex_completion(
                     snapshot.declarations(),
                     uri,
                     texmf,
+                    text,
+                    if matches!(ctx, CompletionContext::CommandName { .. }) {
+                        snapshot.expl3_symbols(file)
+                    } else {
+                        &[]
+                    },
                 )),
             };
         }
@@ -5347,7 +5356,7 @@ fn compute_tex_completion(
 /// Classify a `.tex` cursor off a fresh parse (the snapshot-free fallback). For a
 /// `\cite` context this still defers resolution to the snapshot, keying off `path`.
 fn reparse_tex_completion(
-    text: &str,
+    text: &TextBuffer,
     offset: usize,
     uri: &Uri,
     path: &Path,
@@ -5357,7 +5366,11 @@ fn reparse_tex_completion(
     let root = SyntaxNode::new_root(
         parse_with_declarations(text, file_kind_or_tex(path).lex_config(), declared).green,
     );
-    let ctx = crate::completion::classify_context_with_declarations(&root, offset, declared);
+    let modes = crate::semantic::expl3::mode::ModeIndex::build(
+        &root,
+        file_kind_or_tex(path).lex_config().dtx,
+    );
+    let ctx = crate::completion::classify_context_with_modes(&root, offset, declared, Some(&modes));
     match ctx {
         CompletionContext::CitationKey { .. } => TexCompletion::Cite {
             lint_path: path.to_path_buf(),
@@ -5369,8 +5382,13 @@ fn reparse_tex_completion(
         _ => {
             let sigs = crate::semantic::scan_definitions(&root);
             let model = SemanticModel::build_with_declarations(&root, declared);
+            let symbols = if matches!(ctx, CompletionContext::CommandName { .. }) {
+                crate::semantic::expl3::symbols::collect(&root)
+            } else {
+                Vec::new()
+            };
             TexCompletion::Items(build_completion_items(
-                &ctx, &sigs, &model, declared, uri, texmf,
+                &ctx, &sigs, &model, declared, uri, texmf, text, &symbols,
             ))
         }
     }
@@ -6962,6 +6980,7 @@ fn is_valid_command_name(new_name: &str, old_name: &str) -> bool {
 /// Turn a classified [`CompletionContext`] into LSP items. Name/label contexts go
 /// through the pure [`crate::completion::candidates`]; a file-path context reads
 /// the document's directory off disk (see [`file_completion_items`]).
+#[allow(clippy::too_many_arguments)]
 fn build_completion_items(
     ctx: &CompletionContext,
     sigs: &SignatureDb,
@@ -6969,6 +6988,8 @@ fn build_completion_items(
     declared: &ResolvedDeclarations,
     uri: &Uri,
     texmf: &TexmfConfig,
+    text: &TextBuffer,
+    symbols: &[crate::semantic::expl3::symbols::Symbol],
 ) -> Vec<CompletionItem> {
     match ctx {
         CompletionContext::FilePath { prefix, kind } => file_completion_items(uri, prefix, *kind),
@@ -6983,9 +7004,24 @@ fn build_completion_items(
             // The document path keys the scope-first signature lookup that
             // `completionItem/resolve` repeats; unsaved buffers have none.
             let file = uri_to_fs_path(uri);
-            crate::completion::candidates_with_declarations(ctx, sigs, model, declared)
+            let replacement = match ctx {
+                CompletionContext::CommandName { replace, .. } => {
+                    Some(lsp_range(&text.line_index(), *replace))
+                }
+                _ => None,
+            };
+            crate::completion::candidates_with_symbols(ctx, sigs, model, declared, symbols)
                 .into_iter()
-                .map(|candidate| candidate_to_item(candidate, file.as_deref()))
+                .map(|candidate| {
+                    let mut item = candidate_to_item(candidate, file.as_deref());
+                    if let Some(range) = replacement {
+                        item.text_edit = Some(lsp_types::CompletionTextEdit::Edit(TextEdit {
+                            range,
+                            new_text: item.label.clone(),
+                        }));
+                    }
+                    item
+                })
                 .collect()
         }
     }
@@ -6997,6 +7033,8 @@ fn build_completion_items(
 fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> CompletionItem {
     let kind = match candidate.kind {
         CandidateKind::Command => CompletionItemKind::FUNCTION,
+        CandidateKind::Variable => CompletionItemKind::VARIABLE,
+        CandidateKind::Constant => CompletionItemKind::CONSTANT,
         CandidateKind::Environment => CompletionItemKind::CLASS,
         CandidateKind::Label => CompletionItemKind::REFERENCE,
         CandidateKind::Package => CompletionItemKind::MODULE,
@@ -7018,7 +7056,9 @@ fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> Com
             // A package/class name carries no resolvable signature (yet); a future
             // description payload would attach here. Colors and TikZ libraries are
             // likewise static labels with nothing to resolve lazily.
-            CandidateKind::Label
+            CandidateKind::Variable
+            | CandidateKind::Constant
+            | CandidateKind::Label
             | CandidateKind::Package
             | CandidateKind::Color
             | CandidateKind::ColorModel
@@ -8465,6 +8505,76 @@ mod tests {
         assert_eq!(resolved.style.line_width, 55);
         // A non-file buffer never joins the anchor-dir cache.
         assert!(state.config_cache.is_empty());
+    }
+
+    #[test]
+    fn expl3_completion_edits_agree_across_encodings_and_parse_paths() {
+        for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+            let source = "\\ExplSyntaxOn\r\n\\cs_new:Nn \\demo:n {#1}\r\né😀\\demo:garbage\r\n";
+            let text = TextBuffer::new(source, encoding);
+            let offset = source.rfind("\\demo:").unwrap() + "\\demo:".len();
+            let (line, character) = text.line_index().position(offset);
+            let uri = uri("file:///expl3-paths.tex");
+            let path = uri_to_path(&uri);
+            let texmf = TexmfConfig {
+                enabled: false,
+                ..Default::default()
+            };
+            let mut db = IncrementalDatabase::default();
+            let fallback = compute_completion(
+                &db.snapshot(),
+                &uri,
+                &path,
+                &text,
+                Position::new(line, character),
+                &texmf,
+            );
+            let file = db.upsert_file(&path, source.to_owned());
+            db.reparse_stage_edits(file, None);
+            let cached = compute_completion(
+                &db.snapshot(),
+                &uri,
+                &path,
+                &text,
+                Position::new(line, character),
+                &texmf,
+            );
+            assert_eq!(cached, fallback);
+            let item = cached.iter().find(|item| item.label == "demo:n").unwrap();
+            let Some(lsp_types::CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+                panic!("replacement edit")
+            };
+            let idx = text.line_index();
+            let range = idx.offset_at(edit.range.start.line, edit.range.start.character)
+                ..idx.offset_at(edit.range.end.line, edit.range.end.character);
+            let mut applied = source.to_owned();
+            applied.replace_range(range, &edit.new_text);
+            assert_eq!(
+                applied,
+                "\\ExplSyntaxOn\r\n\\cs_new:Nn \\demo:n {#1}\r\né😀\\demo:n\r\n"
+            );
+            assert_eq!(
+                edit.range.start.character,
+                if encoding == PositionEncoding::Utf8 {
+                    7
+                } else {
+                    4
+                }
+            );
+            let mut stale = source.replace("demo:n", "demo:nn");
+            stale = stale.replace("demo:garbage", "demo:");
+            let changed = TextBuffer::new(stale, encoding);
+            let items = compute_completion(
+                &db.snapshot(),
+                &uri,
+                &path,
+                &changed,
+                Position::new(line, character),
+                &texmf,
+            );
+            assert!(items.iter().any(|item| item.label == "demo:nn"));
+            assert!(!items.iter().any(|item| item.label == "demo:n"));
+        }
     }
 
     /// The byte offset of the first occurrence of `needle` in `text`.

@@ -38,6 +38,11 @@
 //!   any unknown letter (including one added to expl3 after this list was
 //!   written — new letters degrade to unrecognized, never to a wrong arity).
 
+pub mod calls;
+pub mod mode;
+pub mod symbols;
+pub mod variants;
+
 use std::collections::VecDeque;
 
 use rowan::TextRange;

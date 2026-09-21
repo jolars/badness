@@ -197,9 +197,9 @@ Investigated [expltools][expltools-review] on 2026-09-18 at commit `48bc583`
 native Rust rules over the existing CST, using explcheck as a differential
 reference. Its [semantic checks][explcheck-semantics] are the main opportunity:
 Badness already has expl3 tokenization, argspec-directed argument attachment,
-statement recognition, and formatting. The definition scanner in
-`crates/badness-parser/src/semantic/define.rs` does not yet recognize the
-`\cs_new:*`, conditional-definition, or variant families.
+statement recognition, and formatting. Completion now collects literal expl3
+definitions and variants separately from argument signatures. Definition
+navigation and semantic resolution remain open.
 
 - [x] **Start with three report-only rules over recognized calls.** Added
   `expl3-variant-type` (`T403` and `W410`), `expl3-protected-predicate` (`E404`),
@@ -208,7 +208,7 @@ statement recognition, and formatting. The definition scanner in
   complete calls, unexpanded function bodies, and conditional branches, without
   project-wide symbol resolution.
 
-- [x] **Build shared semantic call-reading helpers.** `linter::expl3` reads
+- [x] **Build shared semantic call-reading helpers.** `semantic::expl3::calls` reads
   attached call arguments through typed CST accessors and `semantic::expl3`,
   retaining original argspec letters. A lazy `RuleContext` index distinguishes
   executable bodies from token-list data and maps nested definition parameters
@@ -229,7 +229,9 @@ statement recognition, and formatting. The definition scanner in
 - [ ] **Index expl3 definitions and uses before adding resolution checks.**
   Cover functions, generated variants, variables, constants, and messages.
   This enables undefined and unused symbol checks and message argument-count
-  checks, and could also improve editor navigation, hover, and completion.
+  checks, and could also improve editor navigation and hover. Completion already
+  has a conservative collector for literal control-sequence definitions; it
+  does not track uses, message names, or execution order.
   Keep cross-file resolution in the root crate and generated standard-library
   facts hermetic. Missing project context and dynamically constructed names
   must remain unknown, not become diagnostics. Do not infer execution order
@@ -304,6 +306,12 @@ Badness offers command, environment, label, cite-key, bib field/type, and file
 completion (`src/completion.rs`, `src/bib/completion.rs`). texlab's completion
 breadth is its biggest lead (`crates/completion/providers/`); the specialized
 sources below are missing.
+
+- [x] **Expl3 command completion.** Ship the public function/variable catalog and
+  collect literal local definitions, constants, conditionals, and generated
+  variants. Keep suggestions inside expl3 regions and send explicit replacement
+  edits across underscores and colons. Completion facts remain separate from
+  argument signatures and definition navigation.
 
 - [ ] *(Design decision)* **Package-scoped command completion.** texlab suggests
   only commands provided by the loaded packages (a package→command component

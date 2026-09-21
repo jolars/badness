@@ -4,6 +4,7 @@
 use crate::ast::command_name;
 use crate::linter::diagnostic::Diagnostic;
 use crate::linter::expl3::is_variant_generation;
+use crate::semantic::expl3::variants::{Conversion, classify, is_specifier};
 use crate::syntax::{SyntaxElement, SyntaxKind};
 
 use super::{Example, Rule, RuleContext};
@@ -90,38 +91,6 @@ impl Rule for Expl3VariantType {
             });
         }
     }
-}
-
-fn is_specifier(c: u8) -> bool {
-    b"NVncvoxefTFpwD".contains(&c)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Conversion {
-    Compatible,
-    Deprecated,
-    Incompatible,
-}
-
-fn classify(base: &[u8], variant: &[u8]) -> Conversion {
-    if variant.len() > base.len() {
-        return Conversion::Incompatible;
-    }
-    base.iter()
-        .zip(variant)
-        .map(|(&from, &to)| {
-            if from == to || from == b'N' && to == b'c' || from == b'n' && b"oVvfex".contains(&to) {
-                Conversion::Compatible
-            } else if from == b'n' && b"Nc".contains(&to)
-                || from == b'N' && b"noVvfex".contains(&to)
-            {
-                Conversion::Deprecated
-            } else {
-                Conversion::Incompatible
-            }
-        })
-        .max()
-        .unwrap_or(Conversion::Compatible)
 }
 
 #[cfg(test)]

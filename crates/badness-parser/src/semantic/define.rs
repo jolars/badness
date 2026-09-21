@@ -27,8 +27,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    AstNode, Command, Optional, child, children, command_name, control_word_range,
-    group_command_name, group_inner_source, nth_group, nth_group_inner, nth_group_text,
+    AstNode, AstToken, Command, ControlWord, Optional, child, child_token, children, command_name,
+    control_word_range, group_command_name, group_inner_source, nth_group, nth_group_inner,
+    nth_group_text,
 };
 use crate::semantic::signature::{
     ArgKind, ArgSpec, CommandSig, ContentKind, EnvironmentSig, SignatureDb, builtin,
@@ -1005,6 +1006,57 @@ fn environment_sig(args: Vec<ArgSpec>) -> EnvironmentSig {
         // built-in environments show up in the document-symbol outline.
         outline: None,
     }
+}
+
+/// TeX primitives that merely *reference* the following control word(s) — alias
+/// them (`\let\x\rm`) or compare them (`\ifx\rm\y`) — rather than execute them,
+/// and (unlike the `\def`/`\renewcommand` family) carry no replacement body, so
+/// [`RuleContext::user_definitions`] does not record them. A deprecated switch or
+/// discouraged primitive sitting in one of their operand slots must not get the
+/// control-word swap: `\let\x\rmfamily` copies a *different* meaning, and where
+/// this idiom guards the plain-TeX/ConTeXt branch, `\rmfamily`/`^` is undefined.
+/// Redefinitions (a new meaning) are handled upstream by `user_definitions` — they
+/// suppress the whole finding — so this narrow set is reference-only. Stored with
+/// the leading backslash to compare against `CONTROL_WORD` text directly.
+const REFERENCE_PRIMITIVES: &[&str] = &["\\let", "\\ifx"];
+
+/// Whether `command`'s control word sits in a [`REFERENCE_PRIMITIVES`] operand slot.
+/// The CST is flat, so a `\let`/`\ifx` primitive is one or two control words back
+/// (`\let\x\rm`: `\x` then `\let`; `\ifx\a\rm`: `\a` then `\ifx`). Scan backward over
+/// trivia and a possible `=` separator (`\let\x=\rm`), inspecting the two nearest
+/// control words; a reference primitive among them means "referenced". Shared by
+/// `deprecated-command` and `primitive-command` to withhold their control-word swap.
+pub fn in_reference_position(command: &SyntaxNode) -> bool {
+    let Some(control_word) = child_token::<ControlWord>(command) else {
+        return false;
+    };
+    let mut token = control_word.syntax().prev_token();
+    let mut control_words_seen = 0;
+    while let Some(current) = token {
+        match current.kind() {
+            // Trivia never breaks the chain. A `WORD` is skipped too: an at-letter
+            // definee splits under document catcodes (`\let\foo@bar\rm` lexes as
+            // `\foo` + `@bar`), and `\let\x=\rm` writes an explicit `=`. The
+            // two-control-word cutoff below bounds how far this look-back reaches, so
+            // skipping intervening words cannot run away.
+            SyntaxKind::WHITESPACE
+            | SyntaxKind::NEWLINE
+            | SyntaxKind::COMMENT
+            | SyntaxKind::WORD => {}
+            SyntaxKind::CONTROL_WORD => {
+                if REFERENCE_PRIMITIVES.contains(&current.text()) {
+                    return true;
+                }
+                control_words_seen += 1;
+                if control_words_seen >= 2 {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        token = current.prev_token();
+    }
+    false
 }
 
 #[cfg(test)]

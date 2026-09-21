@@ -22,6 +22,22 @@ The language server is also the sole consumer of the `[build]` section of
 `badness.toml`, which locates the compile's `.aux` artifacts; see the
 [Configuration reference](../reference/configuration.md#build).
 
+## LaTeX3 completion
+
+Badness completes expl3 functions, variables, and constants inside
+`\ExplSyntaxOn` regions, after `\ProvidesExplPackage`, `\ProvidesExplClass`, or
+`\ProvidesExplFile`, and inside recognized expl3 macrocode regions in `.dtx`
+files. For example, `\tl_` offers `\tl_set:Nn`, and `\l_tmpa_` offers scratch
+variables. The built-in catalog ships with Badness and needs no TeX
+installation.
+
+Completion also includes literal definitions in the current file and loaded
+local packages and classes, including `\cs_new:Npn` functions, variable and
+constant declarations, conditional forms, and generated variants. Badness does
+not expand macros to discover computed names. It skips incomplete definitions
+and definitions stored as token-list data. These names support completion; expl3
+definition navigation and argument signature help are not yet provided.
+
 ## TEXMF discovery
 
 How the language server discovers the installed TeX tree for package resolution:

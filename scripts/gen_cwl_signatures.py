@@ -5,7 +5,8 @@ CWL (Completion Word List) files are TeXstudio's per-package completion data. Th
 are a broad, low-precision source of command/environment **names** and **argument
 arity** — exactly the bulk tier badness wants *underneath* its hand-curated
 ``data/signatures.json`` (see ``src/semantic/signature.rs`` module docs). This script
-ingests them into the *same* JSON schema.
+ingests them into the signature schema, with a separate ``expl3Names`` list
+for completion-only names whose argument protocols are not brace signatures.
 
 What it extracts (deliberately minimal — see AGENTS.md decision #2 and the plan):
 
@@ -93,7 +94,7 @@ ALLOWLIST = frozenset(
     # algorithms
     " algorithm algorithm2e algorithmicx algpseudocode algorithmic"
     # programming utilities
-    " etoolbox xparse xspace ifthen calc environ"
+    " etoolbox xparse xspace ifthen calc environ expl3-commands"
     # glossaries & index
     " glossaries acronym nomencl makeidx imakeidx"
     # document inclusion
@@ -211,7 +212,7 @@ class Entry:
         self.flags = flags
 
 
-def parse_line(line: str) -> Entry | None:
+def parse_line(line: str, *, expl3: bool = False) -> Entry | None:
     """Parse a single CWL entry line into an :class:`Entry`, or ``None`` if the line
     is not a command/environment entry (blank, directive, comment, template)."""
     line = line.rstrip("\n").rstrip("\r")
@@ -235,7 +236,7 @@ def parse_line(line: str) -> Entry | None:
     # A command: control word (\section) or control symbol (\#, \,). Drop a trailing
     # '*' star — a starred variant maps to the same base name (the parser lexes the
     # star separately); its differing arity reconciles like any other variant.
-    m = re.match(r"\\([a-zA-Z]+|.)", head)
+    m = re.match(r"\\([a-zA-Z_:@]+|.)" if expl3 else r"\\([a-zA-Z]+|.)", head)
     if not m:
         return None
     name = m.group(1)
@@ -279,9 +280,11 @@ def build_db(files: dict[str, str], report: dict[str, set[str]] | None = None) -
     given, collects ``flags -> {names}`` for observed classifications."""
     commands: dict[str, list[list[str]]] = defaultdict(list)
     environments: dict[str, list[list[str]]] = defaultdict(list)
-    in_keyvals = False
+    expl3_names: set[str] = set()
 
-    for text in files.values():
+    for filename, text in files.items():
+        in_keyvals = False
+        expl3 = filename == "expl3-commands.cwl"
         for raw in text.splitlines():
             stripped = raw.lstrip()
             if stripped.startswith("#keyvals:"):
@@ -292,13 +295,19 @@ def build_db(files: dict[str, str], report: dict[str, set[str]] | None = None) -
                 continue
             if in_keyvals or stripped.startswith("#") or not stripped:
                 continue  # directives, comments, keyval bodies, blanks
-            entry = parse_line(raw)
+            entry = parse_line(raw, expl3=expl3)
             if entry is None:
                 continue
             if "S" in entry.flags:
                 continue  # #S: hidden from completer — drop entirely
             if report is not None and entry.flags:
                 report.setdefault(entry.flags, set()).add(entry.name)
+            if expl3:
+                # Expl3's N/p/w arguments cannot be represented as brace slots.
+                # Keep this catalog exclusively in the completion name tier.
+                if entry.kind == "command":
+                    expl3_names.add(entry.name)
+                continue
             bucket = commands if entry.kind == "command" else environments
             bucket[entry.name].append(entry.args)
 
@@ -322,6 +331,7 @@ def build_db(files: dict[str, str], report: dict[str, set[str]] | None = None) -
             ),
             ("commands", emit(commands)),
             ("environments", emit(environments)),
+            ("expl3Names", sorted(expl3_names)),
         ]
     )
 
@@ -415,6 +425,9 @@ def _selftest() -> int:
     eq("bar" in db["commands"], False, "hidden bar skipped")
     eq(db["commands"]["baz"], {}, "no-arg baz")
     eq(db["environments"]["env"], {"args": ["req"]}, "env emitted")
+    expl = build_db({"expl3-commands.cwl": "\\tl_set:Nn %<var%> {tokens}\n\\l_tmpa_tl\n\\tl_set:Nn\n\\__hidden:n#S\n"})
+    eq(expl["expl3Names"], ["l_tmpa_tl", "tl_set:Nn"], "full, distinct expl3 names")
+    eq(expl["commands"], {}, "expl3 names carry no brace signatures")
     kvdb = build_db({"t.cwl": "\\begin{axis}#/tikzpicture\n\\begin{axis}[options%keyvals]\n"})
     eq(kvdb["environments"]["axis"], {"args": [kv]}, "axis keeps its keyval optional")
     eq(_dump(build_db({"a": _dump(db)})) is not None, True, "dump runs")  # smoke
@@ -443,6 +456,7 @@ def main() -> int:
     files = fetch_corpus(args.source, args.ref)
     db = build_db(files, report)
     n_cmd, n_env = len(db["commands"]), len(db["environments"])
+    n_expl = len(db["expl3Names"])
 
     if report is not None:
         print(f"observed classifications across {len(files)} files:", file=sys.stderr)
@@ -454,12 +468,12 @@ def main() -> int:
     rendered = _dump(db)
     if args.write:
         DATA_FILE.write_text(rendered)
-        print(f"wrote {DATA_FILE.relative_to(Path.cwd())} ({n_cmd} commands, {n_env} environments)")
+        print(f"wrote {DATA_FILE.relative_to(Path.cwd())} ({n_cmd} commands, {n_env} environments, {n_expl} expl3 names)")
         return 0
 
     current = DATA_FILE.read_text() if DATA_FILE.is_file() else ""
     if current == rendered:
-        print(f"{DATA_FILE.name} is in sync ({n_cmd} commands, {n_env} environments)")
+        print(f"{DATA_FILE.name} is in sync ({n_cmd} commands, {n_env} environments, {n_expl} expl3 names)")
         return 0
     print(f"{DATA_FILE.name} is OUT OF SYNC with the CWL corpus at {args.ref}.", file=sys.stderr)
     print("run with --write to regenerate.", file=sys.stderr)

@@ -278,6 +278,8 @@ struct RawDb {
     commands: BTreeMap<String, RawCommand>,
     #[serde(default)]
     environments: BTreeMap<String, RawEnvironment>,
+    #[serde(default, rename = "expl3Names")]
+    expl3_names: Vec<String>,
 }
 
 /// Bake the bulk CWL signature tier into `$OUT_DIR/cwl_signatures.rs` as a `phf`
@@ -318,6 +320,12 @@ fn generate_cwl_signatures() {
     let path = Path::new(&env::var("OUT_DIR").unwrap()).join("cwl_signatures.rs");
     let mut file = BufWriter::new(File::create(&path).unwrap());
     file.write_all(out.as_bytes()).unwrap();
+    let path = Path::new(&env::var("OUT_DIR").unwrap()).join("expl3_names.rs");
+    std::fs::write(
+        path,
+        format!("static EXPL3_NAMES: &[&str] = &{:?};\n", db.expl3_names),
+    )
+    .unwrap();
 }
 
 /// The on-disk shape of `data/package_metadata.json`: a `note` header (ignored) plus

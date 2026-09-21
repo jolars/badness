@@ -1156,6 +1156,8 @@ struct RawDb {
     environment_commands: HashMap<String, HashMap<String, RawCommand>>,
     #[serde(default)]
     environments: HashMap<String, RawEnvironment>,
+    #[serde(default, rename = "expl3Names")]
+    _expl3_names: Vec<String>,
 }
 
 /// Deserialize the bundled JSON into a [`SignatureDb`].

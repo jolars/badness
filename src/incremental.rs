@@ -39,6 +39,10 @@ use crate::project::{
     collect_include_edge_keys, collect_package_edge_keys, package_graph, package_option_facts,
     resolved_citations, resolved_labels, workspace_project,
 };
+use crate::semantic::expl3::{
+    mode::ModeIndex as Expl3ModeIndex,
+    symbols::{self as expl3_symbols, Symbol as Expl3Symbol},
+};
 use crate::semantic::{
     DocAssociation, SemanticModel, SignatureDb, doc_associations as build_doc_associations,
     scan_definitions,
@@ -187,6 +191,9 @@ pub enum QueryKind {
     /// A file's scanned `\newcommand`/`\newenvironment`/xparse signatures
     /// ([`document_signatures`]).
     DocumentSignatures,
+    DocumentExpl3Symbols,
+    ScopeExpl3Symbols,
+    DocumentExpl3Modes,
     /// A `.dtx` file's documentation↔code associations ([`doc_associations`]).
     DocAssociations,
     /// A file's range-free inclusion edges ([`include_edges`]).
@@ -642,6 +649,59 @@ pub fn scope_signatures(db: &dyn IncrementalDb, file: SourceFile) -> SignatureDb
     // only the signature tier, so a `[commands]` edit must not rebuild a scope.
     merged.merge_declarations(parse_declarations_of(db));
     merged
+}
+
+/// Completion-only names, separate from formatter and linter signatures.
+#[salsa::tracked(returns(ref))]
+pub fn document_expl3_symbols(db: &dyn IncrementalDb, file: SourceFile) -> Vec<Expl3Symbol> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::DocumentExpl3Symbols,
+        file: Some(file),
+    });
+    expl3_symbols::collect(&parsed_tree_root(db, file))
+}
+
+#[salsa::tracked(returns(ref))]
+pub fn document_expl3_modes(db: &dyn IncrementalDb, file: SourceFile) -> Expl3ModeIndex {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::DocumentExpl3Modes,
+        file: Some(file),
+    });
+    Expl3ModeIndex::build(
+        &parsed_tree_root(db, file),
+        file_kind_or_tex(file.path(db)).lex_config().dtx,
+    )
+}
+
+/// Reuse the signature scope's package membership without assigning signatures.
+#[salsa::tracked(returns(ref))]
+pub fn scope_expl3_symbols(db: &dyn IncrementalDb, file: SourceFile) -> Vec<Expl3Symbol> {
+    db.record_query(QueryLogEntry {
+        kind: QueryKind::ScopeExpl3Symbols,
+        file: Some(file),
+    });
+    let project = workspace_project(db);
+    let graph = package_graph(db);
+    let by_path: HashMap<&Path, SourceFile> = project
+        .members
+        .iter()
+        .map(|member| (member.path.as_path(), member.file))
+        .collect();
+    let mut names = std::collections::BTreeMap::new();
+    for loaded in graph.transitively_loaded(file.path(db)) {
+        if let Some(&member) = by_path.get(loaded.as_path()) {
+            for symbol in document_expl3_symbols(db, member) {
+                names.insert(symbol.name.clone(), symbol.kind);
+            }
+        }
+    }
+    for symbol in document_expl3_symbols(db, file) {
+        names.insert(symbol.name.clone(), symbol.kind);
+    }
+    names
+        .into_iter()
+        .map(|(name, kind)| Expl3Symbol { name, kind })
+        .collect()
 }
 
 /// The file's `.dtx` documentation↔code associations
@@ -1520,6 +1580,14 @@ impl Analysis {
     /// from the current project. The formatter and completion consume this.
     pub fn scope_signatures(&self, file: SourceFile) -> &SignatureDb {
         scope_signatures(&self.0, file)
+    }
+
+    pub fn expl3_symbols(&self, file: SourceFile) -> &[Expl3Symbol] {
+        scope_expl3_symbols(&self.0, file)
+    }
+
+    pub fn expl3_modes(&self, file: SourceFile) -> &Expl3ModeIndex {
+        document_expl3_modes(&self.0, file)
     }
 
     /// Resolve the current project's package-load graph ([`package_graph`]).

@@ -13,13 +13,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [x] **Split the math grammar and gate machinery, and finish event markers.**
-  `grammar/math.rs` owns math bodies and scripts, including named math
-  environments. `grammar/gates.rs` owns gate policies, the shared scan,
-  memoization, and scan-linearity tests. The event layer now owns `Marker`,
-  `precede`, and comment binding's `extend_back`; every node opening must be
-  completed, with a `DropBomb` catching forgotten completions in debug builds.
-
 ## Formatter
 
 - [ ] **Extend inline-command argument glue to `.dtx` margin prose.** The

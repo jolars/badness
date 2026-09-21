@@ -13,18 +13,12 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Parser
 
-- [~] **Finish parser event markers.** The module extractions are done:
-  `grammar/math.rs` owns math bodies and scripts, and `grammar/gates.rs` owns
-  gate policies, the shared scan, memoization, and scan-linearity tests. Facts,
-  trivia, the prescan, and expl3 attachment also have their own modules.
-
-  The rest of the hygiene item is done: the shadow counters, the DOC_COMMENT
-  precede dedup (`precede`/`extend_back`/`doc_comment_bind`), the `PreScan`
-  extraction, the `math_atom` EOF tripwire, the environment-delimiter helpers,
-  `BLANK_LINE_NEWLINES`, the `is_trivia` reuse, the borrowing `peek_end_name`,
-  and the stale `parser.rs` module doc. Still open from that note: promoting
-  `precede` into the event layer as a real rust-analyzer `Marker` with a
-  `DropBomb`, which is a mechanical diff across every `open`/`close` site.
+- [x] **Split the math grammar and gate machinery, and finish event markers.**
+  `grammar/math.rs` owns math bodies and scripts, including named math
+  environments. `grammar/gates.rs` owns gate policies, the shared scan,
+  memoization, and scan-linearity tests. The event layer now owns `Marker`,
+  `precede`, and comment binding's `extend_back`; every node opening must be
+  completed, with a `DropBomb` catching forgotten completions in debug builds.
 
 ## Formatter
 

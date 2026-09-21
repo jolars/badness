@@ -165,7 +165,7 @@ impl PreScan {
                         // `\def\bsplit{\begin{split}}` expands to `\begin{split}`,
                         // so a plain `\end{split}` closes it (issue #117). Indexed
                         // here rather than tested in the gate so the closer bound
-                        // ([`super::gates::AliasGate`]) can be derived from
+                        // (`AliasGate`) can be derived from
                         // it. `peek_end_name` is looser than the walk's
                         // [`super::Parser::env_end_at`] — it skips a blank line and
                         // takes a computed name — so the gate re-tests that; an

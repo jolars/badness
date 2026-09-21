@@ -29,6 +29,14 @@ builder feeds the events into rowan and attaches trivia, retaining every byte of
 the source. A specialized `SubTok` event lets math parsing split a lexer token
 when TeX binds a script to a single character.
 
+Each LaTeX node opening returns an event-layer `Marker`, which closing the node
+consumes. A `DropBomb` catches forgotten completions in debug builds without
+panicking again during unwinding. `Marker::precede` gives the same obligation to
+wrappers opened retroactively, such as paragraphs and scripted atoms. Comment
+binding instead moves a completed construct's start over its documentation
+comment with `extend_back`, keeping its existing finish. The parser also checks
+that the final event stream balances before the tree builder receives it.
+
 The LaTeX grammar keeps math bodies, script attachment, and paired
 `\left`/`\right` delimiters in `grammar/math.rs`. Named math environments use
 that same module's body parser, so delimiter and script recovery stays shared.

@@ -54,7 +54,7 @@ use std::collections::HashMap;
 /// [`Parser::gated_closer`] makes for the shape gates, for the same reason.
 ///
 /// Keyed by the two facts that decide *pairing*: [`Parser::plain_braces`] —
-/// through its version counter, the [`super::gates::WalkKey`] convention, since the
+/// through its version counter, the `WalkKey` convention, since the
 /// set is mutated per `macrocode` body — and the frame that set is scoped to.
 /// The build stops at that frame rather than at the scan's own bound, so an
 /// alias closer (which moves with no version bump) only ever filters at query
@@ -300,9 +300,9 @@ impl Parser<'_> {
     /// trailing groups belong to the outer head. Kept a node (not the
     /// def-prefix bare-token treatment) so name-keyed consumers still see it.
     fn command_bare(&mut self) {
-        self.open(SyntaxKind::COMMAND);
+        let command = self.open(SyntaxKind::COMMAND);
         self.bump();
-        self.close();
+        self.close(command);
     }
 }
 

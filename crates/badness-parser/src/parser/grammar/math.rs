@@ -28,12 +28,12 @@ impl Parser<'_> {
             self.starts[self.pos],
             self.starts[self.pos + if display { 2 } else { 1 }],
         );
-        self.open(kind);
+        let math = self.open(kind);
         self.bump(); // $
         if display {
             self.bump(); // second $
         }
-        self.open(SyntaxKind::MATH);
+        let body = self.open(SyntaxKind::MATH);
         self.math_dollar.push(true);
         loop {
             match self.kind() {
@@ -81,14 +81,14 @@ impl Parser<'_> {
             }
         }
         self.math_dollar.pop();
-        self.close(); // MATH
+        self.close(body);
         if self.kind() == Some(SyntaxKind::DOLLAR) {
             self.bump(); // closing $
             if display {
                 self.bump(); // second closing $
             }
         }
-        self.close(); // INLINE_MATH / DISPLAY_MATH
+        self.close(math);
     }
 
     /// Delimited math: `\[ … \]` (display) or `\( … \)` (inline). As with
@@ -96,9 +96,9 @@ impl Parser<'_> {
     /// parsed in math mode.
     pub(super) fn delim_math(&mut self, kind: SyntaxKind, opener: &str, closer: &str) {
         let opener_span = self.token_span(self.pos);
-        self.open(kind);
+        let math = self.open(kind);
         self.bump(); // \[ or \(
-        self.open(SyntaxKind::MATH);
+        let body = self.open(SyntaxKind::MATH);
         self.math_dollar.push(false);
         loop {
             match self.kind() {
@@ -135,11 +135,11 @@ impl Parser<'_> {
             }
         }
         self.math_dollar.pop();
-        self.close(); // MATH
+        self.close(body);
         if self.kind() == Some(SyntaxKind::CONTROL_SYMBOL) && self.text() == closer {
             self.bump(); // \] or \)
         }
-        self.close(); // INLINE_MATH / DISPLAY_MATH
+        self.close(math);
     }
 
     /// One element inside a math body. Trivia is emitted inline (for
@@ -163,8 +163,7 @@ impl Parser<'_> {
     /// `LINE_BREAK`-only-when-modifiers idiom). Because the base atom's extent is
     /// not known until parsed (a command greedily attaches its args), we parse it
     /// first and, if a script follows, retroactively splice a `SCRIPTED` start
-    /// event in front of it — the event-stream analog of rust-analyzer's
-    /// `precede`, done locally without touching the event layer.
+    /// event in front of it via the event layer's [`super::Marker::precede`].
     fn math_scripted(&mut self) {
         // The lexer keeps ordinary characters in coarse `WORD` runs. Preserve an
         // unscripted run as one CST token. When a script follows, expose only the
@@ -228,26 +227,26 @@ impl Parser<'_> {
         if !self.at_script() {
             return; // bare atom, no wrapper
         }
-        self.precede(checkpoint, SyntaxKind::SCRIPTED);
+        let scripted = self.precede(checkpoint, SyntaxKind::SCRIPTED);
         let mut remainder = None;
         while self.at_script() {
             self.skip_trivia(); // trivia between base/scripts rides inside SCRIPTED
             let sub = self.kind() == Some(SyntaxKind::UNDERSCORE);
-            self.open(if sub {
+            let script = self.open(if sub {
                 SyntaxKind::SUBSCRIPT
             } else {
                 SyntaxKind::SUPERSCRIPT
             });
             self.bump(); // `_` or `^`
             remainder = self.math_script_arg();
-            self.close();
+            self.close(script);
             // The rest of a coalesced WORD is outer math content. Any next script
             // belongs to its final atom, not to the base we just closed.
             if remainder.is_some() {
                 break;
             }
         }
-        self.close(); // SCRIPTED
+        self.close(scripted);
         if let Some((idx, start, end)) = remainder {
             self.math_word_fragment(idx, start, end);
         }
@@ -406,10 +405,10 @@ impl Parser<'_> {
     fn left_right(&mut self) {
         debug_assert!(self.at_command(LEFT_CMD));
         let opener = self.token_span(self.pos);
-        self.open(SyntaxKind::LEFT_RIGHT);
+        let pair = self.open(SyntaxKind::LEFT_RIGHT);
         self.bump(); // \left
         self.math_delim(LEFT_CMD);
-        self.open(SyntaxKind::MATH);
+        let body = self.open(SyntaxKind::MATH);
         loop {
             match self.kind() {
                 None => {
@@ -440,12 +439,12 @@ impl Parser<'_> {
                 }
             }
         }
-        self.close(); // MATH
+        self.close(body);
         if self.at_command(RIGHT_CMD) {
             self.bump(); // \right
             self.math_delim(RIGHT_CMD);
         }
-        self.close(); // LEFT_RIGHT
+        self.close(pair);
     }
 
     /// Consume the single delimiter token following `\left`/`\right`: skip inline
@@ -486,7 +485,7 @@ impl Parser<'_> {
     /// atoms wrapped in a `MATH` node and parsed in math mode, exactly as `\[…\]`
     /// (see [`Self::delim_math`]) — so `^`/`_` build `SCRIPTED` nodes, the operator
     /// split fires, and `\left…\right` pair. Routed here for environments the
-    /// signature data flags `math` ([`ParseCtx::is_math_environment`]).
+    /// signature data flags `math` ([`crate::parser::lexer::ParseCtx::is_math_environment`]).
     ///
     /// The terminator is the matching `\end` (or EOF), read via [`Self::at_block_end`]
     /// just like [`Self::parse_block`]; [`Self::finish_environment`] then consumes and
@@ -496,12 +495,12 @@ impl Parser<'_> {
     /// holds. Progress is guaranteed: [`Self::math_element`] bumps trivia or descends
     /// into [`Self::math_scripted`], whose atom parser always consumes a token.
     pub(super) fn math_environment_body(&mut self) {
-        self.open(SyntaxKind::MATH);
+        let body = self.open(SyntaxKind::MATH);
         self.math_dollar.push(false);
         while !self.at_block_end(Block::Environment) {
             self.math_element();
         }
         self.math_dollar.pop();
-        self.close(); // MATH
+        self.close(body);
     }
 }

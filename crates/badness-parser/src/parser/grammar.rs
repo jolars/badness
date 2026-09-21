@@ -24,7 +24,7 @@ use std::borrow::Cow;
 
 use crate::parser::conditional;
 use crate::parser::core::SyntaxError;
-use crate::parser::events::Event;
+use crate::parser::events::{Event, Marker, extend_back};
 use crate::parser::lexer::{ParseCtx, Token};
 use crate::semantic::signature::{
     ArgKind, ArgSpec, ArgumentDomain, builtin, match_arg_slot, match_verbatim_arg_slot,
@@ -78,15 +78,9 @@ pub(crate) fn parse(tokens: &[Token], ctx: &ParseCtx) -> (Vec<Event>, Vec<Syntax
     (p.events, p.errors)
 }
 
-/// Debug-only structural tripwire: the event stream must be balanced — every
-/// `Start` matched by a later `Finish`, no `Finish` before its `Start`, and the
-/// document node closed exactly once. This is the cheap analog of
-/// rust-analyzer's per-`Marker` `DropBomb`: a grammar edit that leaks an
-/// [`Parser::open`] without a [`Parser::close`] (or a [`Parser::precede`] that
-/// splices in a `Start` nobody closes) is caught right here,
-/// counting *all* start/finish events regardless of how they were emitted,
-/// before [`super::tree_builder`] feeds rowan's `GreenNodeBuilder` and fails with
-/// a far more opaque `finish_node` panic. Compiled out of release builds.
+/// Check the entire event stream as well as individual marker completions.
+/// Retroactive wrappers and comment binding move starts, so the final nesting
+/// must still balance before rowan receives the events.
 fn debug_assert_balanced(events: &[Event]) {
     if !cfg!(debug_assertions) {
         return;
@@ -200,7 +194,7 @@ struct Parser<'t> {
     /// groups. Computed per chunk by [`Self::macrocode_body`].
     plain_braces: std::collections::HashSet<usize>,
     /// Bumped on every mutation of [`Self::plain_braces`], so a gate batch can
-    /// key on the set without cloning it ([`gates::WalkKey`]).
+    /// key on the set without cloning it (`WalkKey`).
     plain_braces_version: u32,
     /// expl3 catcode-mode toggle tokens, ascending: `(token index, state after
     /// the toggle)`. The same fixed toggle set the lexer flips
@@ -315,7 +309,7 @@ struct Parser<'t> {
     /// contract is that every gate names the last index that could settle an
     /// entry, and a file whose `$`s all sit before a long tail does get the cut.
     last_dollar: Option<usize>,
-    /// The most recent [`gates::ConditionalGate`] batch ([`Self::gate_batch`]),
+    /// The most recent `ConditionalGate` batch ([`Self::gate_batch`]),
     /// memoized with the walk state its scan read. A lookup hits only when
     /// that key matches the walk's current state *and* the queried opener was
     /// settled by the batch; anything else re-batches from the queried opener.
@@ -334,23 +328,23 @@ struct Parser<'t> {
     /// nothing in a release build.
     #[cfg(test)]
     scan_work: std::cell::Cell<usize>,
-    /// The [`gates::EnvGate`] twin of [`Self::conditional_batch`]. Its verdicts are
+    /// The `EnvGate` twin of [`Self::conditional_batch`]. Its verdicts are
     /// the *scan's* alone: [`Self::environment_escapes_group`]'s per-opener
     /// pre-checks (the group depth, the `.dtx` doc-margin exemption) are applied
     /// at query time, so a batch entry never carries them.
     env_batch: std::cell::RefCell<Option<GateBatch>>,
-    /// The [`gates::AliasGate`] twin of [`Self::conditional_batch`]. Both
+    /// The `AliasGate` twin of [`Self::conditional_batch`]. Both
     /// [`Self::starts_block_env`] and the [`Self::element`] dispatch ask about
     /// the same opener at the same cursor position, so even before the batch
     /// settled its neighbors this slot was load-bearing: without it every
     /// opener paid for its walk twice.
     alias_batch: std::cell::RefCell<Option<GateBatch>>,
-    /// The [`gates::LeftRightGate`] twin of [`Self::conditional_batch`]. Its openers
+    /// The `LeftRightGate` twin of [`Self::conditional_batch`]. Its openers
     /// nest densely — a `\left` whose `\right` the walk cannot reach is retried
     /// as a plain command and every `\left` after it asked in turn — so the
     /// batch is what keeps a run of them from being quadratic.
     left_right_batch: std::cell::RefCell<Option<GateBatch>>,
-    /// The [`gates::TextBracketGate`] twin of [`Self::conditional_batch`]. A `[` the
+    /// The `TextBracketGate` twin of [`Self::conditional_batch`]. A `[` the
     /// gate refuses stays an ordinary token the walk steps over, and the next
     /// command-abutting `[` is asked in turn, so a run of them re-scanned per
     /// opener before the batch.
@@ -358,8 +352,8 @@ struct Parser<'t> {
     /// The paragraph-permissive text-bracket twin. It stays separate because
     /// paragraph anchoring is part of a batch's policy, not its walk-state key.
     long_text_bracket_batch: std::cell::RefCell<Option<GateBatch>>,
-    /// The [`gates::MathBracketGate`] twin, keyed like the others — including on the
-    /// enclosing math's flavor, which this gate alone reads ([`gates::WalkKey`]).
+    /// The `MathBracketGate` twin, keyed like the others — including on the
+    /// enclosing math's flavor, which this gate alone reads (`WalkKey`).
     math_bracket_batch: std::cell::RefCell<Option<GateBatch>>,
     /// The arity-directed expl3 scan's matching-brace table
     /// ([`expl3::BraceMatches`]). Not a gate batch — it settles *pairings*
@@ -669,41 +663,17 @@ impl<'t> Parser<'t> {
         self.pos += 1;
     }
 
-    fn open(&mut self, kind: SyntaxKind) {
-        self.events.push(Event::Start(kind));
+    fn open(&mut self, kind: SyntaxKind) -> Marker {
+        Marker::open(&mut self.events, kind)
     }
 
-    fn close(&mut self) {
-        self.events.push(Event::Finish);
+    fn close(&mut self, marker: Marker) {
+        marker.complete(&mut self.events);
     }
 
-    /// Open a node *retroactively*, wrapping everything emitted since
-    /// `checkpoint` — the event-stream analog of rust-analyzer's
-    /// `Marker::precede`, done locally without a marker type. The caller still
-    /// owes the matching [`Self::close`]; [`debug_assert_balanced`] catches it
-    /// if not.
-    ///
-    /// Used where a construct can only be classified *after* parsing it: a
-    /// `PARAGRAPH` (whether the run held a lone block environment), a `SCRIPTED`
-    /// (whether a `^`/`_` followed the base atom).
-    fn precede(&mut self, checkpoint: usize, kind: SyntaxKind) {
-        self.events.insert(checkpoint, Event::Start(kind));
-    }
-
-    /// Move the `Start` already sitting at `at` back to `checkpoint`, so the
-    /// node it opens also covers everything emitted between them. Both its kind
-    /// and its `Finish` are the ones already in the stream, so the node's extent
-    /// grows and nothing else changes.
-    ///
-    /// Used to pull a construct's own node back over the `DOC_COMMENT` bound in
-    /// front of it ([`Self::doc_comment_bind`]): the construct self-opens, and
-    /// only then is its kind known.
-    fn extend_back(&mut self, checkpoint: usize, at: usize) {
-        debug_assert!(checkpoint <= at, "extend_back must move a Start backwards");
-        if let Event::Start(kind) = self.events[at] {
-            self.events.remove(at);
-            self.events.insert(checkpoint, Event::Start(kind));
-        }
+    /// Open a wrapper after parsing its first children, when its kind is known.
+    fn precede(&mut self, checkpoint: usize, kind: SyntaxKind) -> Marker {
+        Marker::precede(&mut self.events, checkpoint, kind)
     }
 
     fn error(&mut self, message: impl Into<String>) {
@@ -791,7 +761,7 @@ impl<'t> Parser<'t> {
     /// the trivia before `comment_start`, group the bound `%` run into a
     /// `DOC_COMMENT` node, parse the construct at `construct_pos`, and extend
     /// the construct's own node back over the comments
-    /// ([`Self::extend_back`] — the construct self-opens, so its kind is only
+    /// ([`extend_back`] — the construct self-opens, so its kind is only
     /// known afterwards).
     ///
     /// The bound run becomes a named node rather than bare leaves — the
@@ -806,14 +776,14 @@ impl<'t> Parser<'t> {
             self.bump();
         }
         let checkpoint = self.events.len();
-        self.open(SyntaxKind::DOC_COMMENT);
+        let comment = self.open(SyntaxKind::DOC_COMMENT);
         while self.pos < construct_pos {
             self.bump();
         }
-        self.close();
+        self.close(comment);
         let construct_start = self.events.len();
         self.element();
-        self.extend_back(checkpoint, construct_start);
+        extend_back(&mut self.events, checkpoint, construct_start);
     }
 
     /// Parse a content region, grouping runs of content into `PARAGRAPH` nodes
@@ -906,8 +876,8 @@ impl<'t> Parser<'t> {
                 }
                 self.element();
                 if terminator && let Some(cp) = stmt_checkpoint.take() {
-                    self.precede(cp, SyntaxKind::STATEMENT);
-                    self.close(); // matching Finish for STATEMENT
+                    let statement = self.precede(cp, SyntaxKind::STATEMENT);
+                    self.close(statement);
                 }
                 if is_nontrivia {
                     nontrivia_count += 1;
@@ -915,8 +885,8 @@ impl<'t> Parser<'t> {
                 }
             }
             if !lone_block_env {
-                self.precede(checkpoint, SyntaxKind::PARAGRAPH);
-                self.close(); // matching Finish for PARAGRAPH
+                let paragraph = self.precede(checkpoint, SyntaxKind::PARAGRAPH);
+                self.close(paragraph);
             }
         }
     }
@@ -1164,7 +1134,7 @@ impl<'t> Parser<'t> {
         let expl3_plan = self
             .expl3_arity_slots()
             .and_then(|slots| self.scan_expl3_unit(&slots));
-        self.open(SyntaxKind::COMMAND);
+        let command = self.open(SyntaxKind::COMMAND);
         self.bump(); // the control word
         // A command definer may take its name as the next unbraced control
         // sequence. Consume a control-symbol name here as a plain token so it
@@ -1187,7 +1157,7 @@ impl<'t> Parser<'t> {
             None => self.attach_arguments(bracket, builtin_args),
         }
         self.in_def_body = saved;
-        self.close();
+        self.close(command);
     }
 
     /// The `\\` line break and its tightly-bound modifiers: an optional `*`
@@ -1204,7 +1174,7 @@ impl<'t> Parser<'t> {
     /// (the lexer glues `*` into following letters, so `\\*foo` keeps the star on
     /// the word — a vanishingly rare form we deliberately leave alone).
     fn line_break(&mut self) {
-        self.open(SyntaxKind::LINE_BREAK);
+        let line_break = self.open(SyntaxKind::LINE_BREAK);
         self.bump(); // \\
         if self.kind() == Some(SyntaxKind::WORD) && self.text() == "*" {
             self.bump(); // *
@@ -1212,7 +1182,7 @@ impl<'t> Parser<'t> {
         if self.kind() == Some(SyntaxKind::L_BRACKET) {
             self.optional(); // [length]
         }
-        self.close();
+        self.close(line_break);
     }
 
     /// Greedily attach trailing `{…}` / `[…]` argument groups to the currently
@@ -1395,7 +1365,7 @@ impl<'t> Parser<'t> {
     fn argument_group(&mut self, domain: ArgumentDomain) {
         debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACE));
         let opener = self.token_span(self.pos);
-        self.open(SyntaxKind::GROUP);
+        let group = self.open(SyntaxKind::GROUP);
         self.bump(); // {
         self.group_opens.push(self.pos - 1);
         loop {
@@ -1415,7 +1385,7 @@ impl<'t> Parser<'t> {
             }
         }
         self.group_opens.pop();
-        self.close();
+        self.close(group);
     }
 
     /// An optional-argument group `[ … ]`.
@@ -1432,7 +1402,7 @@ impl<'t> Parser<'t> {
     fn argument_optional(&mut self, domain: ArgumentDomain, allow_paragraphs: bool) {
         debug_assert_eq!(self.kind(), Some(SyntaxKind::L_BRACKET));
         let opener = self.token_span(self.pos);
-        self.open(SyntaxKind::OPTIONAL);
+        let optional = self.open(SyntaxKind::OPTIONAL);
         self.bump(); // [
         loop {
             match self.kind() {
@@ -1474,7 +1444,7 @@ impl<'t> Parser<'t> {
                 }
             }
         }
-        self.close();
+        self.close(optional);
     }
 
     /// The environment the token at `idx` closes, under *either* spelling: a
@@ -1519,10 +1489,10 @@ impl<'t> Parser<'t> {
     /// them from the *target's* signature would be arity-directed grouping from
     /// scanned data, which `AGENTS.md` decision #8 holds the line on.
     fn alias_environment(&mut self, target: &str, closer: usize) {
-        self.open(SyntaxKind::ENVIRONMENT);
-        self.open(SyntaxKind::BEGIN);
+        let environment = self.open(SyntaxKind::ENVIRONMENT);
+        let begin = self.open(SyntaxKind::BEGIN);
         self.bump(); // the opening control word
-        self.close();
+        self.close(begin);
 
         let saved = self.alias_end.replace(closer);
         self.open_envs.push(target.to_owned());
@@ -1548,7 +1518,7 @@ impl<'t> Parser<'t> {
         // case the closer stays a plain command and this environment simply has no
         // `END`, exactly as an unclosed `\begin` does.
         if self.pos == closer {
-            self.open(SyntaxKind::END);
+            let end = self.open(SyntaxKind::END);
             self.bump(); // the closing control word
             // A literal closer is a `\end` carrying its name, so it emits the
             // same `END > CONTROL_WORD NAME_GROUP` a spelled-out environment
@@ -1556,9 +1526,9 @@ impl<'t> Parser<'t> {
             if self.closer_is_literal(closer) {
                 self.name_group();
             }
-            self.close();
+            self.close(end);
         }
-        self.close(); // ENVIRONMENT
+        self.close(environment);
     }
 
     /// `\if… … \else … \or … \fi`, for the closer [`Self::conditional_closer`]
@@ -1575,8 +1545,8 @@ impl<'t> Parser<'t> {
     /// Every later branch *starts with* its divider, so a consumer finds the
     /// boundaries positionally and never by matching the name `\else`.
     fn conditional(&mut self, closer: usize) {
-        self.open(SyntaxKind::CONDITIONAL);
-        self.open(SyntaxKind::CONDITIONAL_BRANCH);
+        let conditional = self.open(SyntaxKind::CONDITIONAL);
+        let mut branch = self.open(SyntaxKind::CONDITIONAL_BRANCH);
         self.command(); // the opener, with its usual greedy attachment
         loop {
             // The walk is bounded by the closer the gate located, so a nested
@@ -1590,8 +1560,8 @@ impl<'t> Parser<'t> {
             match self.conditional_flow_at(self.pos) {
                 Some(conditional::FlowWord::Fi) => break,
                 Some(conditional::FlowWord::Else | conditional::FlowWord::Or) => {
-                    self.close(); // CONDITIONAL_BRANCH
-                    self.open(SyntaxKind::CONDITIONAL_BRANCH);
+                    self.close(branch);
+                    branch = self.open(SyntaxKind::CONDITIONAL_BRANCH);
                     self.flow_command();
                     continue;
                 }
@@ -1610,11 +1580,11 @@ impl<'t> Parser<'t> {
             }
             self.element();
         }
-        self.close(); // CONDITIONAL_BRANCH
+        self.close(branch);
         if self.conditional_flow_at(self.pos) == Some(conditional::FlowWord::Fi) {
             self.flow_command();
         }
-        self.close(); // CONDITIONAL
+        self.close(conditional);
     }
 
     /// A conditional divider or closer as a bare `COMMAND`, with **no** argument
@@ -1628,18 +1598,18 @@ impl<'t> Parser<'t> {
     /// protocol, and it is a static fact, so this is a sanctioned deviation on
     /// the same footing as the starred-variant fold.
     fn flow_command(&mut self) {
-        self.open(SyntaxKind::COMMAND);
+        let command = self.open(SyntaxKind::COMMAND);
         self.bump();
-        self.close();
+        self.close(command);
     }
 
     /// `\begin{name} … \end{name}`, with environment-mismatch recovery.
     fn environment(&mut self) {
-        self.open(SyntaxKind::ENVIRONMENT);
+        let environment = self.open(SyntaxKind::ENVIRONMENT);
 
         let begin_pos = self.pos;
         let begin_start = self.starts[self.pos];
-        self.open(SyntaxKind::BEGIN);
+        let begin = self.open(SyntaxKind::BEGIN);
         self.bump(); // \begin
         let name = self.name_group();
         // Span of the opener `\begin{name}` (before any trailing arguments), so
@@ -1673,7 +1643,7 @@ impl<'t> Parser<'t> {
                 .map(|sig| sig.args.as_ref());
             self.attach_arguments(bracket, builtin_args);
         }
-        self.close(); // BEGIN
+        self.close(begin);
 
         if let Some(open) = name.as_deref() {
             self.open_envs.push(open.to_owned());
@@ -1707,6 +1677,7 @@ impl<'t> Parser<'t> {
             self.open_envs.pop();
         }
         self.finish_environment(&name, opener);
+        self.close(environment);
     }
 
     /// True if the token at `pos` sits on a `.dtx` frame line: walking back over
@@ -1805,19 +1776,19 @@ impl<'t> Parser<'t> {
                     !self.in_macro_code(self.pos) && name.as_deref() == Some(target.as_str())
                 }) =>
             {
-                self.open(SyntaxKind::END);
+                let end = self.open(SyntaxKind::END);
                 self.bump();
-                self.close();
+                self.close(end);
             }
             // The cursor is at a `\end` (the only other non-EOF stop condition).
             Some(_) => {
                 let end_name = peek_end_name(self.tokens, self.pos);
                 if name.is_none() || name.as_deref() == end_name.as_deref() {
                     // Matching \end: consume it as our END.
-                    self.open(SyntaxKind::END);
+                    let end = self.open(SyntaxKind::END);
                     self.bump(); // \end
                     self.name_group();
-                    self.close();
+                    self.close(end);
                 } else {
                     // Mismatched \end: it belongs to an enclosing environment.
                     // Close this one with a diagnostic and leave the \end for
@@ -1834,7 +1805,6 @@ impl<'t> Parser<'t> {
                 }
             }
         }
-        self.close(); // ENVIRONMENT
     }
 
     /// The raw body of a verbatim-like environment: consume tokens unstructured
@@ -1858,10 +1828,10 @@ impl<'t> Parser<'t> {
     /// A `\end` with no matching open environment at this level.
     fn stray_end(&mut self) {
         self.error("`\\end` without matching `\\begin`");
-        self.open(SyntaxKind::END);
+        let end = self.open(SyntaxKind::END);
         self.bump(); // \end
         self.name_group();
-        self.close();
+        self.close(end);
     }
 
     /// The `{name}` group following `\begin` / `\end`. Returns the trimmed name.
@@ -1871,7 +1841,7 @@ impl<'t> Parser<'t> {
             self.error("expected `{` for environment name");
             return None;
         }
-        self.open(SyntaxKind::NAME_GROUP);
+        let name_group = self.open(SyntaxKind::NAME_GROUP);
         self.bump(); // {
         let mut name = String::new();
         loop {
@@ -1890,7 +1860,7 @@ impl<'t> Parser<'t> {
                 }
             }
         }
-        self.close();
+        self.close(name_group);
         Some(name.trim().to_owned())
     }
 }

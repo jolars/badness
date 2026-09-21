@@ -1302,11 +1302,15 @@ impl IncrementalDatabase {
     /// to call on a shared clone (the language server's read path uses it to find
     /// the cached parse for the buffer under the cursor).
     pub fn lookup_file(&self, path: &Path) -> Option<SourceFile> {
-        self.files
-            .lock()
-            .unwrap_or_else(recover_poison)
-            .get(&normalize_path(path))
-            .copied()
+        let files = self.files.lock().unwrap_or_else(recover_poison);
+        // Project resolution and file_path already return normalized keys.
+        // Only aliases need another allocation and component walk.
+        if path.is_absolute()
+            && let Some(file) = files.get(path)
+        {
+            return Some(*file);
+        }
+        files.get(&normalize_path(path)).copied()
     }
 
     /// Stop tracking `path`, returning the `SourceFile` it was mapped to (if

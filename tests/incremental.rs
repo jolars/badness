@@ -240,6 +240,28 @@ fn remove_file_stops_tracking() {
 }
 
 #[test]
+fn lookup_file_preserves_path_aliases_and_removal() {
+    let mut db = IncrementalDatabase::default();
+    let relative = Path::new("unsaved-project/章/main.tex");
+    let absolute = std::env::current_dir().unwrap().join(relative);
+    let alias = absolute.parent().unwrap().join("nested/.././main.tex");
+    let file = db.upsert_file(relative, "text\n".to_string());
+    db.reparse_stage_edits(file, None);
+
+    for path in [relative, absolute.as_path(), alias.as_path()] {
+        assert!(db.lookup_file(path) == Some(file), "{path:?}");
+        assert!(db.snapshot().lookup_file(path) == Some(file), "{path:?}");
+    }
+    let missing = absolute.with_file_name("missing.tex");
+    assert!(db.lookup_file(&missing).is_none());
+    assert!(db.snapshot().lookup_file(&missing).is_none());
+    assert!(db.remove_file(&alias) == Some(file));
+    for path in [relative, absolute.as_path(), alias.as_path()] {
+        assert!(db.lookup_file(path).is_none(), "{path:?}");
+    }
+}
+
+#[test]
 fn snapshot_reads_cached_parse() {
     let mut db = IncrementalDatabase::default();
     let path = std::path::Path::new("/tmp/snap.tex");

@@ -97,11 +97,13 @@ fn build_hover(
     idx: &LineIndex,
     build: &BuildConfig,
 ) -> Option<Hover> {
-    if let Some((value, range)) = declaration_hover(model, root, offset) {
+    let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
+    let tokens = hover_tokens(root, at);
+    if let Some((value, range)) = declaration_hover(model, tokens.clone()) {
         return Some(markup_hover(value, range, idx));
     }
 
-    if let Some(target) = signature_target_at(root, offset) {
+    if let Some(target) = signature_target_at(tokens.clone()) {
         let value = match target.kind {
             TargetKind::Command => {
                 let (sig, provenance) = lookup_command(scope, &target.name)?;
@@ -115,7 +117,7 @@ fn build_hover(
         return Some(markup_hover(value, target.range, idx));
     }
 
-    if let Some(target) = package_target_at(root, offset) {
+    if let Some(target) = package_target_at(tokens, offset) {
         let meta = package_metadata(&target.name)?;
         let value = render_package(&target.name, target.is_class, meta);
         return Some(markup_hover(value, target.range, idx));
@@ -167,19 +169,44 @@ struct SigTarget {
     range: TextRange,
 }
 
+fn hover_tokens(root: &SyntaxNode, at: TextSize) -> rowan::TokenAtOffset<SyntaxToken> {
+    let range = root.text_range();
+    if range.is_empty() || !range.contains_inclusive(at) {
+        return root.token_at_offset(at);
+    }
+
+    // Nonempty byte ranges let Rowan binary-search children instead of scanning
+    // every sibling at each level. At a boundary, keep both adjacent tokens in
+    // left-to-right order so the hover kinds retain their existing precedence.
+    let byte = if at == range.end() {
+        at - TextSize::new(1)
+    } else {
+        at
+    };
+    let Some(right) = root
+        .covering_element(TextRange::at(byte, TextSize::new(1)))
+        .into_token()
+    else {
+        return root.token_at_offset(at);
+    };
+    if right.text_range().start() < at || at == range.start() {
+        return rowan::TokenAtOffset::Single(right);
+    }
+    let Some(left) = root
+        .covering_element(TextRange::new(at - TextSize::new(1), at))
+        .into_token()
+    else {
+        return root.token_at_offset(at);
+    };
+    rowan::TokenAtOffset::Between(left, right)
+}
+
 /// The command/environment name token the cursor sits on, if any: a `CONTROL_WORD`
 /// child of a `COMMAND`, or a name token inside the `NAME_GROUP` of a
 /// `\begin`/`\end`. Mirrors completion's `command_name_context`/`group_context`, but
 /// over a *complete* construct rather than a typed prefix.
-fn signature_target_at(root: &SyntaxNode, offset: usize) -> Option<SigTarget> {
-    let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
-    let (left, right) = match root.token_at_offset(at) {
-        rowan::TokenAtOffset::None => return None,
-        rowan::TokenAtOffset::Single(t) => (Some(t.clone()), Some(t)),
-        rowan::TokenAtOffset::Between(l, r) => (Some(l), Some(r)),
-    };
-
-    for token in [left, right].into_iter().flatten() {
+fn signature_target_at(tokens: rowan::TokenAtOffset<SyntaxToken>) -> Option<SigTarget> {
+    for token in tokens {
         if token.kind() == SyntaxKind::CONTROL_WORD
             && let Some(parent) = token.parent()
             && parent.kind() == SyntaxKind::COMMAND
@@ -326,15 +353,12 @@ fn package_loader_is_class(name: &str) -> Option<bool> {
 /// brace `{…}` argument of a `\usepackage`/`\documentclass`-family command, resolved
 /// to the single comma-separated segment covering the offset (so `\usepackage{a,b|}`
 /// hovers `b`). Reuses `document_link::comma_spans` for the per-name spans.
-fn package_target_at(root: &SyntaxNode, offset: usize) -> Option<PackageTarget> {
+fn package_target_at(
+    tokens: rowan::TokenAtOffset<SyntaxToken>,
+    offset: usize,
+) -> Option<PackageTarget> {
     let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
-    let (left, right) = match root.token_at_offset(at) {
-        rowan::TokenAtOffset::None => return None,
-        rowan::TokenAtOffset::Single(t) => (Some(t.clone()), Some(t)),
-        rowan::TokenAtOffset::Between(l, r) => (Some(l), Some(r)),
-    };
-
-    for token in [left, right].into_iter().flatten() {
+    for token in tokens {
         let Some(group) = token
             .parent_ancestors()
             .find(|n| n.kind() == SyntaxKind::GROUP)
@@ -407,10 +431,9 @@ fn render_package(name: &str, is_class: bool, meta: &PackageMeta) -> String {
 /// as plain command prototypes. Returns the markdown and the range to highlight.
 fn declaration_hover(
     model: &SemanticModel,
-    root: &SyntaxNode,
-    offset: usize,
+    tokens: rowan::TokenAtOffset<SyntaxToken>,
 ) -> Option<(String, TextRange)> {
-    let (name, range) = declaration_command_at(root, offset)?;
+    let (name, range) = declaration_command_at(tokens)?;
 
     if provides_kind(&name).is_some() {
         let decl = model.provides().filter(|d| d.range == range)?;
@@ -435,14 +458,10 @@ fn declaration_hover(
 /// The name and control-word range of the `COMMAND` whose control word the cursor sits
 /// on. Mirrors [`signature_target_at`]'s command branch, but keeps the raw name (the
 /// caller decides whether it is a package-authoring declaration).
-fn declaration_command_at(root: &SyntaxNode, offset: usize) -> Option<(String, TextRange)> {
-    let at = TextSize::new(offset.min(u32::MAX as usize) as u32);
-    let (left, right) = match root.token_at_offset(at) {
-        rowan::TokenAtOffset::None => return None,
-        rowan::TokenAtOffset::Single(t) => (Some(t.clone()), Some(t)),
-        rowan::TokenAtOffset::Between(l, r) => (Some(l), Some(r)),
-    };
-    for token in [left, right].into_iter().flatten() {
+fn declaration_command_at(
+    tokens: rowan::TokenAtOffset<SyntaxToken>,
+) -> Option<(String, TextRange)> {
+    for token in tokens {
         if token.kind() == SyntaxKind::CONTROL_WORD
             && let Some(parent) = token.parent()
             && parent.kind() == SyntaxKind::COMMAND
@@ -631,9 +650,12 @@ fn render_citation(
             continue;
         };
         let root = snapshot.parsed_bib_tree(file);
+        // The semantic model already locates the entry in this same parse.
+        // Descending by range avoids visiting every preceding entry's fields.
         let Some(node) = root
-            .descendants()
-            .find(|n| n.kind() == BibSyntaxKind::ENTRY && n.text_range() == entry.range)
+            .covering_element(entry.range)
+            .into_node()
+            .filter(|n| n.kind() == BibSyntaxKind::ENTRY && n.text_range() == entry.range)
         else {
             continue;
         };
@@ -858,6 +880,35 @@ mod tests {
     }
 
     #[test]
+    fn hover_tokens_match_rowan_at_every_byte_and_boundary() {
+        let sources = [
+            "",
+            "Plain café 🦀 text.\n",
+            "\\section{Intro}\\label{x} See \\ref{x}.\n",
+            "\\usepackage{amsmath,booktabs}\n\\begin{align*}x&=y\\end{align*}",
+            "\\newcommand{\\foo}[1]{}\\foo{{}} % comment\n\\verb|x|",
+            "\\begin{}\\end{} $ $ \\foo{[} \\begin{figure}\\caption{",
+            include_str!("../../benches/documents/small.tex"),
+        ];
+        for source in sources {
+            let root = SyntaxNode::new_root(parse(source).green);
+            for node in root.descendants() {
+                for offset in
+                    u32::from(node.text_range().start())..=u32::from(node.text_range().end())
+                {
+                    let at = TextSize::new(offset);
+                    assert_eq!(
+                        hover_tokens(&node, at).collect::<Vec<_>>(),
+                        node.token_at_offset(at).collect::<Vec<_>>(),
+                        "{source:?}, node {:?}, offset {offset}",
+                        node.text_range(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn command_signature_shows_sectioning_level() {
         let md = hover_md("\\section{Intro}\n", "section").expect("hover for \\section");
         assert!(md.contains("\\section"), "prototype: {md}");
@@ -1006,6 +1057,34 @@ mod tests {
         assert!(md.contains("knuth1984"), "key: {md}");
         assert!(md.contains("The TeXbook"), "title: {md}");
         assert!(md.contains("Knuth"), "author: {md}");
+    }
+
+    #[test]
+    fn citation_selects_its_entry_after_other_bib_constructs_and_edits() {
+        let tex = "\\addbibresource{refs.bib}\n\\cite{missing,kNuTh1984}\n";
+        let tex_path = Path::new("/p/main.tex");
+        let bib_path = Path::new("/p/refs.bib");
+        let mut db = IncrementalDatabase::default();
+        let file = db.upsert_file(tex_path, tex.to_string());
+        db.reparse_stage_edits(file, None);
+        let prefix = "@comment{A comment}\n@string{publisher = {Addison-Wesley}}\n\
+                      @preamble{\"A preamble\"}\n\
+                      @book{other, title = {Another book}}\n";
+        for title in ["The {TeX}book", "A revised {TeX}book"] {
+            let bib = format!(
+                "{prefix}@book{{Knuth1984, title = {{{title}}}, author = {{Knuth}}, year = 1984}}\n"
+            );
+            let file = db.upsert_file(bib_path, bib);
+            db.reparse_stage_edits(file, None);
+            let md = markdown_at(&db, tex_path, tex, tex.find("kNuTh1984").unwrap()).unwrap();
+            assert_eq!(
+                md,
+                format!(
+                    "@book · `Knuth1984`\n\n**author:** Knuth\n\n**title:** {title}\n\n**year:** 1984"
+                )
+            );
+            assert!(markdown_at(&db, tex_path, tex, tex.find("missing").unwrap()).is_none());
+        }
     }
 
     #[test]

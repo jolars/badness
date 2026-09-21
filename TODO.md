@@ -360,6 +360,17 @@ sources below are missing.
 
 ## Performance & hardening
 
+- [x] **Reduce warm hover lookup cost.** Against `958fc53`, the pinned thesis
+  hover median falls from 116.5 to 107.1 µs (p95: 140.0 to 129.1 µs) across
+  three fresh sessions with 18,000 interleaved requests per build on the Ryzen
+  9 7900. Texlab measures 80.6 µs, so this closes about one-quarter of the gap.
+  Locate cursor tokens once by range, descend directly to resolved bibliography
+  entries, and look up known absolute file paths before normalizing aliases.
+  Hover JSON stays identical, and no cache lifetime or filesystem freshness
+  checks change. The remaining profile points to label-context traversal,
+  auxiliary-file lookup, and citation-field rendering. Measurements, the small
+  project comparison, and validation are in `target/perf-investigation/hover/`.
+
 - [x] **Reuse citation rename indexes and send responses directly.** Against
   `a3558a5`, the pinned thesis `Aup91` rename falls from 94.4 to 79.5 µs median
   across three fresh sessions of 300 requests on the Ryzen 9 7900, with

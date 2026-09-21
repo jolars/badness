@@ -408,10 +408,6 @@ sources below are missing.
   parser-only brace-depth case to `tests/scaling.rs` at `MAX_RATIO`, using a
   larger thread stack so the guard reaches its asymptotic regime.
 
-- [ ] **Split `crates/badness-parser/tests/parser.rs` by area.** It is now 2,970
-  lines and 233 tests; separate math, verbatim, comments, conditionals, and
-  aliases into focused integration-test targets.
-
 - [ ] **Mine the `latexindent` corpus for construct coverage** (human-in-the-loop,
   ongoing). Skill: `.agents/skills/formatter-fixture/`. The corpus is read as a
   coverage map — which constructs occur and in what shapes — and **latexindent

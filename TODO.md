@@ -138,6 +138,58 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
+### Conditional reasoning for duplicate checks
+
+Extend the shared `ConditionalIndex` used by `duplicate-label` and
+`duplicate-package`. Prioritize execution context and precise operand
+consumption, then complete-branch coverage. Keep inference bounded and in
+linter semantics, without general macro expansion or predicate-driven parser
+attachment.
+
+- [ ] **Distinguish execution contexts explicitly.** An empty conditional path
+  means no tracked branch, not proven execution. Labels and package loads in
+  definition bodies are still collected. Distinguish ordinary execution,
+  deferred definition bodies, opaque arguments, and proven unreachable code
+  before deriving stronger guarantees from their occurrences.
+
+- [ ] **Consume actual operand tokens where their extent is provable.**
+  `OpenerScan` currently counts control words. In `\ifx aa\IfFileExists...`,
+  the character tokens already satisfy the operands, so the macro conditional
+  must remain recognizable. Start with non-expanding operand scans such as
+  `\ifx`, `\ifdefined`, and `\let`, respecting each command's token syntax.
+  Retain conservative handling where expansion determines operand extent,
+  including unresolved `\if` and `\ifcat` tests.
+
+- [ ] **Combine guaranteed occurrences across complete branches.** The current
+  pairwise path check requires one particular earlier occurrence to be
+  guaranteed. Intersect facts at a proven exhaustive branch join so that
+  alternative occurrences can jointly establish a later duplicate:
+
+  ```tex
+  \ifdefined\foo
+    \label{a}
+  \else
+    \label{a}
+  \fi
+  \label{a} % A duplicate regardless of which branch ran.
+  ```
+
+  Include an empty alternative when a conditional has no `\else`. Require
+  complete, recognized branch structure, and preserve the contributing source
+  locations for diagnostics. This inference does not require evaluating the
+  predicate.
+
+- [ ] **Evaluate a small set of provable predicates.** Consider `\iftrue`,
+  `\iffalse`, and complete literal comparisons to establish guaranteed
+  occurrences and exclude unreachable ones. Make assumptions about command
+  meanings explicit, account for recognized redefinitions, and fall back to
+  unknown when those assumptions cannot be justified.
+
+Leave correlation between separate tests for later. Identical predicate text
+does not establish an identical result: intervening definitions, assignments,
+or unknown macro calls can change the tested state. Correlation needs evidence
+that the relevant state remains unchanged.
+
 ### expl3 semantic linting
 
 Investigated [expltools][expltools-review] on 2026-09-18 at commit `48bc583`

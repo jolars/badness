@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
   "meta": {
-    "generated_at": "2026-07-10T00:50:18Z",
-    "host": {"os": "linux", "arch": "x86_64", "cpu": "Intel(R) Core(TM) Ultra 7 155U"},
+    "generated_at": "2026-09-21T14:09:42Z",
+    "host": {"os": "linux", "arch": "x86_64", "cpu": "AMD Ryzen 9 7900 12-Core Processor"},
     "backend": "hyperfine",
     "min_runs": 3,
     "tools": {
-      "badness": {"version": "0.7.0"},
+      "badness": {"version": "0.23.0"},
       "tex-fmt": {"version": "0.5.7"},
       "latexindent": {"version": "3.24.7"},
       "lacheck": {"version": "1.30"},
@@ -17,30 +17,37 @@
     {"id":"small","name":"small.tex (baseline)","file":"small.tex","size_bytes":1233,"lines":48,"iterations":50},
     {"id":"cv","name":"cv.tex","file":"cv.tex","size_bytes":6273,"lines":275,"iterations":30},
     {"id":"masters","name":"masters_dissertation.tex","file":"masters_dissertation.tex","size_bytes":95383,"lines":2458,"iterations":8},
+    {"id":"phd","name":"phd_dissertation.tex","file":"phd_dissertation.tex","size_bytes":730369,"lines":27482,"iterations":3},
     {"id":"project","name":"project (12 files)","file":"project","size_bytes":47190,"lines":1005,"iterations":5}
   ],
   "results": [
-    {"document":"small","formatter":"badness","mean_ms":2.4545,"stddev_ms":0.5867,"min_ms":0.8573,"max_ms":5.6567,"runs":600},
-    {"document":"small","formatter":"tex-fmt","mean_ms":2.2980,"stddev_ms":0.5416,"min_ms":0.8883,"max_ms":4.9063,"runs":620},
-    {"document":"small","formatter":"latexindent","mean_ms":84.7619,"stddev_ms":5.2806,"min_ms":77.0526,"max_ms":98.6430,"runs":35},
-    {"document":"cv","formatter":"badness","mean_ms":3.0563,"stddev_ms":0.5731,"min_ms":1.4521,"max_ms":6.5785,"runs":595},
-    {"document":"cv","formatter":"tex-fmt","mean_ms":2.3656,"stddev_ms":0.5560,"min_ms":1.0157,"max_ms":5.1515,"runs":618},
-    {"document":"cv","formatter":"latexindent","mean_ms":105.6388,"stddev_ms":21.9787,"min_ms":82.3922,"max_ms":161.2518,"runs":35},
-    {"document":"masters","formatter":"badness","mean_ms":22.5924,"stddev_ms":1.3402,"min_ms":19.7107,"max_ms":26.9194,"runs":121},
-    {"document":"masters","formatter":"tex-fmt","mean_ms":3.5818,"stddev_ms":0.7334,"min_ms":1.7228,"max_ms":10.9985,"runs":550},
-    {"document":"masters","formatter":"latexindent","mean_ms":2333.9338,"stddev_ms":3.5144,"min_ms":2330.0066,"max_ms":2336.7828,"runs":3},
-    {"document":"project","formatter":"badness","mean_ms":4.6928,"stddev_ms":0.7682,"min_ms":2.7871,"max_ms":9.3865,"runs":508},
-    {"document":"project","formatter":"tex-fmt","mean_ms":3.4801,"stddev_ms":0.7457,"min_ms":1.9159,"max_ms":6.7361,"runs":397}
+    {"document":"small","formatter":"badness","mean_ms":2.2280,"stddev_ms":0.2881,"min_ms":1.5594,"max_ms":4.5042,"runs":760},
+    {"document":"small","formatter":"tex-fmt","mean_ms":1.8447,"stddev_ms":0.2663,"min_ms":1.4077,"max_ms":5.2116,"runs":852},
+    {"document":"small","formatter":"latexindent","mean_ms":60.4411,"stddev_ms":1.2374,"min_ms":58.3468,"max_ms":63.3773,"runs":49},
+    {"document":"cv","formatter":"badness","mean_ms":2.8968,"stddev_ms":0.4728,"min_ms":2.1975,"max_ms":7.0406,"runs":629},
+    {"document":"cv","formatter":"tex-fmt","mean_ms":1.8836,"stddev_ms":0.3265,"min_ms":1.4124,"max_ms":5.2885,"runs":874},
+    {"document":"cv","formatter":"latexindent","mean_ms":67.6548,"stddev_ms":1.5933,"min_ms":64.6806,"max_ms":72.6389,"runs":44},
+    {"document":"masters","formatter":"badness","mean_ms":21.2434,"stddev_ms":1.0772,"min_ms":19.9534,"max_ms":24.0947,"runs":129},
+    {"document":"masters","formatter":"tex-fmt","mean_ms":2.5175,"stddev_ms":0.2974,"min_ms":2.1186,"max_ms":5.6226,"runs":642},
+    {"document":"masters","formatter":"latexindent","mean_ms":1619.6812,"stddev_ms":4.3295,"min_ms":1616.0399,"max_ms":1624.4684,"runs":3},
+    {"document":"phd","formatter":"badness","mean_ms":206.0519,"stddev_ms":4.7425,"min_ms":198.8200,"max_ms":214.6120,"runs":14},
+    {"document":"phd","formatter":"tex-fmt","mean_ms":9.3448,"stddev_ms":0.4794,"min_ms":8.5763,"max_ms":12.3872,"runs":269},
+    {"document":"phd","formatter":"latexindent","mean_ms":25787.0356,"stddev_ms":197.1053,"min_ms":25586.9122,"max_ms":25980.9774,"runs":3},
+    {"document":"project","formatter":"badness","mean_ms":6.0545,"stddev_ms":0.6072,"min_ms":4.8906,"max_ms":9.2864,"runs":343},
+    {"document":"project","formatter":"tex-fmt","mean_ms":2.5443,"stddev_ms":0.3394,"min_ms":2.1472,"max_ms":6.0691,"runs":754}
   ],
   "lint_results": [
-    {"document":"small","formatter":"badness","mean_ms":2.7615,"stddev_ms":0.6380,"min_ms":1.5162,"max_ms":7.6755,"runs":420},
-    {"document":"small","formatter":"lacheck","mean_ms":10.5784,"stddev_ms":1.7644,"min_ms":7.7071,"max_ms":14.5698,"runs":257},
-    {"document":"small","formatter":"chktex","mean_ms":65.4007,"stddev_ms":7.8025,"min_ms":55.1764,"max_ms":93.5242,"runs":45},
-    {"document":"cv","formatter":"badness","mean_ms":3.2469,"stddev_ms":0.5131,"min_ms":1.8403,"max_ms":8.2667,"runs":561},
-    {"document":"cv","formatter":"lacheck","mean_ms":11.6510,"stddev_ms":2.7189,"min_ms":7.1851,"max_ms":25.7571,"runs":181},
-    {"document":"cv","formatter":"chktex","mean_ms":66.1456,"stddev_ms":5.3577,"min_ms":54.7281,"max_ms":81.8926,"runs":39},
-    {"document":"masters","formatter":"badness","mean_ms":24.1258,"stddev_ms":1.8653,"min_ms":20.7172,"max_ms":28.9816,"runs":104},
-    {"document":"masters","formatter":"lacheck","mean_ms":13.5346,"stddev_ms":1.7377,"min_ms":10.4407,"max_ms":18.2761,"runs":185},
-    {"document":"masters","formatter":"chktex","mean_ms":68.4455,"stddev_ms":4.9900,"min_ms":61.3334,"max_ms":90.8754,"runs":43}
+    {"document":"small","formatter":"badness","mean_ms":2.5283,"stddev_ms":0.2796,"min_ms":1.9014,"max_ms":4.2127,"runs":653},
+    {"document":"small","formatter":"lacheck","mean_ms":6.2830,"stddev_ms":0.2872,"min_ms":5.7361,"max_ms":7.5064,"runs":377},
+    {"document":"small","formatter":"chktex","mean_ms":38.6138,"stddev_ms":5.0624,"min_ms":33.0979,"max_ms":54.0230,"runs":66},
+    {"document":"cv","formatter":"badness","mean_ms":2.9312,"stddev_ms":0.2784,"min_ms":2.3599,"max_ms":4.5520,"runs":670},
+    {"document":"cv","formatter":"lacheck","mean_ms":6.5533,"stddev_ms":0.3844,"min_ms":5.9206,"max_ms":9.3171,"runs":363},
+    {"document":"cv","formatter":"chktex","mean_ms":37.9784,"stddev_ms":3.5534,"min_ms":33.5403,"max_ms":46.2528,"runs":78},
+    {"document":"masters","formatter":"badness","mean_ms":58.9658,"stddev_ms":4.3753,"min_ms":54.1457,"max_ms":70.2911,"runs":53},
+    {"document":"masters","formatter":"lacheck","mean_ms":8.3681,"stddev_ms":0.4537,"min_ms":7.7195,"max_ms":10.9566,"runs":270},
+    {"document":"masters","formatter":"chktex","mean_ms":41.0897,"stddev_ms":4.0925,"min_ms":36.1493,"max_ms":50.0436,"runs":71},
+    {"document":"phd","formatter":"badness","mean_ms":201.2823,"stddev_ms":5.0260,"min_ms":191.1012,"max_ms":207.7070,"runs":15},
+    {"document":"phd","formatter":"lacheck","mean_ms":21.0009,"stddev_ms":0.6315,"min_ms":19.8983,"max_ms":23.0398,"runs":130},
+    {"document":"phd","formatter":"chktex","mean_ms":68.7874,"stddev_ms":5.9745,"min_ms":62.4486,"max_ms":81.9185,"runs":44}
   ]
 }

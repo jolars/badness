@@ -3556,6 +3556,2240 @@ fn apply_edits(text: &str, edits: &[TextEdit]) -> String {
     out
 }
 
+fn start_file_rename_server(
+    root: &std::path::Path,
+    hooks: bool,
+) -> (Connection, std::thread::JoinHandle<()>) {
+    start_file_rename_server_with_encoding(root, hooks, false, false)
+}
+
+fn start_file_rename_server_with_encoding(
+    root: &std::path::Path,
+    hooks: bool,
+    versioned: bool,
+    utf8: bool,
+) -> (Connection, std::thread::JoinHandle<()>) {
+    start_file_rename_server_in_workspaces(&[root], hooks, versioned, utf8)
+}
+
+fn start_file_rename_server_in_workspaces(
+    roots: &[&std::path::Path],
+    hooks: bool,
+    versioned: bool,
+    utf8: bool,
+) -> (Connection, std::thread::JoinHandle<()>) {
+    let (server, client) = Connection::memory();
+    let thread = std::thread::spawn(move || badness::lsp::serve(server).unwrap());
+    // Neovim advertises resource operations without documentChanges.
+    send_request(
+        &client,
+        1,
+        "initialize",
+        serde_json::json!({
+            "workspaceFolders": roots.iter().map(|root| serde_json::json!({
+                "uri": path_to_file_uri(root), "name": "test"
+            })).collect::<Vec<_>>(),
+            "capabilities": {"general":{"positionEncodings": [if utf8 {"utf-8"} else {"utf-16"}]}, "workspace": {
+                "workspaceEdit": {"resourceOperations": ["rename"], "documentChanges": if versioned {serde_json::json!(true)} else {serde_json::Value::Null}},
+                "fileOperations": {"willRename": hooks, "didRename": hooks}
+            }}
+        }),
+    );
+    assert!(recv_response(&client).error().is_none());
+    send_notification(&client, "initialized", serde_json::json!({}));
+    (client, thread)
+}
+
+fn file_rename_request(
+    client: &Connection,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    send_request(client, 200, method, params);
+    loop {
+        if let Message::Response(response) = recv(client) {
+            assert_eq!(response.id, RequestId::from(200));
+            assert!(response.error().is_none(), "{:?}", response.error());
+            return response.result().unwrap();
+        }
+    }
+}
+
+fn file_rename_text_edits(value: &serde_json::Value, uri: &Uri) -> Vec<TextEdit> {
+    if let Some(changes) = value.get("changes") {
+        return changes
+            .get(uri.as_str())
+            .map(|v| serde_json::from_value(v.clone()).unwrap())
+            .unwrap_or_default();
+    }
+    value["documentChanges"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|change| change["textDocument"]["uri"] == uri.as_str())
+        .flat_map(|change| {
+            serde_json::from_value::<Vec<TextEdit>>(change["edits"].clone()).unwrap()
+        })
+        .collect()
+}
+
+fn file_rename_error(
+    client: &Connection,
+    method: &str,
+    params: serde_json::Value,
+) -> ResponseError {
+    send_request(client, 200, method, params);
+    loop {
+        if let Message::Response(response) = recv(client) {
+            assert_eq!(response.id, RequestId::from(200));
+            return response.error().expect("rename must be rejected");
+        }
+    }
+}
+
+#[test]
+fn lsp_file_rename_input_preserves_relative_paths_in_live_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let target = dir.path().join("foobar.tex");
+    let source = "\\input{foobar}\n\\input{foobar.tex}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&target, "disk text\n").unwrap();
+    std::fs::write(dir.path().join("figure.pdf"), "image").unwrap();
+    std::fs::write(dir.path().join("other.tex"), "\\input{./foobar}\n").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), false);
+    let main_uri = path_to_file_uri(&main);
+    let target_uri = path_to_file_uri(&target);
+    did_open(&client, &main_uri, 1, source);
+    did_open(
+        &client,
+        &target_uri,
+        2,
+        "\\includegraphics{figure}\nunsaved\n",
+    );
+    let prepared = prepare_rename(&client, 2, &main_uri, Position::new(0, 8));
+    assert_eq!(prepared["placeholder"], "foobar");
+    assert_eq!(
+        prepared["range"],
+        serde_json::json!({"start":{"line":0,"character":7},"end":{"line":0,"character":13}})
+    );
+    let edit = file_rename_request(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument": {"uri": main_uri}, "position": {"line":0,"character":8}, "newName":"appendix"
+        }),
+    );
+    assert_eq!(
+        apply_edits(source, &file_rename_text_edits(&edit, &main_uri)),
+        "\\input{appendix}\n\\input{appendix.tex}\n"
+    );
+    assert_eq!(
+        apply_edits(
+            "\\includegraphics{figure}\nunsaved\n",
+            &file_rename_text_edits(&edit, &target_uri)
+        ),
+        "\\includegraphics{figure}\nunsaved\n"
+    );
+    let resource = edit["documentChanges"].as_array().unwrap().last().unwrap();
+    assert_eq!(resource["kind"], "rename");
+    assert_eq!(
+        resource["newUri"],
+        path_to_file_uri(&dir.path().join("appendix.tex")).as_str()
+    );
+    assert!(target.exists(), "the server must not perform the move");
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_explorer_folder_updates_source_and_asset_references() {
+    let dir = tempfile::tempdir().unwrap();
+    let chapter_dir = dir.path().join("chapters");
+    std::fs::create_dir(&chapter_dir).unwrap();
+    let main = dir.path().join("main.tex");
+    let chapter = chapter_dir.join("one.tex");
+    let main_text =
+        "\\input{chapters/one}\n\\import{chapters/}{one}\n\\includegraphics{chapters/figure}\n";
+    let chapter_text = "\\label{chapter}\n";
+    std::fs::write(&main, main_text).unwrap();
+    std::fs::write(&chapter, chapter_text).unwrap();
+    std::fs::write(dir.path().join("shared.tex"), "shared").unwrap();
+    std::fs::write(chapter_dir.join("figure.pdf"), "image").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    // Explorer operations must discover the project even without open documents.
+    let edit = file_rename_request(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&chapter_dir), "newUri":path_to_file_uri(&dir.path().join("new/parts"))
+        }]}),
+    );
+    assert_eq!(
+        apply_edits(
+            main_text,
+            &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+        ),
+        "\\input{new/parts/one}\n\\import{new/parts/}{one}\n\\includegraphics{new/parts/figure}\n"
+    );
+    assert_eq!(
+        apply_edits(
+            chapter_text,
+            &file_rename_text_edits(&edit, &path_to_file_uri(&chapter))
+        ),
+        chapter_text
+    );
+    assert!(!edit.to_string().contains("\"kind\":\"rename\""));
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_cursor_is_self_contained_with_explorer_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    std::fs::write(&main, "\\input{foo}\n").unwrap();
+    std::fs::write(dir.path().join("foo.tex"), "text").unwrap();
+    let other = dir.path().join("other.tex");
+    let other_source = "\\input{baz}\n";
+    std::fs::write(&other, other_source).unwrap();
+    std::fs::write(dir.path().join("baz.tex"), "text").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, "\\input{foo}\n");
+    let edit = file_rename_request(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"bar"
+        }),
+    );
+    let changes = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[1]["kind"], "rename");
+    let updated = apply_edits("\\input{foo}\n", &file_rename_text_edits(&edit, &uri));
+    assert_eq!(updated, "\\input{bar}\n");
+    let params = serde_json::json!({"files":[{
+        "oldUri":changes[1]["oldUri"], "newUri":changes[1]["newUri"]
+    }]});
+    // A proposal can be canceled. Until edits arrive, an independent explorer
+    // request still needs the reference edits, even for the same paths.
+    let retry = file_rename_request(&client, "workspace/willRenameFiles", params.clone());
+    assert_eq!(
+        apply_edits("\\input{foo}\n", &file_rename_text_edits(&retry, &uri)),
+        updated
+    );
+    did_change_full(&client, &uri, 2, &updated);
+    let applied = file_rename_request(&client, "workspace/willRenameFiles", params);
+    assert!(file_rename_text_edits(&applied, &uri).is_empty());
+    let edit = file_rename_request(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[
+            {"oldUri":changes[1]["oldUri"], "newUri":changes[1]["newUri"]},
+            {"oldUri":path_to_file_uri(&dir.path().join("baz.tex")),
+             "newUri":path_to_file_uri(&dir.path().join("quux.tex"))}
+        ]}),
+    );
+    assert!(file_rename_text_edits(&edit, &uri).is_empty());
+    assert_eq!(
+        apply_edits(
+            other_source,
+            &file_rename_text_edits(&edit, &path_to_file_uri(&other))
+        ),
+        "\\input{quux}\n"
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_reconciles_closed_target_without_file_notifications() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("foo.tex");
+    let new = dir.path().join("parts/bar.tex");
+    let source = "\\input{foo}\n\\ref{sec:x}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&old, "\\label{sec:x}\n").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), false);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let edit = file_rename_request(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"parts/bar"
+        }),
+    );
+    let updated = apply_edits(source, &file_rename_text_edits(&edit, &uri));
+    std::fs::write(&main, &updated).unwrap();
+    did_change_full(&client, &uri, 2, &updated);
+    std::fs::create_dir(new.parent().unwrap()).unwrap();
+    std::fs::rename(&old, &new).unwrap();
+    let locations = definition(&client, 201, &uri, Position::new(1, 7));
+    assert_eq!(locations.len(), 1, "{locations:?}");
+    assert_eq!(locations[0].uri, path_to_file_uri(&new));
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_preserves_import_directories_parents_and_resource_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("chapters")).unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("chapters/one.tex");
+    let main_text = "\\documentclass{article}\n\\begin{document}\n\\import{chapters/}{one}\n\\loadglsentries{chapters/one}\n\\end{document}\n";
+    let child_text =
+        "\\documentclass[../main.tex]{subfiles}\n\\bibliography{ ../refs , ../other }\n";
+    std::fs::write(&main, main_text).unwrap();
+    std::fs::write(&old, child_text).unwrap();
+    std::fs::write(dir.path().join("refs.bib"), "").unwrap();
+    std::fs::write(dir.path().join("other.bib"), "").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let edit = file_rename_request(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&dir.path().join("chapters/two.tex"))
+        }]}),
+    );
+    assert_eq!(
+        apply_edits(
+            main_text,
+            &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+        ),
+        "\\documentclass{article}\n\\begin{document}\n\\import{chapters/}{two}\n\\loadglsentries{chapters/two}\n\\end{document}\n"
+    );
+    assert_eq!(
+        apply_edits(
+            child_text,
+            &file_rename_text_edits(&edit, &path_to_file_uri(&old))
+        ),
+        child_text
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_prepare_requires_supported_literal_target_and_client() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    std::fs::write(dir.path().join("foo.tex"), "").unwrap();
+    let source = "\\input{ foo }\n\\input{\\foo}\n\\input{missing}\n\\includegraphics{foo.tex}\n";
+    std::fs::write(&main, source).unwrap();
+    let uri = path_to_file_uri(&main);
+    let (client, thread) = start_file_rename_server(dir.path(), false);
+    did_open(&client, &uri, 1, source);
+    for (line, column) in [
+        (0, 1),
+        (0, 6),
+        (0, 7),
+        (0, 11),
+        (0, 12),
+        (1, 8),
+        (2, 8),
+        (3, 18),
+    ] {
+        assert!(
+            prepare_rename(
+                &client,
+                100 + line as i32 * 20 + column as i32,
+                &uri,
+                Position::new(line, column)
+            )
+            .is_null(),
+            "{line}:{column}"
+        );
+    }
+    assert_eq!(
+        prepare_rename(&client, 199, &uri, Position::new(0, 9))["placeholder"],
+        "foo"
+    );
+    shutdown(&client, thread);
+    let (client, thread) = start_server(None);
+    did_open(&client, &uri, 1, source);
+    assert!(prepare_rename(&client, 2, &uri, Position::new(0, 9)).is_null());
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_unicode_ranges_and_document_versions() {
+    for utf8 in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let source = "😀\\input{röle}\n";
+        std::fs::write(&main, source).unwrap();
+        std::fs::write(dir.path().join("röle.tex"), "").unwrap();
+        let (client, thread) =
+            start_file_rename_server_with_encoding(dir.path(), false, true, utf8);
+        let uri = path_to_file_uri(&main);
+        did_open(&client, &uri, 42, source);
+        let start = if utf8 { 11 } else { 9 };
+        let edit = file_rename_request(
+            &client,
+            "textDocument/rename",
+            serde_json::json!({
+                "textDocument":{"uri":uri}, "position":{"line":0,"character":start+1}, "newName":"suite"
+            }),
+        );
+        let text_edit = &edit["documentChanges"][0];
+        assert_eq!(text_edit["textDocument"]["version"], 42);
+        assert_eq!(text_edit["edits"][0]["range"]["start"]["character"], start);
+        assert_eq!(
+            text_edit["edits"][0]["range"]["end"]["character"],
+            start + if utf8 { 5 } else { 4 }
+        );
+        assert_eq!(text_edit["edits"][0]["newText"], "suite");
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_rejects_conflicts_and_invalid_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    std::fs::write(&main, "\\input{foo}\n").unwrap();
+    std::fs::write(dir.path().join("foo.tex"), "").unwrap();
+    std::fs::write(dir.path().join("taken.tex"), "keep").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), false);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, "\\input{foo}\n");
+    let unsaved = path_to_file_uri(&dir.path().join("unsaved.tex"));
+    did_open(&client, &unsaved, 1, "keep unsaved");
+    for name in [
+        "taken",
+        "unsaved",
+        "../outside",
+        "bad%name",
+        "bar\"baz.tex",
+        "\\macro",
+        "foo.bib",
+        "",
+    ] {
+        send_request(
+            &client,
+            200,
+            "textDocument/rename",
+            serde_json::json!({
+                "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":name
+            }),
+        );
+        loop {
+            if let Message::Response(response) = recv(&client) {
+                assert!(response.error().is_some(), "must reject {name:?}");
+                break;
+            }
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("taken.tex")).unwrap(),
+        "keep"
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_notifications_preserve_overlays_and_tolerate_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let old_dir = dir.path().join("chapters");
+    let new_dir = dir.path().join("parts");
+    std::fs::create_dir(&old_dir).unwrap();
+    let old = old_dir.join("one.tex");
+    let new = new_dir.join("one.tex");
+    let main = dir.path().join("main.tex");
+    let source = "\\input{chapters/one}\n\\ref{live}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&old, "\\label{disk}\n").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    let old_uri = path_to_file_uri(&old);
+    let new_uri = path_to_file_uri(&new);
+    did_open(&client, &uri, 1, source);
+    did_open(&client, &old_uri, 2, "\\label{live}\n");
+    let params = serde_json::json!({"files":[{"oldUri":path_to_file_uri(&old_dir),"newUri":path_to_file_uri(&new_dir)}]});
+    let edit = file_rename_request(&client, "workspace/willRenameFiles", params.clone());
+    let updated = apply_edits(source, &file_rename_text_edits(&edit, &uri));
+    did_change_full(&client, &uri, 2, &updated);
+    std::fs::rename(&old_dir, &new_dir).unwrap();
+    send_notification(&client, "workspace/didRenameFiles", params.clone());
+    send_notification(&client, "workspace/didRenameFiles", params);
+    send_notification(
+        &client,
+        "textDocument/didClose",
+        serde_json::json!({"textDocument":{"uri":old_uri}}),
+    );
+    did_change_watched_files(
+        &client,
+        &[
+            (old_uri, FileChangeType::DELETED),
+            (new_uri.clone(), FileChangeType::CREATED),
+        ],
+    );
+    let found = definition(&client, 202, &uri, Position::new(1, 6));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].uri, new_uri);
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_updates_all_include_forms_by_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("other")).unwrap();
+    std::fs::write(dir.path().join("other/foo.tex"), "").unwrap();
+    std::fs::write(dir.path().join("foo.tex"), "").unwrap();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "exclude = [\"ignored.tex\"]\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ignored.tex"), "\\input{foo}\n").unwrap();
+    let main = dir.path().join("main.tex");
+    let before = "\\input{foo}\n\\include{foo.tex}\n\\subfile{foo}\n\\subfileinclude{./foo}\n\\import{./}{foo}\n\\subimport{./}{foo}\n\\loadglsentries{foo}\n\\documentclass[foo.tex]{subfiles}\n";
+    let untouched =
+        "\\input{other/foo}\n% \\input{foo}\n\\begin{verbatim}\n\\input{foo}\n\\end{verbatim}\n";
+    let source = format!("{before}{untouched}");
+    std::fs::write(&main, &source).unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), false);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, &source);
+    let edit = file_rename_request(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"bar"
+        }),
+    );
+    let expected = "\\input{bar}\n\\include{bar.tex}\n\\subfile{bar}\n\\subfileinclude{bar}\n\\import{./}{bar}\n\\subimport{./}{bar}\n\\loadglsentries{bar}\n\\documentclass[bar.tex]{subfiles}\n";
+    assert_eq!(
+        apply_edits(&source, &file_rename_text_edits(&edit, &uri)),
+        format!("{expected}{untouched}")
+    );
+    assert!(
+        file_rename_text_edits(&edit, &path_to_file_uri(&dir.path().join("ignored.tex")))
+            .is_empty()
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_batch_updates_reciprocal_references() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.tex");
+    let b = dir.path().join("b.tex");
+    std::fs::write(&a, "\\input{b}\n").unwrap();
+    std::fs::write(&b, "\\input{a.tex}\n").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let edit = file_rename_request(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[
+            {"oldUri":path_to_file_uri(&a),"newUri":path_to_file_uri(&dir.path().join("first.tex"))},
+            {"oldUri":path_to_file_uri(&b),"newUri":path_to_file_uri(&dir.path().join("second.tex"))}
+        ]}),
+    );
+    assert_eq!(
+        apply_edits(
+            "\\input{b}\n",
+            &file_rename_text_edits(&edit, &path_to_file_uri(&a))
+        ),
+        "\\input{second}\n"
+    );
+    assert_eq!(
+        apply_edits(
+            "\\input{a.tex}\n",
+            &file_rename_text_edits(&edit, &path_to_file_uri(&b))
+        ),
+        "\\input{first.tex}\n"
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_declines_ambiguous_references_in_unchanged_children() {
+    let dir = tempfile::tempdir().unwrap();
+    let chapters = dir.path().join("chapters");
+    std::fs::create_dir(&chapters).unwrap();
+    let main = dir.path().join("main.tex");
+    let child = chapters.join("one.tex");
+    std::fs::write(&main, "\\input{chapters/one}\n").unwrap();
+    std::fs::write(&child, "\\input{shared}\n").unwrap();
+    std::fs::write(dir.path().join("shared.tex"), "compilation root").unwrap();
+    std::fs::write(chapters.join("shared.tex"), "child directory").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let error = file_rename_error(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&chapters.join("shared.tex")),
+            "newUri":path_to_file_uri(&chapters.join("renamed.tex"))
+        }]}),
+    );
+    assert!(error.message.contains("compilation"), "{error:?}");
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_checks_transitive_compilation_and_import_contexts() {
+    for imported in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let chapters = dir.path().join("chapters");
+        let nested = chapters.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let main = if imported {
+            "\\import{chapters/}{nested/one}\n"
+        } else {
+            "\\input{chapters/outer}\n"
+        };
+        std::fs::write(dir.path().join("main.tex"), main).unwrap();
+        std::fs::write(chapters.join("outer.tex"), "\\input{chapters/nested/one}\n").unwrap();
+        std::fs::write(nested.join("one.tex"), "\\input{shared}\n").unwrap();
+        let compilation_dir = if imported { &chapters } else { dir.path() };
+        std::fs::write(compilation_dir.join("shared.tex"), "included").unwrap();
+        std::fs::write(nested.join("shared.tex"), "standalone").unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let error = file_rename_error(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&nested.join("shared.tex")),
+                "newUri":path_to_file_uri(&nested.join("renamed.tex"))
+            }]}),
+        );
+        assert!(error.message.contains("compilation"), "{error:?}");
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_rejects_moved_callers_with_transitive_relative_loads() {
+    for cursor in [false, true] {
+        for shadowed in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = dir.path().join("main.tex");
+            let child = dir.path().join("child.tex");
+            let nested = dir.path().join("nested.tex");
+            let sub = dir.path().join("sub");
+            let absolute_input = |path: &std::path::Path| {
+                format!("\\input{{{}}}\n", path.to_str().unwrap().replace('\\', "/"))
+            };
+            std::fs::write(&main, absolute_input(&child)).unwrap();
+            std::fs::write(&child, absolute_input(&nested)).unwrap();
+            std::fs::write(&nested, "\\input{leaf}\n").unwrap();
+            std::fs::write(dir.path().join("leaf.tex"), "original").unwrap();
+            if shadowed {
+                std::fs::create_dir(&sub).unwrap();
+                std::fs::write(sub.join("leaf.tex"), "different file").unwrap();
+            }
+            let caller = dir.path().join("caller.tex");
+            std::fs::write(&caller, "\\input{main}\n").unwrap();
+            let (client, thread) = start_file_rename_server(dir.path(), true);
+            let error = if cursor {
+                let uri = path_to_file_uri(&caller);
+                did_open(&client, &uri, 1, "\\input{main}\n");
+                file_rename_error(
+                    &client,
+                    "textDocument/rename",
+                    serde_json::json!({
+                        "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"sub/main"
+                    }),
+                )
+            } else {
+                file_rename_error(
+                    &client,
+                    "workspace/willRenameFiles",
+                    serde_json::json!({"files":[{
+                        "oldUri":path_to_file_uri(&main), "newUri":path_to_file_uri(&sub.join("main.tex"))
+                    }]}),
+                )
+            };
+            assert!(error.message.contains("compilation"), "{error:?}");
+            shutdown(&client, thread);
+        }
+    }
+}
+
+#[test]
+fn lsp_file_rename_allows_moved_callers_with_transitive_absolute_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let child = dir.path().join("child.tex");
+    let leaf = dir.path().join("leaf.tex");
+    let absolute_input = |path: &std::path::Path| {
+        format!("\\input{{{}}}\n", path.to_str().unwrap().replace('\\', "/"))
+    };
+    std::fs::write(&main, absolute_input(&child)).unwrap();
+    std::fs::write(&child, absolute_input(&leaf)).unwrap();
+    std::fs::write(&leaf, "text").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let edit = file_rename_request(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&main),
+            "newUri":path_to_file_uri(&dir.path().join("sub/main.tex"))
+        }]}),
+    );
+    assert_eq!(edit, serde_json::json!({"changes":{}}));
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_checks_subfiles_parent_preamble_contexts() {
+    for indirect in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let main = dir.path().join("main.tex");
+        let source =
+            "\\documentclass{article}\n\\input{foo}\n\\begin{document}\nParent.\n\\end{document}\n";
+        let (reference_source, reference_text, line) = if indirect {
+            let preamble = dir.path().join("preamble.tex");
+            let argument = preamble.to_str().unwrap().replace('\\', "/");
+            std::fs::write(&main, source.replace("{foo}", &format!("{{{argument}}}"))).unwrap();
+            std::fs::write(&preamble, "\\input{foo}\n").unwrap();
+            (preamble, "\\input{foo}\n", 0)
+        } else {
+            std::fs::write(&main, source).unwrap();
+            (main, source, 1)
+        };
+        std::fs::write(
+            sub.join("child.tex"),
+            "\\documentclass[../main.tex]{subfiles}\n\\begin{document}\nChild.\n\\end{document}\n",
+        )
+        .unwrap();
+        let old = dir.path().join("foo.tex");
+        std::fs::write(&old, "root").unwrap();
+        std::fs::write(sub.join("foo.tex"), "child").unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let error = file_rename_error(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old),
+                "newUri":path_to_file_uri(&dir.path().join("bar.tex"))
+            }]}),
+        );
+        assert!(error.message.contains("compilation"), "{error:?}");
+        let uri = path_to_file_uri(&reference_source);
+        did_open(&client, &uri, 1, reference_text);
+        assert!(prepare_rename(&client, 201, &uri, Position::new(line, 8)).is_null());
+        assert!(
+            file_rename_request(
+                &client,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument":{"uri":uri}, "position":{"line":line,"character":8}, "newName":"bar"
+                }),
+            )
+            .is_null()
+        );
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_excludes_parent_body_from_subfiles_contexts() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let main = dir.path().join("main.tex");
+    let source = "\\documentclass{article}\n\\begin{document}\n\\input{foo}\n\\end{document}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(
+        sub.join("child.tex"),
+        "\\documentclass[../main.tex]{subfiles}\n\\begin{document}\nChild.\n\\end{document}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("foo.tex"), "root").unwrap();
+    std::fs::write(sub.join("foo.tex"), "child").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    assert_eq!(
+        prepare_rename(&client, 201, &uri, Position::new(2, 8))["placeholder"],
+        "foo"
+    );
+    let edit = file_rename_request(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument":{"uri":uri}, "position":{"line":2,"character":8}, "newName":"bar"
+        }),
+    );
+    assert_eq!(
+        apply_edits(source, &file_rename_text_edits(&edit, &uri)),
+        source.replace("{foo}", "{bar}")
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_cursor_declines_ambiguous_compilation_and_import_bases() {
+    for inclusion in ["\\input{chapters/one}\n", "\\import{./}{chapters/one}\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let chapters = dir.path().join("chapters");
+        std::fs::create_dir(&chapters).unwrap();
+        std::fs::write(dir.path().join("main.tex"), inclusion).unwrap();
+        let child = chapters.join("one.tex");
+        let source = "\\input{shared}\n";
+        std::fs::write(&child, source).unwrap();
+        std::fs::write(dir.path().join("shared.tex"), "root").unwrap();
+        std::fs::write(chapters.join("shared.tex"), "child").unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let uri = path_to_file_uri(&child);
+        did_open(&client, &uri, 1, source);
+        assert!(prepare_rename(&client, 2, &uri, Position::new(0, 8)).is_null());
+        assert!(
+            file_rename_request(
+                &client,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"renamed"
+                }),
+            )
+            .is_null()
+        );
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_uses_nested_project_exclusions() {
+    for cursor in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        std::fs::create_dir(&docs).unwrap();
+        std::fs::write(docs.join("badness.toml"), "exclude = ['ignored.tex']\n").unwrap();
+        let main = docs.join("main.tex");
+        let ignored = docs.join("ignored.tex");
+        let source = "\\input{foo}\n";
+        std::fs::write(&main, source).unwrap();
+        std::fs::write(&ignored, source).unwrap();
+        let old = docs.join("foo.tex");
+        std::fs::write(&old, "text").unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let uri = path_to_file_uri(&main);
+        let edit = if cursor {
+            did_open(&client, &uri, 1, source);
+            file_rename_request(
+                &client,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"bar"
+                }),
+            )
+        } else {
+            file_rename_request(
+                &client,
+                "workspace/willRenameFiles",
+                serde_json::json!({"files":[{
+                    "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&docs.join("bar.tex"))
+                }]}),
+            )
+        };
+        assert_eq!(
+            apply_edits(source, &file_rename_text_edits(&edit, &uri)),
+            "\\input{bar}\n"
+        );
+        assert!(file_rename_text_edits(&edit, &path_to_file_uri(&ignored)).is_empty());
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_honors_exclusions_outside_the_anchor_project() {
+    for cursor in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        let vendor = docs.join("vendor");
+        std::fs::create_dir_all(&vendor).unwrap();
+        std::fs::write(
+            dir.path().join("badness.toml"),
+            "exclude = ['root-only.tex']\n",
+        )
+        .unwrap();
+        std::fs::write(
+            docs.join("badness.toml"),
+            "exclude = ['/ignored.tex', 'vendor/']\n",
+        )
+        .unwrap();
+        let old = dir.path().join("foo.tex");
+        let main = dir.path().join("main.tex");
+        let source = "\\input{foo}\n";
+        std::fs::write(&old, "text").unwrap();
+        std::fs::write(&main, source).unwrap();
+        std::fs::write(dir.path().join("ignored.tex"), source).unwrap();
+        std::fs::write(dir.path().join("root-only.tex"), source).unwrap();
+        let nested_source = "\\input{../foo}\n";
+        std::fs::write(docs.join("main.tex"), nested_source).unwrap();
+        std::fs::write(docs.join("root-only.tex"), nested_source).unwrap();
+        std::fs::write(docs.join("ignored.tex"), nested_source).unwrap();
+        std::fs::write(vendor.join("example.tex"), "\\input{../../foo}\n").unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        if cursor {
+            did_open(
+                &client,
+                &path_to_file_uri(&docs.join("ignored.tex")),
+                1,
+                nested_source,
+            );
+            let _ = recv_diagnostics(&client);
+            did_open(
+                &client,
+                &path_to_file_uri(&vendor.join("example.tex")),
+                1,
+                "\\input{../../foo}\n",
+            );
+            let _ = recv_diagnostics(&client);
+        }
+        let uri = path_to_file_uri(&main);
+        let edit = if cursor {
+            did_open(&client, &uri, 1, source);
+            file_rename_request(
+                &client,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"bar"
+                }),
+            )
+        } else {
+            file_rename_request(
+                &client,
+                "workspace/willRenameFiles",
+                serde_json::json!({"files":[{
+                    "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&dir.path().join("bar.tex"))
+                }]}),
+            )
+        };
+        for path in [&main, &dir.path().join("ignored.tex")] {
+            assert_eq!(
+                apply_edits(
+                    source,
+                    &file_rename_text_edits(&edit, &path_to_file_uri(path))
+                ),
+                "\\input{bar}\n"
+            );
+        }
+        for path in [docs.join("main.tex"), docs.join("root-only.tex")] {
+            assert_eq!(
+                apply_edits(
+                    nested_source,
+                    &file_rename_text_edits(&edit, &path_to_file_uri(&path))
+                ),
+                "\\input{../bar}\n"
+            );
+        }
+        for path in [
+            dir.path().join("root-only.tex"),
+            docs.join("ignored.tex"),
+            vendor.join("example.tex"),
+        ] {
+            assert!(
+                file_rename_text_edits(&edit, &path_to_file_uri(&path)).is_empty(),
+                "excluded source was edited: {}",
+                path.display()
+            );
+        }
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_uses_each_referring_projects_declarations() {
+    for nested in [false, true] {
+        for anchor_declares in [false, true] {
+            for cursor in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let a = dir.path().join("a");
+                let b = dir.path().join("b");
+                std::fs::create_dir(&a).unwrap();
+                std::fs::create_dir(&b).unwrap();
+                let declaring = if anchor_declares { &a } else { &b };
+                std::fs::write(
+                    declaring.join("badness.toml"),
+                    "[environments.mycode]\nlike = 'lstlisting'\n",
+                )
+                .unwrap();
+                let old = a.join("foo.tex");
+                let new = a.join("bar.tex");
+                std::fs::write(&old, "text").unwrap();
+                let main = a.join("main.tex");
+                std::fs::write(&main, "\\input{foo}\n").unwrap();
+                let other = b.join("main.tex");
+                let argument = old.to_str().unwrap().replace('\\', "/");
+                let source = format!("\\begin{{mycode}}\n\\input{{{argument}}}\n\\end{{mycode}}\n");
+                std::fs::write(&other, &source).unwrap();
+                let roots = if nested {
+                    vec![dir.path()]
+                } else {
+                    vec![a.as_path(), b.as_path()]
+                };
+                let (client, thread) =
+                    start_file_rename_server_in_workspaces(&roots, true, false, false);
+                let uri = path_to_file_uri(&main);
+                let other_uri = path_to_file_uri(&other);
+                if cursor {
+                    did_open(&client, &other_uri, 1, &source);
+                    let _ = recv_diagnostics(&client);
+                    did_open(&client, &uri, 1, "\\input{foo}\n");
+                    let _ = recv_diagnostics(&client);
+                }
+                let edit = if cursor {
+                    file_rename_request(
+                        &client,
+                        "textDocument/rename",
+                        serde_json::json!({
+                            "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"bar"
+                        }),
+                    )
+                } else {
+                    file_rename_request(
+                        &client,
+                        "workspace/willRenameFiles",
+                        serde_json::json!({"files":[{
+                            "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)
+                        }]}),
+                    )
+                };
+                assert_eq!(
+                    apply_edits("\\input{foo}\n", &file_rename_text_edits(&edit, &uri)),
+                    "\\input{bar}\n"
+                );
+                let expected = if anchor_declares {
+                    source.replace(&argument, &new.to_str().unwrap().replace('\\', "/"))
+                } else {
+                    source.clone()
+                };
+                assert_eq!(
+                    apply_edits(&source, &file_rename_text_edits(&edit, &other_uri)),
+                    expected,
+                    "nested={nested}, anchor_declares={anchor_declares}, cursor={cursor}"
+                );
+                shutdown(&client, thread);
+            }
+        }
+    }
+}
+
+#[test]
+fn lsp_file_rename_folder_uses_its_own_declarations() {
+    for absolute in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        std::fs::create_dir(&docs).unwrap();
+        std::fs::write(
+            docs.join("badness.toml"),
+            "[environments.mycode]\nlike = 'lstlisting'\n",
+        )
+        .unwrap();
+        let main = dir.path().join("main.tex");
+        let source = "\\input{docs/foo}\n";
+        std::fs::write(&main, source).unwrap();
+        let target = docs.join("foo.tex");
+        let argument = if absolute {
+            target.to_str().unwrap().replace('\\', "/")
+        } else {
+            "foo".to_owned()
+        };
+        let protected = format!("\\begin{{mycode}}\n\\input{{{argument}}}\n\\end{{mycode}}\n");
+        std::fs::write(&target, &protected).unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let edit = file_rename_request(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&docs), "newUri":path_to_file_uri(&dir.path().join("renamed"))
+            }]}),
+        );
+        assert_eq!(
+            apply_edits(
+                source,
+                &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+            ),
+            "\\input{renamed/foo}\n"
+        );
+        assert!(file_rename_text_edits(&edit, &path_to_file_uri(&target)).is_empty());
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_rejects_unproved_compilation_bases() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let child = dir.path().join("child.tex");
+    let source = "\\input{child}\n\\include{child}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&child, "disk text").unwrap();
+    std::fs::write(dir.path().join("shared.tex"), "shared").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    let child_uri = path_to_file_uri(&child);
+    did_open(&client, &uri, 1, source);
+    for (version, content) in ["\\input{shared}\n", "\\input{not-discovered}\n"]
+        .into_iter()
+        .enumerate()
+    {
+        if version == 0 {
+            did_open(&client, &child_uri, 1, content);
+        } else {
+            did_change_full(&client, &child_uri, version as i32 + 1, content);
+        }
+        let error = file_rename_error(
+            &client,
+            "textDocument/rename",
+            serde_json::json!({
+                "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"sub/child"
+            }),
+        );
+        assert!(error.message.contains("relative"), "{error:?}");
+        let error = file_rename_error(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":child_uri, "newUri":path_to_file_uri(&dir.path().join("sub/child.tex"))
+            }]}),
+        );
+        assert!(error.message.contains("relative"), "{error:?}");
+    }
+    assert!(child.exists());
+    let chapter_dir = dir.path().join("chapters");
+    std::fs::create_dir(&chapter_dir).unwrap();
+    std::fs::write(chapter_dir.join("one.tex"), "\\input{../shared}\n").unwrap();
+    let error = file_rename_error(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&chapter_dir), "newUri":path_to_file_uri(&dir.path().join("new/chapters"))
+        }]}),
+    );
+    assert!(error.message.contains("relative"), "{error:?}");
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_preserves_nested_import_context() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("chapters/nested")).unwrap();
+    let main = dir.path().join("main.tex");
+    let child = dir.path().join("chapters/nested/one.tex");
+    let source = "\\import{chapters/}{nested/one}\n\\subimport{chapters/}{nested/one.tex}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&child, "\\input{shared}\n").unwrap();
+    std::fs::write(dir.path().join("chapters/shared.tex"), "shared").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), false);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let edit = file_rename_request(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument":{"uri":uri}, "position":{"line":0,"character":23}, "newName":"nested/two"
+        }),
+    );
+    assert_eq!(
+        apply_edits(source, &file_rename_text_edits(&edit, &uri)),
+        "\\import{chapters/}{nested/two}\n\\subimport{chapters/}{nested/two.tex}\n"
+    );
+    assert!(file_rename_text_edits(&edit, &path_to_file_uri(&child)).is_empty());
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_allows_empty_import_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("foo.tex");
+    let source = "\\import{}{foo}\n\\subimport{}{foo.tex}\n\\import{}{}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&old, "text").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    for cursor in [false, true] {
+        let edit = if cursor {
+            did_open(&client, &uri, 1, source);
+            assert_eq!(
+                prepare_rename(&client, 201, &uri, Position::new(0, 11))["placeholder"],
+                "foo"
+            );
+            file_rename_request(
+                &client,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument":{"uri":uri}, "position":{"line":0,"character":11}, "newName":"bar"
+                }),
+            )
+        } else {
+            file_rename_request(
+                &client,
+                "workspace/willRenameFiles",
+                serde_json::json!({"files":[{
+                    "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&dir.path().join("bar.tex"))
+                }]}),
+            )
+        };
+        assert_eq!(
+            apply_edits(source, &file_rename_text_edits(&edit, &uri)),
+            "\\import{}{bar}\n\\subimport{}{bar.tex}\n\\import{}{}\n"
+        );
+    }
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_updates_includeonly_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let source = "\\includeonly{ other , foo ,foo.tex}\n\\include{foo}\n% \\includeonly{foo}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(dir.path().join("foo.tex"), "chapter").unwrap();
+    std::fs::write(dir.path().join("other.tex"), "other chapter").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), false);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let edit = file_rename_request(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument":{"uri":uri}, "position":{"line":1,"character":10}, "newName":"bar"
+        }),
+    );
+    assert_eq!(
+        apply_edits(source, &file_rename_text_edits(&edit, &uri)),
+        "\\includeonly{ other , bar ,bar.tex}\n\\include{bar}\n% \\includeonly{foo}\n"
+    );
+    shutdown(&client, thread);
+}
+
+#[cfg(unix)]
+#[test]
+fn lsp_file_rename_aborts_when_workspace_discovery_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("foo.tex");
+    let source = "\\input{foo}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(dir.path().join("other.tex"), source).unwrap();
+    std::fs::write(&old, "chapter").unwrap();
+    let unreadable = dir.path().join("unreadable");
+    std::fs::create_dir(&unreadable).unwrap();
+    let permissions = std::fs::metadata(&unreadable).unwrap().permissions();
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&unreadable).is_ok() {
+        // Privileged users can bypass the permission failure this test needs.
+        std::fs::set_permissions(&unreadable, permissions).unwrap();
+        return;
+    }
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let mut responses = Vec::new();
+    for (method, params) in [
+        (
+            "textDocument/rename",
+            serde_json::json!({
+                "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"bar"
+            }),
+        ),
+        (
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&dir.path().join("bar.tex"))
+            }]}),
+        ),
+    ] {
+        send_request(&client, 200, method, params);
+        loop {
+            if let Message::Response(response) = recv(&client) {
+                assert_eq!(response.id, RequestId::from(200));
+                responses.push(response);
+                break;
+            }
+        }
+    }
+    std::fs::set_permissions(&unreadable, permissions).unwrap();
+    shutdown(&client, thread);
+    for response in responses {
+        let error = response
+            .error()
+            .expect("incomplete discovery must abort the rename");
+        assert_eq!(error.code, -32803);
+        assert!(error.message.contains("unreadable"), "{error:?}");
+    }
+}
+
+#[test]
+fn lsp_file_rename_aborts_when_source_is_not_utf8() {
+    for cached in [false, true] {
+        for moved_source in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = dir.path().join("main.tex");
+            let old = dir.path().join("foo.tex");
+            let other = dir.path().join("other.tex");
+            let source = "\\input{foo}\n";
+            std::fs::write(&main, source).unwrap();
+            std::fs::write(&old, "chapter").unwrap();
+            std::fs::write(&other, "cached text without references").unwrap();
+            let (client, thread) = start_file_rename_server(dir.path(), true);
+            let uri = path_to_file_uri(&main);
+            did_open(&client, &uri, 1, source);
+            let (target, destination) = if moved_source {
+                (&other, dir.path().join("nested/other.tex"))
+            } else {
+                (&old, dir.path().join("bar.tex"))
+            };
+            let params = serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(target), "newUri":path_to_file_uri(&destination)
+            }]});
+            if cached {
+                file_rename_request(&client, "workspace/willRenameFiles", params.clone());
+            }
+            let mut invalid = source.as_bytes().to_vec();
+            invalid.push(0xff);
+            std::fs::write(&other, invalid).unwrap();
+            for (method, params) in [
+                ("workspace/willRenameFiles", params),
+                (
+                    "textDocument/rename",
+                    serde_json::json!({
+                        "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"bar"
+                    }),
+                ),
+            ] {
+                let error = file_rename_error(&client, method, params);
+                assert_eq!(error.code, -32803);
+                assert!(error.message.contains("other.tex"), "{error:?}");
+            }
+            shutdown(&client, thread);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn lsp_file_rename_aborts_when_source_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("foo.tex");
+    let other = dir.path().join("other.tex");
+    let source = "\\input{foo}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&old, "chapter").unwrap();
+    std::fs::write(&other, source).unwrap();
+    let permissions = std::fs::metadata(&other).unwrap().permissions();
+    std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_to_string(&other).is_ok() {
+        // Privileged users can bypass the permission failure this test needs.
+        std::fs::set_permissions(&other, permissions).unwrap();
+        return;
+    }
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    send_request(
+        &client,
+        200,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&dir.path().join("bar.tex"))
+        }]}),
+    );
+    let response = loop {
+        if let Message::Response(response) = recv(&client) {
+            assert_eq!(response.id, RequestId::from(200));
+            break response;
+        }
+    };
+    std::fs::set_permissions(&other, permissions).unwrap();
+    shutdown(&client, thread);
+    let error = response
+        .error()
+        .expect("an unreadable source must abort the rename");
+    assert_eq!(error.code, -32803);
+    assert!(error.message.contains("other.tex"), "{error:?}");
+}
+
+#[test]
+fn lsp_file_rename_allows_unreadable_disk_text_with_an_overlay_or_exclusion() {
+    for excluded in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let old = dir.path().join("foo.tex");
+        let other = dir.path().join("other.tex");
+        let source = "\\input{foo}\n";
+        std::fs::write(&main, source).unwrap();
+        std::fs::write(&old, "chapter").unwrap();
+        std::fs::write(&other, [0xff]).unwrap();
+        if excluded {
+            std::fs::write(
+                dir.path().join("badness.toml"),
+                "exclude = ['/other.tex']\n",
+            )
+            .unwrap();
+        }
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let other_uri = path_to_file_uri(&other);
+        if !excluded {
+            did_open(&client, &other_uri, 1, source);
+        }
+        let edit = file_rename_request(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&dir.path().join("bar.tex"))
+            }]}),
+        );
+        assert_eq!(
+            apply_edits(
+                source,
+                &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+            ),
+            "\\input{bar}\n"
+        );
+        assert_eq!(
+            apply_edits(source, &file_rename_text_edits(&edit, &other_uri)),
+            if excluded { source } else { "\\input{bar}\n" }
+        );
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_preserves_includeonly_membership() {
+    for (only, include) in [
+        ("./foo", "foo"),
+        ("foo", "./foo"),
+        ("bar", "foo"),
+        ("bar.tex", "foo"),
+    ] {
+        for separate_file in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = dir.path().join("main.tex");
+            let source = format!("\\include{{{include}}}\n");
+            let selection = format!("\\includeonly{{{only}}}\n");
+            let source = if separate_file {
+                std::fs::write(dir.path().join("selection.tex"), selection).unwrap();
+                format!("{source}\\input{{selection}}\n")
+            } else {
+                format!("{source}{selection}")
+            };
+            std::fs::write(&main, &source).unwrap();
+            let old = dir.path().join("foo.tex");
+            std::fs::write(&old, "chapter").unwrap();
+            let (client, thread) = start_file_rename_server(dir.path(), true);
+            let uri = path_to_file_uri(&main);
+            did_open(&client, &uri, 1, &source);
+            for (method, params) in [
+                (
+                    "textDocument/rename",
+                    serde_json::json!({
+                        "textDocument":{"uri":uri}, "position":{"line":0,"character":10}, "newName":"bar"
+                    }),
+                ),
+                (
+                    "workspace/willRenameFiles",
+                    serde_json::json!({"files":[{
+                        "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&dir.path().join("bar.tex"))
+                    }]}),
+                ),
+            ] {
+                let error = file_rename_error(&client, method, params);
+                assert!(error.message.contains("includeonly"), "{error:?}");
+            }
+            shutdown(&client, thread);
+        }
+    }
+}
+
+#[test]
+fn lsp_file_rename_allows_matching_includeonly_spellings_across_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let selection = dir.path().join("selection.tex");
+    let source = "\\input{selection}\n\\include{./foo}\n";
+    let selection_text = "\\includeonly{./foo.tex}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&selection, selection_text).unwrap();
+    std::fs::write(dir.path().join("foo.tex"), "chapter").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let edit = file_rename_request(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument":{"uri":uri}, "position":{"line":1,"character":12}, "newName":"bar"
+        }),
+    );
+    assert_eq!(
+        apply_edits(source, &file_rename_text_edits(&edit, &uri)),
+        "\\input{selection}\n\\include{bar}\n"
+    );
+    assert_eq!(
+        apply_edits(
+            selection_text,
+            &file_rename_text_edits(&edit, &path_to_file_uri(&selection))
+        ),
+        "\\includeonly{bar.tex}\n"
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_rejects_input_suffix_shadows() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("foo.dtx");
+    let new = dir.path().join("bar.dtx");
+    std::fs::write(&main, "\\input{foo.dtx}\n").unwrap();
+    std::fs::write(&old, "source").unwrap();
+    std::fs::write(dir.path().join("bar.dtx.tex"), "shadow").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let error = file_rename_error(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)
+        }]}),
+    );
+    assert_eq!(error.code, -32803);
+    assert!(error.message.contains("preserve the target"));
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_uses_input_suffix_lookup() {
+    for (name, filename, replacement) in [
+        ("foo.dtx", "foo.dtx.tex", "bar"),
+        ("foo.tex", "foo.tex", "bar.tex"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let old = dir.path().join(filename);
+        let new = dir.path().join("bar.tex");
+        let source = format!("\\input{{{name}}}\n");
+        std::fs::write(&main, &source).unwrap();
+        std::fs::write(dir.path().join(name), "literal").unwrap();
+        std::fs::write(dir.path().join(format!("{name}.tex")), "suffixed").unwrap();
+        std::fs::write(dir.path().join("bar.tex.tex"), "shadow").unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let edit = file_rename_request(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)
+            }]}),
+        );
+        assert_eq!(
+            apply_edits(
+                &source,
+                &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+            ),
+            format!("\\input{{{replacement}}}\n"),
+            "{name}"
+        );
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_uses_bibliography_suffix_lookup() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("refs");
+    let new = dir.path().join("renamed");
+    let source = "\\bibliography{refs/db.v1,refs/db.bib,refs/db.bib.bib}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::create_dir(&old).unwrap();
+    for name in ["db.v1.bib", "db.bib", "db.bib.bib"] {
+        std::fs::write(old.join(name), "").unwrap();
+    }
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let edit = file_rename_request(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)
+        }]}),
+    );
+    assert_eq!(
+        apply_edits(
+            source,
+            &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+        ),
+        "\\bibliography{renamed/db.v1,renamed/db.bib,renamed/db.bib.bib}\n"
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_uses_include_loader_extensions() {
+    for command in ["include", "includeonly", "subfileinclude"] {
+        for name in ["foo.sty", "foo", "foo.tex", "foo.tex.tex"] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = dir.path().join("main.tex");
+            let filename = format!("{}.tex", name.strip_suffix(".tex").unwrap_or(name));
+            let old = dir.path().join(&filename);
+            let new = dir.path().join("bar.sty.tex");
+            let source = format!("\\{command}{{{name}}}\n\\input{{{filename}}}\n");
+            std::fs::write(&main, &source).unwrap();
+            std::fs::write(dir.path().join(name), "shadow").unwrap();
+            std::fs::write(&old, "source").unwrap();
+            let (client, thread) = start_file_rename_server(dir.path(), true);
+            let uri = path_to_file_uri(&main);
+
+            if name == "foo.sty" {
+                let edit = file_rename_request(
+                    &client,
+                    "workspace/willRenameFiles",
+                    serde_json::json!({"files":[{
+                        "oldUri":path_to_file_uri(&dir.path().join(name)),
+                        "newUri":path_to_file_uri(&dir.path().join("bar.sty"))
+                    }]}),
+                );
+                assert!(file_rename_text_edits(&edit, &uri).is_empty(), "{command}");
+            }
+
+            let edit = file_rename_request(
+                &client,
+                "workspace/willRenameFiles",
+                serde_json::json!({"files":[{
+                    "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)
+                }]}),
+            );
+            let replacement = if name.ends_with(".tex") {
+                "bar.sty.tex"
+            } else {
+                "bar.sty"
+            };
+            assert_eq!(
+                apply_edits(&source, &file_rename_text_edits(&edit, &uri)),
+                format!("\\{command}{{{replacement}}}\n\\input{{bar.sty.tex}}\n"),
+                "{command}: moving {filename}"
+            );
+            shutdown(&client, thread);
+        }
+    }
+}
+
+#[test]
+fn lsp_file_rename_retains_repeated_tex_suffix() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("foo.sty.tex");
+    let new = dir.path().join("bar.tex.tex");
+    let source = "\\includeonly{foo.sty}\n\\include{foo.sty}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&old, "source").unwrap();
+    std::fs::write(dir.path().join("foo.sty"), "shadow").unwrap();
+    std::fs::write(dir.path().join("bar.tex"), "shadow").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let edit = file_rename_request(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument":{"uri":uri}, "position":{"line":1,"character":10},
+            "newName":"bar.tex.tex"
+        }),
+    );
+    assert_eq!(
+        apply_edits(source, &file_rename_text_edits(&edit, &uri)),
+        "\\includeonly{bar.tex.tex}\n\\include{bar.tex.tex}\n"
+    );
+    let movement = edit["documentChanges"].as_array().unwrap().last().unwrap();
+    assert_eq!(movement["oldUri"], path_to_file_uri(&old).as_str());
+    assert_eq!(movement["newUri"], path_to_file_uri(&new).as_str());
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_uses_package_and_class_loader_extensions() {
+    for (command, extension) in [
+        ("usepackage", "sty"),
+        ("RequirePackage", "sty"),
+        ("documentclass", "cls"),
+        ("LoadClass", "cls"),
+        ("LoadClassWithOptions", "cls"),
+    ] {
+        for name in [
+            "local".to_owned(),
+            "local.v1".into(),
+            format!("local.{extension}"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = dir.path().join("main.tex");
+            let filename = format!("{name}.{extension}");
+            let old = dir.path().join(&filename);
+            let new = dir.path().join(format!("local.v2.{extension}"));
+            let source = format!("\\{command}{{{name}}}\n\\input{{{filename}}}\n");
+            std::fs::write(&main, &source).unwrap();
+            std::fs::write(&old, "source").unwrap();
+            // A dotted argument still loads the suffixed file, even when the
+            // literal argument also names an existing file.
+            std::fs::write(dir.path().join(&name), "shadow").unwrap();
+            let (client, thread) = start_file_rename_server(dir.path(), true);
+            let edit = file_rename_request(
+                &client,
+                "workspace/willRenameFiles",
+                serde_json::json!({"files":[{
+                    "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)
+                }]}),
+            );
+            assert_eq!(
+                apply_edits(
+                    &source,
+                    &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+                ),
+                format!("\\{command}{{local.v2}}\n\\input{{local.v2.{extension}}}\n"),
+                "{command}: moving {filename}"
+            );
+            shutdown(&client, thread);
+        }
+    }
+}
+
+#[test]
+fn lsp_file_rename_resolves_package_arguments_without_spaces() {
+    for command in ["usepackage", "RequirePackage"] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let source = format!("\\{command}{{lo cal,lo  cal}}\n");
+        std::fs::write(&main, &source).unwrap();
+        for name in ["local.sty", "lo cal.sty", "lo  cal.sty"] {
+            std::fs::write(dir.path().join(name), "package").unwrap();
+        }
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        for name in ["local.sty", "lo cal.sty", "lo  cal.sty"] {
+            let edit = file_rename_request(
+                &client,
+                "workspace/willRenameFiles",
+                serde_json::json!({"files":[{
+                    "oldUri":format!("{}/{}", path_to_file_uri(dir.path()).as_str(), name.replace(' ', "%20")),
+                    "newUri":path_to_file_uri(&dir.path().join("renamed.sty"))
+                }]}),
+            );
+            let expected = if name == "local.sty" {
+                format!("\\{command}{{renamed,renamed}}\n")
+            } else {
+                source.clone()
+            };
+            assert_eq!(
+                apply_edits(
+                    &source,
+                    &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+                ),
+                expected,
+                "{command}: moving {name}"
+            );
+        }
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_resolves_bibliography_arguments_without_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let source = "\\bibliography{lo cal/re fs,lo  cal/re  fs}\n";
+    std::fs::write(&main, source).unwrap();
+    for directory in ["local", "lo cal", "lo  cal"] {
+        std::fs::create_dir(dir.path().join(directory)).unwrap();
+        for name in ["refs.bib", "re fs.bib", "re  fs.bib"] {
+            std::fs::write(dir.path().join(directory).join(name), "").unwrap();
+        }
+    }
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    for directory in ["local", "lo cal", "lo  cal"] {
+        let edit = file_rename_request(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":format!("{}/{}", path_to_file_uri(dir.path()).as_str(), directory.replace(' ', "%20")),
+                "newUri":path_to_file_uri(&dir.path().join("renamed"))
+            }]}),
+        );
+        let expected = if directory == "local" {
+            "\\bibliography{renamed/refs,renamed/refs}\n"
+        } else {
+            source
+        };
+        assert_eq!(
+            apply_edits(
+                source,
+                &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+            ),
+            expected,
+            "moving {directory}"
+        );
+    }
+    shutdown(&client, thread);
+}
+
+#[cfg(unix)]
+#[test]
+fn lsp_file_rename_rejects_symlink_ancestors() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("foo.tex");
+    std::fs::write(&old, "local").unwrap();
+    std::fs::write(outside.path().join("external.tex"), "external").unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("missing"), dir.path().join("broken")).unwrap();
+    let source = "\\input{foo}\n\\input{link/external}\n";
+    std::fs::write(&main, source).unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    for destination in ["link/bar", "link/missing/bar", "broken/bar"] {
+        let error = file_rename_error(
+            &client,
+            "textDocument/rename",
+            serde_json::json!({
+                "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":destination
+            }),
+        );
+        assert!(error.message.contains("symbolic link"), "{error:?}");
+    }
+    assert!(prepare_rename(&client, 201, &uri, Position::new(1, 14)).is_null());
+    for (old, new) in [
+        (old.clone(), dir.path().join("link/bar.tex")),
+        (
+            dir.path().join("link/external.tex"),
+            dir.path().join("bar.tex"),
+        ),
+    ] {
+        let error = file_rename_error(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)
+            }]}),
+        );
+        assert!(error.message.contains("symbolic link"), "{error:?}");
+    }
+    assert!(old.exists());
+    assert!(!outside.path().join("bar.tex").exists());
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_rejects_spaces_for_package_loads() {
+    for command in ["usepackage", "RequirePackage"] {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("local.sty");
+        std::fs::write(&old, "text").unwrap();
+        std::fs::write(
+            dir.path().join("main.tex"),
+            format!("\\{command}{{local}}\n"),
+        )
+        .unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let error = file_rename_error(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old),
+                "newUri":path_to_file_uri(&old).as_str().replace("local.", "new%20name.")
+            }]}),
+        );
+        assert!(error.message.contains(command), "{error:?}");
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_checks_spaces_against_the_loading_command() {
+    for (command, name, accepts_spaces) in [
+        ("bibliography", "refs.bib", false),
+        ("addbibresource", "refs.bib", true),
+        ("usepackage", "local.sty", false),
+        ("documentclass", "local.cls", true),
+        ("LoadClass", "local.cls", true),
+        ("LoadClassWithOptions", "local.cls", true),
+        ("input", "part.tex", true),
+        ("includegraphics", "figure.pdf", true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("assets");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::write(old.join(name), "").unwrap();
+        let main = dir.path().join("main.tex");
+        let argument = if matches!(
+            command,
+            "usepackage" | "bibliography" | "documentclass" | "LoadClass" | "LoadClassWithOptions"
+        ) {
+            std::path::Path::new(name)
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        } else {
+            name
+        };
+        let source = format!("\\{command}{{assets/{argument}}}\n");
+        std::fs::write(&main, &source).unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let params = serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&old),
+            "newUri":format!("{}/new%20assets", path_to_file_uri(dir.path()).as_str())
+        }]});
+        if accepts_spaces {
+            let edit = file_rename_request(&client, "workspace/willRenameFiles", params);
+            assert_eq!(
+                apply_edits(
+                    &source,
+                    &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+                ),
+                source.replace("assets/", "new assets/")
+            );
+        } else {
+            let error = file_rename_error(&client, "workspace/willRenameFiles", params);
+            assert!(error.message.contains(command), "{error:?}");
+        }
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_matches_filesystem_casing() {
+    for directory in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let (old, new, alternate, source, updated) = if directory {
+            let old = dir.path().join("chapters");
+            std::fs::create_dir(&old).unwrap();
+            std::fs::write(old.join("intro.tex"), "text").unwrap();
+            (
+                old,
+                dir.path().join("appendices"),
+                dir.path().join("Chapters/intro.tex"),
+                "\\input{Chapters/intro}\n",
+                "\\input{appendices/intro}\n",
+            )
+        } else {
+            let old = dir.path().join("chapter.tex");
+            std::fs::write(&old, "text").unwrap();
+            (
+                old,
+                dir.path().join("appendix.tex"),
+                dir.path().join("Chapter.tex"),
+                "\\input{Chapter}\n",
+                "\\input{appendix}\n",
+            )
+        };
+        let insensitive = alternate.is_file();
+        if !insensitive {
+            if directory {
+                std::fs::create_dir(alternate.parent().unwrap()).unwrap();
+            }
+            std::fs::write(&alternate, "a distinct file").unwrap();
+        }
+        std::fs::write(&main, source).unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let edit = file_rename_request(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)
+            }]}),
+        );
+        assert_eq!(
+            apply_edits(
+                source,
+                &file_rename_text_edits(&edit, &path_to_file_uri(&main))
+            ),
+            if insensitive { updated } else { source },
+            "directory={directory}, insensitive={insensitive}"
+        );
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_rejects_pipe_prefixed_arguments() {
+    for nested in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = if nested {
+            let docs = dir.path().join("docs");
+            std::fs::create_dir(&docs).unwrap();
+            docs
+        } else {
+            dir.path().to_path_buf()
+        };
+        let main = docs.join("main.tex");
+        let old = docs.join("foo.tex");
+        let source = "\\input{foo}\n";
+        std::fs::write(&main, source).unwrap();
+        std::fs::write(&old, "text").unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let uri = path_to_file_uri(&main);
+        did_open(&client, &uri, 1, source);
+        for new_name in ["|foo", "./|foo"] {
+            let error = file_rename_error(
+                &client,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":new_name
+                }),
+            );
+            assert!(error.message.contains("literal"), "{error:?}");
+        }
+        let error = file_rename_error(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old),
+                "newUri":path_to_file_uri(&old).as_str().replace("foo.tex", "%7Cfoo.tex")
+            }]}),
+        );
+        assert!(error.message.contains("literal"), "{error:?}");
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_explorer_rejects_quoted_destinations() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("foo.tex");
+    std::fs::write(&old, "text").unwrap();
+    let old_uri = path_to_file_uri(&old);
+    let new_uri = old_uri.as_str().replace("foo.tex", "bar%22baz.tex");
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let error = file_rename_error(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{"oldUri":old_uri, "newUri":new_uri}]}),
+    );
+    assert!(error.message.contains("literal"), "{error:?}");
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_rejects_leading_spaces_in_generated_arguments() {
+    for nested in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = if nested {
+            let docs = dir.path().join("docs");
+            std::fs::create_dir(&docs).unwrap();
+            docs
+        } else {
+            dir.path().to_path_buf()
+        };
+        let main = docs.join("main.tex");
+        let old = docs.join("foo.tex");
+        let source = "\\input{foo}\n";
+        std::fs::write(&main, source).unwrap();
+        std::fs::write(&old, "text").unwrap();
+        let (client, thread) = start_file_rename_server(dir.path(), true);
+        let uri = path_to_file_uri(&main);
+        did_open(&client, &uri, 1, source);
+        let error = file_rename_error(
+            &client,
+            "textDocument/rename",
+            serde_json::json!({
+                "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"./ bar"
+            }),
+        );
+        assert!(error.message.contains("literal"), "{error:?}");
+        let error = file_rename_error(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old),
+                "newUri":path_to_file_uri(&old).as_str().replace("foo.tex", "%20bar.tex")
+            }]}),
+        );
+        assert!(error.message.contains("literal"), "{error:?}");
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_file_rename_rejects_consecutive_spaces_in_destinations() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let old = dir.path().join("foo.tex");
+    let source = "\\input{foo}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&old, "text").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    for name in ["new  name", "new  directory/name"] {
+        let error = file_rename_error(
+            &client,
+            "textDocument/rename",
+            serde_json::json!({
+                "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":name
+            }),
+        );
+        assert!(error.message.contains("literal"), "{error:?}");
+        let error = file_rename_error(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old),
+                "newUri":path_to_file_uri(&old).as_str().replace("foo.tex", &format!("{}.tex", name.replace(' ', "%20")))
+            }]}),
+        );
+        assert!(error.message.contains("literal"), "{error:?}");
+    }
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_declines_consecutive_spaces_in_reference_identities() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let source = "\\input{old  name}\n\\import{old  directory/}{foo}\n";
+    std::fs::write(&main, source).unwrap();
+    for name in ["old name.tex", "old  name.tex"] {
+        std::fs::write(dir.path().join(name), "text").unwrap();
+    }
+    for directory in ["old directory", "old  directory"] {
+        let directory = dir.path().join(directory);
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("foo.tex"), "text").unwrap();
+    }
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    for (line, character, old) in [
+        (0, 8, "old%20%20name.tex"),
+        (1, 26, "old%20%20directory/foo.tex"),
+    ] {
+        assert!(prepare_rename(&client, 201, &uri, Position::new(line, character)).is_null());
+        assert!(
+            file_rename_request(
+                &client,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument":{"uri":uri}, "position":{"line":line,"character":character}, "newName":"bar"
+                }),
+            )
+            .is_null()
+        );
+        let edit = file_rename_request(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":format!("{}/{old}", path_to_file_uri(dir.path()).as_str()),
+                "newUri":path_to_file_uri(&dir.path().join("bar.tex"))
+            }]}),
+        );
+        assert!(file_rename_text_edits(&edit, &uri).is_empty());
+    }
+    shutdown(&client, thread);
+}
+
+#[cfg(unix)]
+#[test]
+fn lsp_file_rename_checks_symlinks_before_parent_normalization() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir(outside.path().join("subdir")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("subdir"), dir.path().join("link")).unwrap();
+    let old = dir.path().join("foo.tex");
+    std::fs::write(&old, "local").unwrap();
+    std::fs::write(outside.path().join("foo.tex"), "external").unwrap();
+    let main = dir.path().join("main.tex");
+    let source = "\\input{foo}\n\\input{link/../foo}\n\\import{link/../}{foo}\n";
+    std::fs::write(&main, source).unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    for (line, character) in [(1, 10), (2, 19)] {
+        assert!(prepare_rename(&client, 2, &uri, Position::new(line, character)).is_null());
+        assert!(
+            file_rename_request(
+                &client,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument":{"uri":uri}, "position":{"line":line,"character":character}, "newName":"bar"
+                }),
+            )
+            .is_null()
+        );
+    }
+    let error = file_rename_error(
+        &client,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument":{"uri":uri}, "position":{"line":0,"character":8}, "newName":"link/../bar"
+        }),
+    );
+    assert!(error.message.contains("symbolic link"), "{error:?}");
+    for (old, new) in [
+        (old.clone(), dir.path().join("link/../bar.tex")),
+        (
+            dir.path().join("link/../foo.tex"),
+            dir.path().join("bar.tex"),
+        ),
+    ] {
+        let error = file_rename_error(
+            &client,
+            "workspace/willRenameFiles",
+            serde_json::json!({"files":[{
+                "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)
+            }]}),
+        );
+        assert!(error.message.contains("symbolic link"), "{error:?}");
+    }
+    let edit = file_rename_request(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[{
+            "oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&dir.path().join("bar.tex"))
+        }]}),
+    );
+    assert_eq!(
+        apply_edits(source, &file_rename_text_edits(&edit, &uri)),
+        "\\input{bar}\n\\input{link/../foo}\n\\import{link/../}{foo}\n"
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_close_before_notification_rediscovers_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    for folder in ["docs", "old", "new"] {
+        std::fs::create_dir(dir.path().join(folder)).unwrap();
+    }
+    let main = dir.path().join("docs/main.tex");
+    let old = dir.path().join("old/child.tex");
+    let new = dir.path().join("new/child.tex");
+    let source = "\\input{../old/child}\n\\ref{sec:x}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&old, "\\label{sec:x}\n").unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let uri = path_to_file_uri(&main);
+    let old_uri = path_to_file_uri(&old);
+    did_open(&client, &uri, 1, source);
+    did_open(&client, &old_uri, 1, "\\label{sec:x}\n");
+    let params = serde_json::json!({"files":[{"oldUri":old_uri,"newUri":path_to_file_uri(&new)}]});
+    let edit = file_rename_request(&client, "workspace/willRenameFiles", params.clone());
+    did_change_full(
+        &client,
+        &uri,
+        2,
+        &apply_edits(source, &file_rename_text_edits(&edit, &uri)),
+    );
+    send_notification(
+        &client,
+        "textDocument/didClose",
+        serde_json::json!({"textDocument":{"uri":old_uri}}),
+    );
+    std::fs::rename(&old, &new).unwrap();
+    send_notification(&client, "workspace/didRenameFiles", params);
+    let found = definition(&client, 202, &uri, Position::new(1, 7));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].uri, path_to_file_uri(&new));
+    shutdown(&client, thread);
+}
+
 #[test]
 fn lsp_prepare_rename_anchors_to_key_token() {
     let (client, server_thread) = start_server(None);

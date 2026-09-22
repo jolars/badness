@@ -6,7 +6,7 @@
 //! deliberately leaves out — every command whose literal argument names a file on
 //! disk:
 //!
-//! - **Includes** — `\input`/`\include`/`\subfile`/`\subfileinclude` (`{file}`,
+//! - **Includes** — `\input`/`\include`/`\subfile`/`\subfileinclude`/`\loadglsentries` (`{file}`,
 //!   default `.tex`) and `\import`/`\subimport` (`{dir}{file}`, joined; the
 //!   `{file}` argument is the link).
 //! - **Packages/classes** — `\usepackage`/`\RequirePackage` (`.sty`,
@@ -18,7 +18,7 @@
 //! - **Bibliography** — `\bibliography` (`.bib`, comma-list) and
 //!   `\addbibresource` (`.bib`).
 //! - **Graphics** — `\includegraphics`, whose extension is guessed against the
-//!   image types [`FileArgKind::Graphics`] completes.
+//!   image types [`crate::completion::FileArgKind::Graphics`] completes.
 //!
 //! Unlike [`crate::project::include`], resolution here is **disk-aware**: a link
 //! is emitted only when the resolved target actually exists (the first existing
@@ -26,7 +26,7 @@
 //! has no kpsewhich/TEXMF search, so a system `\usepackage{amsmath}` resolves to a
 //! nonexistent `./amsmath.sty` and correctly yields no link, while a
 //! project-local `mypkg.sty` does. Comma-separated names each get their own
-//! precise span (the [`nth_group_inner`] byte-slice technique the semantic builder
+//! precise span (the [`crate::ast::nth_group_inner`] byte-slice technique the semantic builder
 //! uses for `\cref{a,b}`), so each underlines independently.
 //!
 //! Known limitations: `\graphicspath` is unsupported (graphics resolve against
@@ -37,12 +37,10 @@ use std::path::{Path, PathBuf};
 
 use rowan::{TextRange, TextSize};
 
-use crate::ast::{command_name, nth_group_inner, nth_group_text};
-use crate::completion::FileArgKind;
-use crate::project::include::subfiles_parent_arg;
+use super::file_reference::file_references;
 use crate::project::package::dtx_source_of;
 use crate::project::texmf::TexmfIndex;
-use crate::syntax::{SyntaxKind, SyntaxNode};
+use crate::syntax::SyntaxNode;
 
 /// A resolved, on-disk-existing link target paired with the source span that
 /// should underline. Kept free of LSP/URI types so the walk stays unit-testable;
@@ -69,174 +67,21 @@ pub(crate) fn document_links(
     base_dir: Option<&Path>,
     texmf: &TexmfIndex,
 ) -> Vec<LinkTarget> {
-    let mut links = Vec::new();
-    for command in root
-        .descendants()
-        .filter(|node| node.kind() == SyntaxKind::COMMAND)
-    {
-        let Some(name) = command_name(&command) else {
-            continue;
-        };
-        if name == "documentclass" {
-            collect_subfiles_parent(&command, base_dir, texmf, &mut links);
-        }
-        let Some(class) = classify(&name) else {
-            continue;
-        };
-        collect_command(&command, class, base_dir, texmf, &mut links);
-    }
-    links
+    file_references(root)
+        .into_iter()
+        .filter_map(|reference| {
+            let target = reference.resolve(base_dir, texmf, true)?;
+            Some(LinkTarget {
+                range: reference.link_range,
+                target,
+            })
+        })
+        .collect()
 }
 
-/// Push the parent-document link of a `subfiles` class declaration, if any.
+/// Resolve the first candidate path that exists on disk, or `None`.
 ///
-/// `\documentclass` is the one command here that names two files, and the
-/// one-[`LinkClass`]-per-name dispatch cannot express that — hence the separate
-/// pass. The gate and the span both come from
-/// [`subfiles_parent_arg`], the same helper the include-graph edge extractor
-/// uses, so a path that is clickable is exactly a path that is an edge.
-fn collect_subfiles_parent(
-    command: &SyntaxNode,
-    base_dir: Option<&Path>,
-    texmf: &TexmfIndex,
-    out: &mut Vec<LinkTarget>,
-) {
-    let Some(arg) = subfiles_parent_arg(command) else {
-        return;
-    };
-    if let Some(target) = resolve_existing(&arg.text, &["tex"], false, base_dir, texmf) {
-        out.push(LinkTarget {
-            range: arg.range,
-            target,
-        });
-    }
-}
-
-/// How a recognized command's argument(s) name a file.
-#[derive(Debug, Clone, Copy)]
-enum LinkClass {
-    /// A single `{file}` argument at brace-group `group`, defaulting `ext` when the
-    /// literal has no extension. `dtx` adds a `.dtx` literate-source fallback.
-    Single {
-        group: usize,
-        ext: &'static str,
-        dtx: bool,
-    },
-    /// A comma-separated list at group 0, each name defaulting `ext`. `dtx` adds
-    /// the `.dtx` fallback per name (package/class loads).
-    List { ext: &'static str, dtx: bool },
-    /// `\import{dir}{file}`: `{file}` (group 1) is the link, resolved under `{dir}`
-    /// (group 0); default `.tex`.
-    ImportPair,
-    /// `\includegraphics{file}` at group 0: the extension is guessed against the
-    /// graphics image types when the literal has none.
-    Graphics,
-}
-
-/// The link classification of a control-word name, or `None` if it references no
-/// file. Mirrors the recognized sets of `project::{include, package}` and
-/// `completion::file_arg`.
-fn classify(name: &str) -> Option<LinkClass> {
-    Some(match name {
-        "input" | "include" | "subfile" | "subfileinclude" => LinkClass::Single {
-            group: 0,
-            ext: "tex",
-            dtx: false,
-        },
-        "import" | "subimport" => LinkClass::ImportPair,
-        "usepackage" | "RequirePackage" => LinkClass::List {
-            ext: "sty",
-            dtx: true,
-        },
-        "documentclass" | "LoadClass" | "LoadClassWithOptions" => LinkClass::Single {
-            group: 0,
-            ext: "cls",
-            dtx: true,
-        },
-        "bibliography" => LinkClass::List {
-            ext: "bib",
-            dtx: false,
-        },
-        "addbibresource" => LinkClass::Single {
-            group: 0,
-            ext: "bib",
-            dtx: false,
-        },
-        "includegraphics" => LinkClass::Graphics,
-        _ => return None,
-    })
-}
-
-/// Emit the link(s) for one recognized command, pushing an entry per name that
-/// resolves to an existing file.
-fn collect_command(
-    command: &SyntaxNode,
-    class: LinkClass,
-    base_dir: Option<&Path>,
-    texmf: &TexmfIndex,
-    out: &mut Vec<LinkTarget>,
-) {
-    match class {
-        LinkClass::Single { group, ext, dtx } => {
-            let Some((range, raw)) = nth_group_inner(command, group) else {
-                return;
-            };
-            let name = raw.trim();
-            if name.is_empty() {
-                return;
-            }
-            if let Some(target) = resolve_existing(name, &[ext], dtx, base_dir, texmf) {
-                out.push(LinkTarget { range, target });
-            }
-        }
-        LinkClass::List { ext, dtx } => {
-            let Some((inner_range, inner)) = nth_group_inner(command, 0) else {
-                return;
-            };
-            for (name, range) in comma_spans(&inner, inner_range) {
-                if let Some(target) = resolve_existing(name, &[ext], dtx, base_dir, texmf) {
-                    out.push(LinkTarget { range, target });
-                }
-            }
-        }
-        LinkClass::ImportPair => {
-            // `{dir}` is the base (group 0); `{file}` (group 1) is the link.
-            let (Some(dir), Some((range, file))) =
-                (nth_group_text(command, 0), nth_group_inner(command, 1))
-            else {
-                return;
-            };
-            let file = file.trim();
-            if file.is_empty() {
-                return;
-            }
-            let joined = PathBuf::from(dir.trim()).join(file);
-            let raw = joined.to_string_lossy();
-            if let Some(target) = resolve_existing(&raw, &["tex"], false, base_dir, texmf) {
-                out.push(LinkTarget { range, target });
-            }
-        }
-        LinkClass::Graphics => {
-            let Some((range, raw)) = nth_group_inner(command, 0) else {
-                return;
-            };
-            let name = raw.trim();
-            if name.is_empty() {
-                return;
-            }
-            let exts = FileArgKind::Graphics.extensions();
-            if let Some(target) = resolve_existing(name, exts, false, base_dir, texmf) {
-                out.push(LinkTarget { range, target });
-            }
-        }
-    }
-}
-
-/// Resolve `raw` to the first candidate path that exists on disk, or `None`.
-///
-/// When `raw` already carries an extension, the sole candidate is `raw` itself;
-/// otherwise each of `exts` is appended in order (the graphics guess tries several,
-/// the deterministic kinds pass a single default). `dtx` adds a trailing `.dtx`
+/// The caller supplies candidates in loader order. `dtx` adds a trailing `.dtx`
 /// literate-source candidate for `.sty`/`.cls` targets. Each candidate is joined
 /// onto `base_dir` when relative before the existence check.
 ///
@@ -244,39 +89,35 @@ fn collect_command(
 /// the installed-tree `texmf` index — this is what makes a system `\usepackage{amsmath}`
 /// resolve to its installed source. An empty index skips this fallback, leaving the
 /// pre-index local-only behavior intact.
-fn resolve_existing(
-    raw: &str,
-    exts: &[&str],
+pub(super) fn resolve_existing(
+    mut candidates: Vec<PathBuf>,
     dtx: bool,
     base_dir: Option<&Path>,
     texmf: &TexmfIndex,
 ) -> Option<PathBuf> {
-    let raw = PathBuf::from(raw);
-    let mut candidates: Vec<PathBuf> = if raw.extension().is_some() {
-        vec![raw.clone()]
-    } else {
-        exts.iter().map(|ext| raw.with_extension(ext)).collect()
-    };
     if dtx {
         // Fall back to the `.dtx` a `.sty`/`.cls` would be generated from.
         let dtx_of: Vec<PathBuf> = candidates.iter().filter_map(|c| dtx_source_of(c)).collect();
         candidates.extend(dtx_of);
     }
-    let local = candidates.into_iter().find_map(|candidate| {
+    let local = candidates.iter().find_map(|candidate| {
         let resolved = match base_dir {
             Some(dir) if candidate.is_relative() => dir.join(candidate),
-            _ => candidate,
+            _ => candidate.clone(),
         };
         resolved.is_file().then_some(resolved)
     });
-    local.or_else(|| resolve_in_texmf(&raw, exts, dtx, texmf))
+    local.or_else(|| {
+        candidates
+            .iter()
+            .find_map(|candidate| resolve_in_texmf(candidate, texmf))
+    })
 }
 
 /// Resolve a bare package/class/include *name* against the installed TEXMF index.
 /// Only a name with no directory component qualifies (a system package is referenced
-/// by name, never a relative path); an explicit extension pins the lookup, otherwise
-/// `exts` (plus a trailing `dtx` when `dtx`) are tried in order.
-fn resolve_in_texmf(raw: &Path, exts: &[&str], dtx: bool, texmf: &TexmfIndex) -> Option<PathBuf> {
+/// by name, never a relative path). Candidates already carry their loader's suffix.
+fn resolve_in_texmf(raw: &Path, texmf: &TexmfIndex) -> Option<PathBuf> {
     if texmf.is_empty() {
         return None;
     }
@@ -285,14 +126,8 @@ fn resolve_in_texmf(raw: &Path, exts: &[&str], dtx: bool, texmf: &TexmfIndex) ->
         return None;
     }
     let stem = raw.file_stem()?.to_str()?;
-    let mut try_exts: Vec<&str> = match raw.extension().and_then(|e| e.to_str()) {
-        Some(ext) => vec![ext],
-        None => exts.to_vec(),
-    };
-    if dtx {
-        try_exts.push("dtx");
-    }
-    texmf.resolve(stem, &try_exts).map(Path::to_path_buf)
+    let extension = raw.extension()?.to_str()?;
+    texmf.resolve(stem, &[extension]).map(Path::to_path_buf)
 }
 
 /// Split a group's inner text into comma-separated names paired with their precise
@@ -353,14 +188,50 @@ mod tests {
     }
 
     #[test]
-    fn explicit_extension_is_kept_verbatim() {
+    fn input_loaders_try_tex_before_another_suffix() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("notes.ltx"), "").unwrap();
+        std::fs::write(dir.path().join("notes.ltx.tex"), "shadow").unwrap();
 
-        let src = "\\include{notes.ltx}\n";
-        let got = links(src, dir.path());
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].target, dir.path().join("notes.ltx"));
+        for command in [
+            "input",
+            "subfile",
+            "loadglsentries",
+            "import{}",
+            "subimport{}",
+        ] {
+            let src = format!("\\{command}{{notes.ltx}}\n");
+            let got = links(&src, dir.path());
+            assert_eq!(got.len(), 1, "{command}");
+            assert_eq!(got[0].target, dir.path().join("notes.ltx.tex"), "{command}");
+        }
+    }
+
+    #[test]
+    fn include_loaders_require_a_tex_suffix() {
+        for command in ["include", "includeonly", "subfileinclude"] {
+            for name in [
+                "notes",
+                "notes.sty",
+                "notes.tex",
+                "notes.tex.tex",
+                "notes.TEX",
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let filename = format!("{}.tex", name.strip_suffix(".tex").unwrap_or(name));
+                let target = dir.path().join(filename);
+                std::fs::write(dir.path().join(name), "shadow").unwrap();
+                std::fs::write(&target, "source").unwrap();
+                let src = format!("\\{command}{{{name}}}\n");
+                let got = links(&src, dir.path());
+                assert_eq!(got.len(), 1, "{src}");
+                assert_eq!(got[0].target, target, "{src}");
+                assert_eq!(underlined(&src, &got[0]), name);
+
+                std::fs::remove_file(target).unwrap();
+                assert!(links(&src, dir.path()).is_empty(), "{src}");
+            }
+        }
     }
 
     #[test]
@@ -374,6 +245,34 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(underlined(src, &got[0]), "mypkg");
         assert_eq!(got[0].target, dir.path().join("mypkg.sty"));
+    }
+
+    #[test]
+    fn file_links_apply_loader_space_rules_without_changing_ranges() {
+        for (command, extension, filename) in [
+            ("usepackage", "sty", "local"),
+            ("RequirePackage", "sty", "local"),
+            ("bibliography", "bib", "local"),
+            ("addbibresource", "bib", "lo cal"),
+            ("documentclass", "cls", "lo cal"),
+            ("LoadClass", "cls", "lo cal"),
+            ("LoadClassWithOptions", "cls", "lo cal"),
+            ("input", "tex", "lo cal"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            for name in ["local", "lo cal"] {
+                std::fs::write(dir.path().join(format!("{name}.{extension}")), "").unwrap();
+            }
+            let src = format!("\\{command}{{lo cal}}\n");
+            let got = links(&src, dir.path());
+            assert_eq!(got.len(), 1, "{command}");
+            assert_eq!(underlined(&src, &got[0]), "lo cal", "{command}");
+            assert_eq!(
+                got[0].target,
+                dir.path().join(format!("{filename}.{extension}")),
+                "{command}"
+            );
+        }
     }
 
     #[test]
@@ -500,5 +399,16 @@ mod tests {
         let got = links_with_texmf("\\usepackage{mypkg}\n", base.path(), &texmf);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].target, base.path().join("mypkg.sty"));
+    }
+
+    #[test]
+    fn import_directory_prevents_a_bare_name_texmf_fallback() {
+        let base = tempfile::tempdir().unwrap();
+        let tree = tempfile::tempdir().unwrap();
+        let installed = tree.path().join("tex/latex/pkg/shared.sty");
+        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        std::fs::write(&installed, "").unwrap();
+        let texmf = TexmfIndex::build_from_roots(&[tree.path().to_path_buf()]);
+        assert!(links_with_texmf("\\import{local/}{shared.sty}\n", base.path(), &texmf).is_empty());
     }
 }

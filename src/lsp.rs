@@ -57,6 +57,8 @@
 mod code_action;
 mod completion_resolve;
 mod document_link;
+mod file_reference;
+mod file_rename;
 mod folding;
 mod forward_search;
 mod hover;
@@ -175,8 +177,12 @@ pub fn serve(connection: Connection) -> Result<(), DynError> {
     let (initialize_id, init_params) = connection.initialize_start()?;
     let encoding = negotiate_position_encoding(&init_params);
     let (supports_pull_diagnostics, _) = client_diagnostic_support(&init_params);
-    let capabilities =
-        serde_json::to_value(server_capabilities(encoding, supports_pull_diagnostics))?;
+    let mut capabilities = server_capabilities(encoding, supports_pull_diagnostics);
+    capabilities.workspace = Some(lsp_types::WorkspaceServerCapabilities {
+        file_operations: Some(file_rename::Capabilities::from_params(&init_params).server()),
+        ..Default::default()
+    });
+    let capabilities = serde_json::to_value(capabilities)?;
     connection.initialize_finish(
         initialize_id,
         serde_json::json!({ "capabilities": capabilities }),
@@ -384,6 +390,8 @@ struct GlobalState {
     /// used to decide which inverse searches are ours. Empty when the client
     /// opened a bare file, which means "anything".
     workspace_roots: Vec<PathBuf>,
+    file_rename_capabilities: file_rename::Capabilities,
+    pending_file_moves: Vec<file_rename::PendingMove>,
 }
 
 impl GlobalState {
@@ -861,12 +869,26 @@ fn publish_declarations_for_request(
             .and_then(serde_json::Value::as_str)
             .and_then(|uri| uri.parse::<Uri>().ok())
     };
-    let Some(uri) = document_uri(&req.params).or_else(|| {
-        req.params
-            .get("arguments")
-            .and_then(|args| args.get(0))
-            .and_then(document_uri)
-    }) else {
+    let Some(uri) = document_uri(&req.params)
+        .or_else(|| {
+            let uri = req
+                .params
+                .get("files")?
+                .as_array()?
+                .first()?
+                .get("oldUri")?
+                .as_str()?
+                .parse::<Uri>()
+                .ok()?;
+            file_rename::settings_uri(&uri_to_fs_path(&uri)?)
+        })
+        .or_else(|| {
+            req.params
+                .get("arguments")
+                .and_then(|args| args.get(0))
+                .and_then(document_uri)
+        })
+    else {
         return;
     };
     state.publish_declarations(&uri, job_tx);
@@ -879,6 +901,12 @@ fn publish_declarations_for_request(
 /// path, so capturing a buffer for a job must not copy it, and the read job at
 /// the far end wants the same [`LineIndex`] the buffer already holds.
 enum WorkerJob {
+    FileRename(Box<file_rename::Job>),
+    PlanFileRename(Box<file_rename::Job>),
+    FilesRenamed {
+        moves: Vec<file_rename::Move>,
+        context: Box<file_rename::Context>,
+    },
     /// A buffer edit (from `didOpen` or `didChange`): write the full text into the
     /// db, then (re)analyze diagnostics.
     Edit {
@@ -915,13 +943,18 @@ enum WorkerJob {
     },
     /// `didClose`: evict the file from the db. Diagnostics are cleared directly by
     /// the main loop.
-    Close { path: PathBuf },
+    Close {
+        path: PathBuf,
+    },
     /// A `workspace/didChangeWatchedFiles` event for a **non-open** `.tex`/`.bib`
     /// project file: re-read it from disk (or evict it on delete) and re-lint every
     /// open document, since a sibling's labels/cites may have changed. The main loop
     /// has already confirmed the path is not an open editor buffer (whose overlay text
     /// is authoritative), so this path deliberately re-reads disk.
-    WatchedChange { path: PathBuf, deleted: bool },
+    WatchedChange {
+        path: PathBuf,
+        deleted: bool,
+    },
     /// A formatting request: format on the read pool and reply to `id`.
     Format {
         id: RequestId,
@@ -975,7 +1008,10 @@ enum WorkerJob {
     /// A `workspace/symbol` request: aggregate every tracked file's outline on the
     /// read pool and reply to `id` with the matches for `query`. The database
     /// snapshot supplies the whole project's membership.
-    WorkspaceSymbols { id: RequestId, query: String },
+    WorkspaceSymbols {
+        id: RequestId,
+        query: String,
+    },
     /// A folding-range request: compute foldable regions on the read pool and reply
     /// to `id`. Single-file like [`Symbols`](Self::Symbols), with no project snapshot.
     FoldingRange {
@@ -1165,6 +1201,8 @@ enum WorkerJob {
 
 /// A worker result that requires the main loop's document state or request IDs.
 enum Outbound {
+    FileRename(Box<file_rename::Reply>),
+    DiscoverFileRename(Box<file_rename::Job>),
     /// Push diagnostics for `uri` at `version` (gated against the live buffer).
     Diagnostics {
         uri: Uri,
@@ -1400,6 +1438,8 @@ fn main_loop(
         next_request_id: 1,
         position_encoding: encoding,
         workspace_roots: workspace_roots(&init_params),
+        file_rename_capabilities: file_rename::Capabilities::from_params(&init_params),
+        pending_file_moves: Vec::new(),
     };
 
     // Register on-disk watchers now: `lsp-server`'s `Connection::initialize` already
@@ -1432,6 +1472,7 @@ fn main_loop(
                 let Ok(msg) = msg else { break };
                 match msg {
                     Message::Request(req) => {
+                        file_rename::reconcile(&connection, &mut state, &job_tx);
                         // `handle_shutdown` answers `shutdown` and waits for the
                         // following `exit`, returning `true` once both are seen.
                         if connection.handle_shutdown(&req)? {
@@ -1480,9 +1521,10 @@ fn main_loop(
                                 on_document_highlight(&connection, &state, &job_tx, req)
                             }
                             PrepareRenameRequest::METHOD => {
-                                on_prepare_rename(&connection, &state, &job_tx, req)
+                                on_prepare_rename(&connection, &mut state, &job_tx, req)
                             }
-                            Rename::METHOD => on_rename(&connection, &state, &job_tx, req),
+                            Rename::METHOD => on_rename(&connection, &mut state, &job_tx, req),
+                            "workspace/willRenameFiles" => file_rename::will_rename(&connection, &mut state, &job_tx, req),
                             FoldingRangeRequest::METHOD => {
                                 on_folding_range(&connection, &state, &job_tx, req)
                             }
@@ -1548,6 +1590,13 @@ fn on_notification(
     not: Notification,
 ) {
     match not.method.as_str() {
+        "workspace/didRenameFiles" => {
+            if let Ok(params) =
+                not.extract::<lsp_types::RenameFilesParams>("workspace/didRenameFiles")
+            {
+                file_rename::did_rename(connection, state, job_tx, params);
+            }
+        }
         DidOpenTextDocument::METHOD => {
             let Ok(params) = not.extract::<DidOpenTextDocumentParams>(DidOpenTextDocument::METHOD)
             else {
@@ -2645,7 +2694,7 @@ fn on_document_highlight(
 /// renameable key (and returns its range + placeholder) or declines with `null`.
 fn on_prepare_rename(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -2673,6 +2722,20 @@ fn on_prepare_rename(
         )));
         return;
     };
+    if state.file_rename_capabilities.resource_rename {
+        let text = doc.text.clone();
+        let context = file_rename::Context::capture(state, &path);
+        let _ = job_tx.send(WorkerJob::FileRename(Box::new(file_rename::Job {
+            id,
+            context,
+            operation: file_rename::Operation::Prepare {
+                path,
+                text,
+                position,
+            },
+        })));
+        return;
+    }
     let _ = job_tx.send(WorkerJob::PrepareRename {
         id,
         path,
@@ -2686,7 +2749,7 @@ fn on_prepare_rename(
 /// project-wide [`WorkspaceEdit`] (or `null` when the rename is declined).
 fn on_rename(
     connection: &Connection,
-    state: &GlobalState,
+    state: &mut GlobalState,
     job_tx: &Sender<WorkerJob>,
     req: Request,
 ) {
@@ -2715,6 +2778,21 @@ fn on_rename(
         )));
         return;
     };
+    if state.file_rename_capabilities.resource_rename {
+        let text = doc.text.clone();
+        let context = file_rename::Context::capture(state, &path);
+        let _ = job_tx.send(WorkerJob::FileRename(Box::new(file_rename::Job {
+            id,
+            context,
+            operation: file_rename::Operation::Rename {
+                path,
+                text,
+                position,
+                new_name,
+            },
+        })));
+        return;
+    }
     let _ = job_tx.send(WorkerJob::Rename {
         id,
         path,
@@ -2809,6 +2887,8 @@ fn forward_outbound(
     outbound: Outbound,
 ) {
     match outbound {
+        Outbound::FileRename(reply) => file_rename::deliver(connection, state, *reply),
+        Outbound::DiscoverFileRename(job) => file_rename::discover(connection, state, job_tx, *job),
         Outbound::Diagnostics {
             uri,
             version,
@@ -3177,6 +3257,29 @@ impl Worker {
     fn handle_job(&mut self, job: WorkerJob) {
         let enc = self.encoding;
         match job {
+            WorkerJob::FileRename(job) => {
+                let snapshot = self.db.snapshot();
+                let out = self.out_tx.clone();
+                self.read_spawner
+                    .spawn(move || file_rename::dispatch(&snapshot, *job, &out));
+            }
+            WorkerJob::PlanFileRename(job) => {
+                if let Err(message) = job.context.seed(&mut self.db) {
+                    self.out_tx.respond(Response::new_err(
+                        job.id,
+                        ErrorCode::RequestFailed as i32,
+                        message,
+                    ));
+                    return;
+                }
+                let snapshot = self.db.snapshot();
+                let out = self.out_tx.clone();
+                self.read_spawner
+                    .spawn(move || file_rename::run(&snapshot, *job, &out));
+            }
+            WorkerJob::FilesRenamed { moves, mut context } => {
+                file_rename::update_database(self, &moves, &mut context)
+            }
             WorkerJob::Edit {
                 uri,
                 path,
@@ -8145,6 +8248,8 @@ mod tests {
             next_request_id: 1,
             position_encoding: PositionEncoding::Utf16,
             workspace_roots: Vec::new(),
+            file_rename_capabilities: file_rename::Capabilities::default(),
+            pending_file_moves: Vec::new(),
         }
     }
 

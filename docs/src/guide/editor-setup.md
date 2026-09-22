@@ -38,6 +38,55 @@ not expand macros to discover computed names. It skips incomplete definitions
 and definitions stored as token-list data. These names support completion; expl3
 definition navigation and argument signature help are not yet provided.
 
+## Renaming source files
+
+Invoke your editor's LSP rename command inside a literal source path, such as
+`\input{chapters/introduction}`. Badness renames the file and updates its
+references across the discovered workspace. This also works with `\include`,
+`\subfile`, `\subfileinclude`, `\import`, `\subimport`, `\loadglsentries`, and
+the parent path in `\documentclass[...]{subfiles}`. Literal `\includeonly` lists
+are updated along with their targets.
+
+The new name uses the same base directory as the original argument. For example,
+renaming `chapters/introduction` to `appendix` moves the file to `appendix.tex`
+beside the referring document. Use `chapters/appendix` to keep it in the same
+directory. Import commands use their directory argument as the base. Badness
+preserves the file extension when you omit it and keeps each reference's
+extension spelling when it still resolves correctly. Renaming an imported file
+preserves the import directory argument unless that directory itself moves.
+
+Moves stay within the same workspace root and never overwrite existing files or
+destination buffers. New parent directories are allowed when the editor creates
+them while applying the file operation; Neovim supports this. Without workspace
+folders, Badness uses the initiating document's directory as the boundary.
+
+File explorers can also rename source files and folders through
+`workspace/willRenameFiles` and `workspace/didRenameFiles`. Your explorer must
+send these requests and notifications. When files move, Badness adjusts their
+recognized references, including references to assets inside moved folders.
+Cursor rename includes its reference edits even when explorer hooks are enabled.
+Unsaved editor buffers take precedence over disk contents. Each referring file
+uses its own project's declarations and exclusions, including nested projects
+and other workspace folders.
+
+Badness declines moves across directories when a moved source contains relative
+file arguments. Their resolution can depend on the compilation directory or an
+import context, which cannot be inferred from the source's location alone. It
+also checks the compilation and import directories inherited through literal
+source loads. If a reference requires different edits in those contexts, Badness
+declines the rename, even when the referring file stays in place.
+
+File rename requires a client that supports LSP resource-rename operations.
+Dynamic paths, braceless inputs, `\graphicspath`, and symlink aliases are not
+resolved for rename. Source and destination paths cannot pass through symlinks
+inside the workspace, and new names cannot contain quotation marks or TeX
+delimiters. Badness also declines names containing spaces when a reference uses
+`\usepackage`, `\RequirePackage`, or `\bibliography`, which strip those spaces.
+Unresolved references and files excluded from discovery remain unchanged.
+Installed TEXMF files and navigation-only `.dtx` fallbacks are never renamed.
+Renaming directly from bibliography, graphics, package, or class arguments is
+not supported.
+
 ## TEXMF discovery
 
 How the language server discovers the installed TeX tree for package resolution:

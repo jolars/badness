@@ -214,7 +214,7 @@ fn is_code_tex(path: &Path) -> bool {
 
 /// The lint [`FileKind`] of `path` by extension (`.tex`/`.bib`), or `None` for any
 /// other file.
-fn lint_file_kind(path: &Path) -> Option<FileKind> {
+pub(crate) fn lint_file_kind(path: &Path) -> Option<FileKind> {
     let ext = path.extension().and_then(|ext| ext.to_str())?;
     if ext.eq_ignore_ascii_case("tex") {
         // A `*.code.tex` package-implementation file is loaded under an implicit

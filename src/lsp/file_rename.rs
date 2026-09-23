@@ -1371,6 +1371,44 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn discovery_preserves_exclusions_through_a_symlinked_workspace_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("real");
+        let project = parent.join("workspace/docs");
+        std::fs::create_dir_all(project.join("vendor")).unwrap();
+        std::fs::write(
+            project.join("badness.toml"),
+            "exclude = ['/ignored.tex', 'vendor/']\n",
+        )
+        .unwrap();
+        for name in ["main.tex", "ignored.tex"] {
+            std::fs::write(project.join(name), "\\input{foo}\n").unwrap();
+        }
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&parent, &alias).unwrap();
+        let workspace = alias.join("workspace");
+        let docs = workspace.join("docs");
+        let mut state = state();
+        state.workspace_roots.push(workspace);
+        for name in ["unsaved.tex", "vendor/unsaved.tex"] {
+            state.documents.insert(
+                path_to_uri(&docs.join(name)).unwrap(),
+                Document {
+                    text: Arc::new(TextBuffer::new("\\input{foo}\n", PositionEncoding::Utf16)),
+                    version: 1,
+                },
+            );
+        }
+        let mut context = Context::capture(&mut state, &docs.join("main.tex"));
+        context.discover_files(&mut state).unwrap();
+        context.seed(&mut IncrementalDatabase::default()).unwrap();
+        assert_eq!(context.files.len(), 2);
+        assert!(context.files.contains_key(&docs.join("main.tex")));
+        assert!(context.files.contains_key(&docs.join("unsaved.tex")));
+    }
+
     #[test]
     fn discovery_restores_declarations_after_an_interleaved_request() {
         let declared = tempfile::tempdir().unwrap();

@@ -4,6 +4,7 @@
 //! `.ins`/`.bib`), while directories are walked recursively via the `ignore` crate
 //! (respecting `.gitignore`) to collect every supported file beneath them.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -105,17 +106,40 @@ impl ExcludeFilter {
     /// tested against its ancestors too, so `vendor/` catches `vendor/x.tex`.
     pub fn force_excludes(&self, path: &Path) -> bool {
         self.force
-            && match &self.matcher {
-                Some(matcher) => matcher.matched_path_or_any_parents(path, false).is_ignore(),
-                None => false,
-            }
+            && self.matcher.as_ref().is_some_and(|matcher| {
+                Self::matching_path(matcher, path).is_some_and(|path| {
+                    matcher.matched_path_or_any_parents(path, false).is_ignore()
+                })
+            })
     }
 
     fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
-        match &self.matcher {
-            Some(matcher) => matcher.matched(path, is_dir).is_ignore(),
-            None => false,
+        self.matcher.as_ref().is_some_and(|matcher| {
+            // Directory walks can start outside the config root; unanchored
+            // patterns must still prune matching entries there.
+            let path = Self::matching_path(matcher, path).unwrap_or(Cow::Borrowed(path));
+            matcher.matched(path, is_dir).is_ignore()
+        })
+    }
+
+    fn matching_path<'a>(matcher: &Gitignore, path: &'a Path) -> Option<Cow<'a, Path>> {
+        if !path.has_root() || (matcher.path().has_root() && path.starts_with(matcher.path())) {
+            return Some(Cow::Borrowed(path));
         }
+        // Config discovery canonicalizes its root, while editor and CLI paths
+        // can retain symlink aliases. Match the authored suffix below an
+        // equivalent root so unsaved files need not exist and keep their names.
+        // GitignoreBuilder strips `.` from the current-directory root.
+        let root = if matcher.path().as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            matcher.path()
+        };
+        let canonical = root.canonicalize().ok()?;
+        path.ancestors()
+            .find(|ancestor| ancestor.canonicalize().is_ok_and(|path| path == canonical))
+            .and_then(|ancestor| path.strip_prefix(ancestor).ok())
+            .map(|suffix| Cow::Owned(matcher.path().join(suffix)))
     }
 }
 
@@ -552,6 +576,20 @@ mod tests {
     }
 
     #[test]
+    fn exclude_prunes_matching_directory_outside_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let other = dir.path().join("other");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir_all(other.join("vendor")).unwrap();
+        fs::write(other.join("keep.tex"), "k").unwrap();
+        fs::write(other.join("vendor/skip.tex"), "s").unwrap();
+        let filter = ExcludeFilter::new(&root, &["vendor/".to_string()]).unwrap();
+        let files = collect_lint_files(std::slice::from_ref(&other), &filter).unwrap();
+        assert_eq!(files, vec![(other.join("keep.tex"), FileKind::Tex)]);
+    }
+
+    #[test]
     fn explicitly_named_file_bypasses_exclude() {
         // No `force-exclude`: a path named on the command line is always processed
         // even when it matches an exclude pattern.
@@ -598,6 +636,76 @@ mod tests {
             .with_force_exclude(true);
         let files = collect_lint_files(&[path], &filter).unwrap();
         assert_eq!(files, vec![]);
+    }
+
+    #[test]
+    fn force_exclude_keeps_paths_outside_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let filter = ExcludeFilter::new(&project, &["*.tex".to_string()])
+            .unwrap()
+            .with_force_exclude(true);
+        assert!(!filter.force_excludes(&dir.path().join("other.tex")));
+    }
+
+    #[test]
+    fn force_exclude_accepts_relative_roots_and_paths() {
+        let cwd = std::env::current_dir().unwrap();
+        for root in [Path::new("."), cwd.as_path()] {
+            let filter = ExcludeFilter::new(root, &["/ignored.tex".to_string()])
+                .unwrap()
+                .with_force_exclude(true);
+            assert!(filter.force_excludes(Path::new("ignored.tex")));
+            assert!(filter.force_excludes(&cwd.join("ignored.tex")));
+            assert!(!filter.force_excludes(Path::new("nested/ignored.tex")));
+        }
+    }
+
+    #[test]
+    fn force_exclude_preserves_nested_names_with_a_relative_root() {
+        let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let root = Path::new(dir.path().file_name().unwrap());
+        let filter = ExcludeFilter::new(root, &["/ignored.tex".to_string()])
+            .unwrap()
+            .with_force_exclude(true);
+        assert!(filter.force_excludes(&dir.path().join("ignored.tex")));
+        assert!(!filter.force_excludes(&dir.path().join(root).join("ignored.tex")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exclusions_match_equivalent_root_spellings() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        fs::create_dir_all(project.join("vendor")).unwrap();
+        for name in ["main.tex", "ignored.tex", "vendor/example.tex"] {
+            fs::write(project.join(name), "text").unwrap();
+        }
+        let canonical = project.canonicalize().unwrap();
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&canonical, &alias).unwrap();
+
+        for root in [&canonical, &alias] {
+            let filter =
+                ExcludeFilter::new(root, &["/ignored.tex".to_string(), "vendor/".to_string()])
+                    .unwrap()
+                    .with_force_exclude(true);
+            for spelling in [&canonical, &alias] {
+                // Unsaved buffers can have missing parent directories too.
+                assert!(filter.force_excludes(&spelling.join("ignored.tex")));
+                assert!(filter.force_excludes(&spelling.join("vendor/new/unsaved.tex")));
+                assert!(!filter.force_excludes(&spelling.join("nested/ignored.tex")));
+                assert!(!filter.force_excludes(&spelling.join("main.tex")));
+                assert!(filter.is_excluded(&spelling.join("ignored.tex"), false));
+                assert!(filter.is_excluded(&spelling.join("vendor"), true));
+                assert!(!filter.is_excluded(&spelling.join("nested/ignored.tex"), false));
+                assert_eq!(
+                    collect_lint_files(std::slice::from_ref(spelling), &filter).unwrap(),
+                    vec![(spelling.join("main.tex"), FileKind::Tex)]
+                );
+            }
+        }
     }
 
     #[test]

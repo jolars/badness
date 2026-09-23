@@ -3556,6 +3556,30 @@ fn apply_edits(text: &str, edits: &[TextEdit]) -> String {
     out
 }
 
+fn absolute_file_rename_tempdir() -> tempfile::TempDir {
+    // Windows temporary directories can contain short names such as RUNNER~1.
+    // These fixtures embed absolute paths in TeX, where `~` is not a literal.
+    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("lsp-absolute-path-")
+        .tempdir_in(target)
+        .unwrap();
+    let path = dir.path().to_str().unwrap().replace('\\', "/");
+    assert!(
+        !path.contains("  ")
+            && !path.chars().any(|c| {
+                c.is_control()
+                    || matches!(
+                        c,
+                        '{' | '}' | '%' | '#' | '$' | '^' | '~' | '&' | ',' | '[' | ']' | '"'
+                    )
+            }),
+        "absolute-path fixtures require a literal TeX path: {path}"
+    );
+    dir
+}
+
 fn start_file_rename_server(
     root: &std::path::Path,
     hooks: bool,
@@ -4162,7 +4186,7 @@ fn lsp_file_rename_checks_transitive_compilation_and_import_contexts() {
 fn lsp_file_rename_rejects_moved_callers_with_transitive_relative_loads() {
     for cursor in [false, true] {
         for shadowed in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = absolute_file_rename_tempdir();
             let main = dir.path().join("main.tex");
             let child = dir.path().join("child.tex");
             let nested = dir.path().join("nested.tex");
@@ -4208,7 +4232,7 @@ fn lsp_file_rename_rejects_moved_callers_with_transitive_relative_loads() {
 
 #[test]
 fn lsp_file_rename_allows_moved_callers_with_transitive_absolute_loads() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = absolute_file_rename_tempdir();
     let main = dir.path().join("main.tex");
     let child = dir.path().join("child.tex");
     let leaf = dir.path().join("leaf.tex");
@@ -4234,7 +4258,7 @@ fn lsp_file_rename_allows_moved_callers_with_transitive_absolute_loads() {
 #[test]
 fn lsp_file_rename_checks_subfiles_parent_preamble_contexts() {
     for indirect in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = absolute_file_rename_tempdir();
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
         let main = dir.path().join("main.tex");
@@ -4497,7 +4521,7 @@ fn lsp_file_rename_uses_each_referring_projects_declarations() {
     for nested in [false, true] {
         for anchor_declares in [false, true] {
             for cursor in [false, true] {
-                let dir = tempfile::tempdir().unwrap();
+                let dir = absolute_file_rename_tempdir();
                 let a = dir.path().join("a");
                 let b = dir.path().join("b");
                 std::fs::create_dir(&a).unwrap();
@@ -4572,7 +4596,7 @@ fn lsp_file_rename_uses_each_referring_projects_declarations() {
 #[test]
 fn lsp_file_rename_folder_uses_its_own_declarations() {
     for absolute in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = absolute_file_rename_tempdir();
         let docs = dir.path().join("docs");
         std::fs::create_dir(&docs).unwrap();
         std::fs::write(

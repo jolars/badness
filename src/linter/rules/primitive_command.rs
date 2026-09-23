@@ -47,6 +47,8 @@ struct Primitive {
 /// The discouraged-primitive table. Report-only rows leave `swap: None`; the
 /// argument-restructuring replacements (`\over`, `\centerline`, …) can only be
 /// suggested, not mechanically applied (tenet 1).
+/// Implicit braces (`\bgroup` and `\egroup`) are intentionally excluded because
+/// literal braces can change macro argument and definition boundaries.
 const PRIMITIVES: &[Primitive] = &[
     Primitive {
         name: "over",
@@ -81,16 +83,6 @@ const PRIMITIVES: &[Primitive] = &[
     Primitive {
         name: "leqno",
         suggest: "`amsmath`'s `leqno` option or `\\tag`",
-        swap: None,
-    },
-    Primitive {
-        name: "bgroup",
-        suggest: "`{`",
-        swap: None,
-    },
-    Primitive {
-        name: "egroup",
-        suggest: "`}`",
         swap: None,
     },
     Primitive {
@@ -145,7 +137,9 @@ impl Rule for PrimitiveCommand {
          so it stays lossless and meaning-preserving, and is withheld where the \
          primitive is merely referenced (`\\let\\x\\sp`, `\\ifx\\sp\\y`). A name the \
          file redefines (`\\renewcommand\\sp{…}`) is the user's macro, not the \
-         primitive, so it is not flagged anywhere."
+         primitive, so it is not flagged anywhere. The implicit braces \
+         `\\bgroup` and `\\egroup` are not flagged: replacing them with literal \
+         braces can change macro argument and definition boundaries."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -255,6 +249,21 @@ mod tests {
     #[test]
     fn latex_constructs_are_fine() {
         assert!(findings("\\frac{a}{b}\\binom{n}{k}\n").is_empty());
+    }
+
+    #[test]
+    fn implicit_braces_are_not_discouraged() {
+        // Implicit braces can cross macro and argument boundaries that literal
+        // braces cannot. Ordinary grouping with them is also valid.
+        for src in [
+            r"\bgroup text\egroup",
+            r"\setbox0=\vbox\bgroup text\egroup",
+            r"\def\openbox{\hbox\bgroup}\def\closebox{\egroup}\openbox text\closebox",
+            r"\newenvironment{mybox}{\setbox0=\hbox\bgroup}{\egroup\box0}",
+        ] {
+            let out = findings(src);
+            assert!(out.is_empty(), "implicit braces in {src:?}: {out:?}");
+        }
     }
 
     #[test]

@@ -630,6 +630,30 @@ fn beamer_overlay_specs_do_not_trip_dash_length() {
 }
 
 #[test]
+fn primitive_command_allows_deferred_box_closing() {
+    // Issue #186: replacing the implicit braces changes which tokens belong to
+    // the conditional branch and the deferred end-document code.
+    let src = r"\ifthenelse{\equal{\liturjibicimi}{tablet}}{%
+    \pagestyle{empty}
+    \setbox0=\vbox\bgroup
+    \preto\enddocument{%
+        \egroup
+        \dimen0=\dp0
+        \pdfpageheight=\dimexpr\ht0+\headsep+\headheight+\footskip\relax
+        \unvbox0\kern-\dimen0
+    }
+}{}
+";
+    let findings = lint(src);
+    assert!(
+        findings
+            .iter()
+            .all(|(rule, _)| *rule != "primitive-command"),
+        "deferred box closing must not trip primitive-command: {findings:?}",
+    );
+}
+
+#[test]
 fn primitive_command_reports_and_swaps_end_to_end() {
     // `\over` restructures its operands, so it is report-only (no fix); the
     // plain-TeX subscript alias `\sb` carries a safe 1:1 swap to `_`.

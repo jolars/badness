@@ -500,10 +500,19 @@ impl Printer {
                         prefix,
                     });
                 }
-                Ir::BoundedAlign { aligned, fallback } => {
+                Ir::BoundedAlign {
+                    aligned,
+                    fallback,
+                    check_first_line,
+                } => {
                     let node = if mode != Mode::Break
-                        || self.bounded_align_fits(w.current_col(), indent, aligned, prefix)
-                    {
+                        || self.bounded_align_fits(
+                            w.current_col(),
+                            indent,
+                            aligned,
+                            *check_first_line,
+                            prefix,
+                        ) {
                         aligned
                     } else {
                         fallback
@@ -1060,20 +1069,26 @@ impl Printer {
     }
 
     /// Whether an aligned candidate's broken continuation lines fit from the
-    /// actual current column and indentation. Its first line is deliberately
-    /// excluded: alignment does not indent that line, so an intrinsically long
-    /// first segment remains an honest overflow. The fallback need not fit—it is
-    /// the honest least-indented rendering when alignment causes overflow.
+    /// actual current column and indentation. The first line is checked only
+    /// when alignment adds padding there; otherwise an intrinsically long first
+    /// segment remains an honest overflow. The fallback need not fit—it is the
+    /// honest least-indented rendering when alignment causes overflow.
     fn bounded_align_fits<'a>(
         &self,
         start_col: usize,
         indent: usize,
         aligned: &'a Ir,
+        check_first_line: bool,
         prefix: Option<ActivePrefix<'a>>,
     ) -> bool {
         let rendered = self.run_with_mode_prefix(aligned, indent, start_col, Mode::Break, prefix);
         let mut lines = rendered.split('\n');
-        let _ = lines.next();
+        if let Some(first) = lines.next()
+            && check_first_line
+            && start_col + first.chars().count() > self.line_width
+        {
+            return false;
+        }
         lines.all(|line| line.chars().count() <= self.line_width)
     }
 
@@ -1309,13 +1324,17 @@ impl Printer {
                 Ir::Indent(inner) | Ir::Align(_, inner) | Ir::AlignCurrent(inner) => {
                     work.push((mode, verified, inner));
                 }
-                Ir::BoundedAlign { aligned, fallback } => {
+                Ir::BoundedAlign {
+                    aligned,
+                    fallback,
+                    check_first_line,
+                } => {
                     // This primitive is emitted at a line's base indentation;
                     // `line_fits` tracks columns but not indentation because an
                     // ordinary break ends its query. Using `col` for both keeps
                     // this branch identical to the run loop at that boundary.
                     let chosen = if mode != Mode::Break
-                        || self.bounded_align_fits(col, col, aligned, None)
+                        || self.bounded_align_fits(col, col, aligned, *check_first_line, None)
                     {
                         aligned
                     } else {
@@ -1927,7 +1946,7 @@ mod tests {
         });
         let aligned = Ir::align(6, Ir::concat([Ir::text("lhs"), Ir::line(), Ir::text("r")]));
         let fallback = Ir::concat([Ir::text("lhs"), Ir::line(), Ir::text("r")]);
-        let ir = Ir::bounded_align(aligned, fallback);
+        let ir = Ir::bounded_align(aligned, fallback, false);
 
         assert_eq!(
             printer.run_with_mode(&ir, 0, 0, Mode::Break),
@@ -1944,6 +1963,47 @@ mod tests {
             ..FormatStyle::default()
         });
         assert_eq!(narrow.print(&prefixed), "% lhs\n% r");
+    }
+
+    #[test]
+    fn bounded_align_can_measure_a_padded_first_line() {
+        let printer = Printer::new(FormatStyle {
+            line_width: 11,
+            ..FormatStyle::default()
+        });
+        let aligned = Ir::align(
+            4,
+            Ir::concat([Ir::text("lhs =   rhs"), Ir::line(), Ir::text("\\in x")]),
+        );
+        let fallback = Ir::concat([
+            Ir::text("lhs"),
+            Ir::line(),
+            Ir::text("=   rhs"),
+            Ir::line(),
+            Ir::text("\\in x"),
+        ]);
+        let ir = Ir::bounded_align(aligned.clone(), fallback.clone(), true);
+        assert_eq!(printer.print(&ir), "lhs =   rhs\n    \\in x");
+        assert_eq!(
+            printer.run_with_mode(&ir, 1, 1, Mode::Break),
+            "lhs\n =   rhs\n \\in x"
+        );
+        assert_eq!(
+            printer.run_with_mode(
+                &Ir::bounded_align(aligned, fallback, false),
+                1,
+                1,
+                Mode::Break,
+            ),
+            "lhs =   rhs\n     \\in x"
+        );
+
+        let prefixed = Ir::margin_prefix("% ", ir);
+        let wider = Printer::new(FormatStyle {
+            line_width: 12,
+            ..FormatStyle::default()
+        });
+        assert_eq!(wider.print(&prefixed), "% lhs\n% =   rhs\n% \\in x");
     }
 
     #[test]

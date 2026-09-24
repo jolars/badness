@@ -9900,16 +9900,17 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
 /// Lower a display-math `MATH` body, additionally letting a too-long body *break*
 /// before its eligible top-level binary/relation operators (amsmath style). The
 /// layout is two-level: equation-chain *relations* align in a single column (a
-/// chain of `=` reads as a stack, the second `=` under the first), and a breakable
-/// *binary* operator hangs one relation-width deeper, under the first term of its
-/// right-hand side (a `+`-chain tucks under the first summand). Multiplicative and
+/// chain of `=` reads as a stack, the second `=` under the first), their right-hand
+/// sides share a column after the widest relation, and a breakable *binary*
+/// operator hangs under that expression column. Multiplicative and
 /// conditional operators use the narrower policy in [`math_break_kind`]. The
 /// left-hand side and the first relation stay flat on the opening line. The whole
 /// body is one [`Ir::group`], so it stays on a single line whenever it fits —
 /// degrading to [`lower_math_body`] otherwise. Each segment's right-hand side is
 /// its own nested group: breaking the body at its relations does not also break a
 /// segment at its binary operators unless that segment overflows its own line. If
-/// the LHS-derived relation column would make a continuation overflow, the
+/// the LHS-derived relation column would make a continuation overflow, or padding
+/// a shorter opening relation would make the first line overflow, the
 /// printer breaks before the first relation and hangs the relation stack at the
 /// display body's base indent instead.
 fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
@@ -10013,6 +10014,16 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
         flat_width(&Ir::concat(lhs.clone())) + 1
     };
 
+    let relation_width = (anchor..pieces.len())
+        .filter(|&k| is_anchor(k))
+        .map(|k| flat_width(&pieces[k].ir))
+        .max()
+        .expect("the first relation anchors the chain");
+    let first_rhs = anchor + 1;
+    let pad_first_relation = relation_width > flat_width(&pieces[anchor].ir)
+        && first_rhs < pieces.len()
+        && !is_anchor(first_rhs);
+
     let build_relation_layout = |relation_indent: usize, break_before_first: bool| {
         let mut parts = lhs.clone();
         // Each relation opens a segment running to the next relation. In the
@@ -10042,6 +10053,14 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
             while j < pieces.len() && !is_anchor(j) {
                 j += 1;
             }
+            if start < j && relw < relation_width {
+                // Padding follows the chain's break decision, even when this
+                // expression's own group can stay flat.
+                parts.push(Ir::if_break(
+                    Ir::Nil,
+                    Ir::text(" ".repeat(relation_width - relw)),
+                ));
+            }
             let mut rhs: Vec<Ir> = Vec::with_capacity((j - start) * 2);
             for (offset, piece) in pieces[start..j].iter().enumerate() {
                 let k = start + offset;
@@ -10052,7 +10071,7 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
                 });
                 rhs.push(piece.ir.clone());
             }
-            parts.push(Ir::group(Ir::align(relw + 1, Ir::concat(rhs))));
+            parts.push(Ir::group(Ir::align(relation_width + 1, Ir::concat(rhs))));
 
             first_segment = false;
             i = j;
@@ -10067,6 +10086,7 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
         Ir::bounded_align(
             build_relation_layout(rel_col, false),
             build_relation_layout(0, true),
+            pad_first_relation,
         )
     };
     Ir::group(body)

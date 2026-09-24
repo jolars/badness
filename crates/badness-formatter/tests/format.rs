@@ -1116,10 +1116,13 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("math_display_explicit_line_break", WrapMode::Preserve, 80),
     // A chain of relations aligns in a column: the second `=` starts a fresh
     // continuation line under the first `=`, not under the first right-hand-side
-    // term (the two-level rule — relations align, binaries hang one relation-width
-    // deeper). When an LHS-derived column would make a continuation overflow,
-    // both relations fall back to the display body's base indent.
+    // term (the two-level rule — relations align, binaries hang under the shared
+    // expression column). When an LHS-derived column would make a continuation
+    // overflow, both relations fall back to the display body's base indent.
     ("math_display_break_relations", WrapMode::Preserve, 80),
+    // Unequal relation spellings share both a relation column and an expression
+    // column, even when each expression fits without breaking internally.
+    ("math_display_expression_alignment", WrapMode::Preserve, 80),
     // Breaking at a relation does not drag the segment's binary operators along:
     // each segment's right-hand side is its own group, so a segment that fits on
     // its line stays flat (`… = \ilink ( \eta_i) - y_i` keeps `- y_i`) even when
@@ -2214,6 +2217,118 @@ fn assert_fixture(name: &str, style: FormatStyle) {
         formatted,
         "fixture {name} formatted output must round-trip"
     );
+}
+
+#[test]
+fn math_expression_alignment_shares_the_expression_column() {
+    for (input, expected) in [
+        (
+            "\\[x = aaaaaaaaaaaa \\in bbbbbbbbbbbb\\]\n",
+            "\\[\n  x =   aaaaaaaaaaaa\n    \\in bbbbbbbbbbbb\n\\]\n",
+        ),
+        (
+            "\\[x \\in aaaaaaaaaaaa = bbbbbbbbbbbb\\]\n",
+            "\\[\n  x \\in aaaaaaaaaaaa\n    =   bbbbbbbbbbbb\n\\]\n",
+        ),
+        (
+            "\\[x = aaaaaaaaaaaa :=_i bbbbbbbbbbbb \\in cccccccccccc\\]\n",
+            "\\[\n  x =    aaaaaaaaaaaa\n    :=_i bbbbbbbbbbbb\n    \\in  cccccccccccc\n\\]\n",
+        ),
+        (
+            "\\[x = aaaaaaaaaaaa + bbbbbbbbbbbb \\in cccccccccccc + dddddddddddd\\]\n",
+            "\\[\n  x =   aaaaaaaaaaaa\n        + bbbbbbbbbbbb\n    \\in cccccccccccc\n        + dddddddddddd\n\\]\n",
+        ),
+        (
+            "\\[x = aaaaaa \\Longleftrightarrow bbbbbbb\\]\n",
+            "\\[\n  x\n  =                   aaaaaa\n  \\Longleftrightarrow bbbbbbb\n\\]\n",
+        ),
+        (
+            "\\[x = (a \\leq b) \\in cccccccccccc\\]\n",
+            "\\[\n  x =   (a \\leq b)\n    \\in cccccccccccc\n\\]\n",
+        ),
+        (
+            "\\[x \\in aaaaaaaaaaaa =\\]\n",
+            "\\[\n  x \\in aaaaaaaaaaaa =\n\\]\n",
+        ),
+    ] {
+        let style = FormatStyle {
+            line_width: 30,
+            math_wrap: MathWrap::Break,
+            ..FormatStyle::default()
+        };
+        assert_eq!(format_with_style(input, style).unwrap(), expected);
+        check_format_invariants(input, style, LexConfig::default()).unwrap();
+    }
+}
+
+#[test]
+fn math_expression_alignment_counts_padding_toward_width() {
+    for (input, width, expected) in [
+        (
+            "\\[x = aaaaaaaaaaaaaaa \\in b\\]\n",
+            23,
+            "\\[\n  x =   aaaaaaaaaaaaaaa\n    \\in b\n\\]\n",
+        ),
+        (
+            "\\[x = aaaaaaaaaaaaaaa \\in b\\]\n",
+            22,
+            "\\[\n  x\n  =   aaaaaaaaaaaaaaa\n  \\in b\n\\]\n",
+        ),
+        (
+            "\\[x \\in a = bbbbbbbbbbbbbbb\\]\n",
+            22,
+            "\\[\n  x\n  \\in a\n  =   bbbbbbbbbbbbbbb\n\\]\n",
+        ),
+        (
+            "\\[x \\in aaaaaaaaaaaaaaa =\\]\n",
+            23,
+            "\\[\n  x \\in aaaaaaaaaaaaaaa\n    =\n\\]\n",
+        ),
+    ] {
+        let style = FormatStyle {
+            line_width: width,
+            math_wrap: MathWrap::Break,
+            ..FormatStyle::default()
+        };
+        let formatted = format_with_style(input, style).unwrap();
+        assert_eq!(formatted, expected);
+        assert!(formatted.lines().all(|line| line.chars().count() <= width));
+        check_format_invariants(input, style, LexConfig::default()).unwrap();
+    }
+}
+
+#[test]
+fn math_expression_alignment_counts_indentation() {
+    let input = "\\begin{quote}\n\\[x = aaaaaaaaaaaaaaa \\in b\\]\n\\end{quote}\n";
+    let style = FormatStyle {
+        line_width: 24,
+        math_wrap: MathWrap::Break,
+        ..FormatStyle::default()
+    };
+    let formatted = format_with_style(input, style).unwrap();
+    assert_eq!(
+        formatted,
+        "\\begin{quote}\n  \\[\n    x\n    =   aaaaaaaaaaaaaaa\n    \\in b\n  \\]\n\\end{quote}\n"
+    );
+    assert!(formatted.lines().all(|line| line.chars().count() <= 24));
+    check_format_invariants(input, style, LexConfig::default()).unwrap();
+}
+
+#[test]
+fn math_expression_alignment_keeps_flat_spacing() {
+    for line_width in [0, 80] {
+        let input = "\\[x = a \\in b\\]\n";
+        let style = FormatStyle {
+            line_width,
+            math_wrap: MathWrap::Break,
+            ..FormatStyle::default()
+        };
+        assert_eq!(
+            format_with_style(input, style).unwrap(),
+            "\\[\n  x = a \\in b\n\\]\n"
+        );
+        check_format_invariants(input, style, LexConfig::default()).unwrap();
+    }
 }
 
 #[test]

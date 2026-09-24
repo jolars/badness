@@ -54,9 +54,14 @@ pub(crate) enum Ir {
     /// A current-column-aware choice between an aligned layout and its base-indent
     /// fallback. In break mode, the aligned branch is used only when every
     /// continuation line it would render fits the configured width from the
-    /// actual current column. Flat mode always uses `aligned`, since no
-    /// continuation indentation is emitted. Build via [`Ir::bounded_align`].
-    BoundedAlign { aligned: Rc<Ir>, fallback: Rc<Ir> },
+    /// actual current column. `check_first_line` also checks the opening line
+    /// when alignment adds padding there. Flat mode always uses `aligned`, since
+    /// no continuation indentation is emitted. Build via [`Ir::bounded_align`].
+    BoundedAlign {
+        aligned: Rc<Ir>,
+        fallback: Rc<Ir>,
+        check_first_line: bool,
+    },
     /// A break-decision boundary. The printer measures the flat rendering of
     /// `inner`; if it fits and contains no forced break, it prints flat,
     /// otherwise broken. `expand` forces broken unconditionally. After
@@ -402,11 +407,12 @@ impl Ir {
     }
 
     /// Choose `aligned` only when its broken continuation lines fit at the
-    /// current column; see [`Ir::BoundedAlign`].
-    pub(crate) fn bounded_align(aligned: Ir, fallback: Ir) -> Ir {
+    /// current column, optionally including its first line; see [`Ir::BoundedAlign`].
+    pub(crate) fn bounded_align(aligned: Ir, fallback: Ir, check_first_line: bool) -> Ir {
         Ir::BoundedAlign {
             aligned: Rc::new(aligned),
             fallback: Rc::new(fallback),
+            check_first_line,
         }
     }
 
@@ -626,7 +632,11 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
             let (forced, rewritten) = saturate(inner);
             (forced, rewritten.map(|ir| Ir::AlignCurrent(Rc::new(ir))))
         }
-        Ir::BoundedAlign { aligned, fallback } => {
+        Ir::BoundedAlign {
+            aligned,
+            fallback,
+            check_first_line,
+        } => {
             let (forced, aligned_rw) = saturate(aligned);
             let (_, fallback_rw) = saturate(fallback);
             if aligned_rw.is_none() && fallback_rw.is_none() {
@@ -637,6 +647,7 @@ fn saturate(ir: &Ir) -> (bool, Option<Ir>) {
                     Some(Ir::BoundedAlign {
                         aligned: aligned_rw.map(Rc::new).unwrap_or_else(|| aligned.clone()),
                         fallback: fallback_rw.map(Rc::new).unwrap_or_else(|| fallback.clone()),
+                        check_first_line: *check_first_line,
                     }),
                 )
             }

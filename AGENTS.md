@@ -123,8 +123,7 @@ comparison, not a byte target.
   reparser; admit a splice only when locality and token-sequence checks pass.
 - A new tier needs a direct-reparse benchmark that asserts the exact tier, a
   speedup floor, a release full-parse comparison, and a seeded corpus baseline
-  with splice-rate floors and exact per-tier tallies. Keep protocol details in
-  the architecture documentation and harness.
+  with splice-rate floors and exact per-tier tallies.
 
 ### Parser validation and data
 
@@ -299,8 +298,5 @@ comparison, not a byte target.
 - Update it only when a durable agent decision rule, cross-subsystem boundary,
   or required validation workflow changes. A fixed regression alone belongs in
   tests and does not warrant a new rule.
-- Do not turn it into a decision log, issue log, tutorial, or substitute for
-  architecture documentation.
-- If a rule needs extended rationale, state the operational rule briefly here
-  and link to the relevant architecture section.
+- Do not turn it into a decision log, issue log, or tutorial.
 - Edit instructions in place; avoid append-only growth and duplicate rules.

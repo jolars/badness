@@ -379,13 +379,26 @@ impl Listener {
             roots,
         };
         let body = serde_json::to_vec(&ad).map_err(std::io::Error::other)?;
-        std::fs::write(&self.advertisement, body)?;
+        // Readers treat a visible .json file as ready. Finish both its contents
+        // and permissions before publishing it with a rename in the same directory.
+        let staging = self
+            .advertisement
+            .with_extension(format!("{}.tmp", self.token));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.advertisement, std::fs::Permissions::from_mode(0o600))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
-        Ok(())
+        let mut file = options.open(&staging)?;
+        let written = file.write_all(&body);
+        drop(file);
+        let published = written.and_then(|()| std::fs::rename(&staging, &self.advertisement));
+        if published.is_err() {
+            let _ = std::fs::remove_file(&staging);
+        }
+        published
     }
 
     /// Block until one request arrives, or until [`wake`](Self::wake) is called.
@@ -602,6 +615,75 @@ mod tests {
         responder.accept();
 
         client.join().unwrap().expect("delivered");
+    }
+
+    #[test]
+    fn advertisement_is_complete_when_it_becomes_visible() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ipc");
+        let advertisement = dir.join(format!("{}.json", std::process::id()));
+        let roots: Vec<_> = (0..4096)
+            .map(|i| tmp.path().join(format!("workspace-{i}")))
+            .collect();
+
+        std::thread::scope(|scope| {
+            let publisher = scope.spawn(|| listener(&dir, roots.clone()));
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !advertisement.exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the listener never published an advertisement"
+                );
+                std::thread::yield_now();
+            }
+
+            // A viewer can discover the file before bind_in returns.
+            let ads = read_advertisements(&dir).unwrap();
+            assert_eq!(ads.len(), 1, "a visible advertisement must be usable");
+            assert_eq!(ads[0].1.roots, roots);
+            let _listener = publisher.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn republishing_keeps_the_previous_advertisement_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ipc");
+        let listener = listener(&dir, vec![tmp.path().join("old")]);
+        let previous_body = std::fs::read_to_string(&listener.advertisement).unwrap();
+        let previous = dir.join("previous");
+        // Keep the old file alive as if a viewer had opened it before publication.
+        std::fs::hard_link(&listener.advertisement, &previous).unwrap();
+
+        let roots = vec![tmp.path().join("new")];
+        listener.publish(roots.clone()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(previous).unwrap(), previous_body);
+        let ads = read_advertisements(&dir).unwrap();
+        assert_eq!(ads.len(), 1);
+        assert_eq!(ads[0].1.roots, roots);
+    }
+
+    #[test]
+    fn a_failed_publication_leaves_no_staging_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ipc");
+        let listener = listener(&dir, vec![]);
+        // A directory at the destination forces publication to fail after writing.
+        std::fs::remove_file(&listener.advertisement).unwrap();
+        std::fs::create_dir(&listener.advertisement).unwrap();
+        let entries = || {
+            let mut paths: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect();
+            paths.sort();
+            paths
+        };
+        let before = entries();
+
+        assert!(listener.publish(vec![]).is_err());
+        assert_eq!(entries(), before);
     }
 
     #[test]

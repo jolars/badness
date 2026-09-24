@@ -8998,7 +8998,8 @@ fn inline_token_list_atoms(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<Ir
 /// group is matched to its signature slot — kind-aware, so an omitted optional does
 /// not misalign positions (`\section{Title}` binds the `{title}` slot, not a
 /// leading `[short]`) — and a group filling a prose slot is reflowed via
-/// [`lower_prose_group`]. Everything else (non-prose slots, groups past the declared
+/// [`lower_inline_prose_group`] or [`lower_prose_group`], according to the command's
+/// inline flag. Everything else (non-prose slots, groups past the declared
 /// arity that the greedy parser over-attached, trivia) lowers exactly as the generic
 /// path would.
 fn lower_command(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
@@ -9050,6 +9051,9 @@ fn lower_command_with_math_spacing(
                     continue;
                 }
                 match spec.map(|s| s.content) {
+                    Some(ContentKind::Prose) if sig.inline => {
+                        out.push(lower_inline_prose_group(&child, open, close, cx));
+                    }
                     Some(ContentKind::Prose) => {
                         out.push(lower_prose_group(&child, open, close, cx));
                     }
@@ -9099,9 +9103,25 @@ fn lower_command_with_math_spacing(
     Ir::concat(out)
 }
 
-/// Lower a prose argument group: like [`lower_bracketed`], but the body is reflowed
+/// Inline prose can reach command lowering inside an opaque group, outside the
+/// paragraph path that normally flattens it. Include its delimiters in the prose
+/// stream so they stay glued to the first and last words even when following
+/// content overflows. Block-style delimiter breaks would introduce space tokens
+/// inside the argument (issue #188).
+fn lower_inline_prose_group(
+    node: &SyntaxNode,
+    open: SyntaxKind,
+    close: SyntaxKind,
+    cx: LowerCtx<'_>,
+) -> Ir {
+    let mut elements = Vec::new();
+    splice_prose_group(node, open, close, cx, false, &mut elements);
+    reflow_elements(elements.into_iter(), cx, ReflowKind::ProseArg)
+}
+
+/// Lower a block-level prose argument: like [`lower_bracketed`], but the body is reflowed
 /// to the line width ([`reflow_elements`]) and the whole thing is wrapped in a soft
-/// [`Ir::group`] so it stays on one line when it fits (`\footnote{short}`) and
+/// [`Ir::group`] so it stays on one line when it fits (`\caption{short}`) and
 /// breaks the delimiters onto their own lines, indenting and word-wrapping the body,
 /// when it does not. Empty bodies collapse to the bare delimiters.
 ///

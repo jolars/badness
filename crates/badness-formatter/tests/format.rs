@@ -1300,6 +1300,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("sentence_list_items", WrapMode::Sentence, 80),
     ("sentence_caption", WrapMode::Sentence, 80),
     ("sentence_long_no_width_break", WrapMode::Sentence, 20),
+    ("issue_188_inline_prose_in_group", WrapMode::Sentence, 80),
     // Issue #163: postpositive citations belong to the preceding sentence, even
     // across an authored break; textual citations begin the next sentence. Plain
     // `\cite` is source-directed because its behavior depends on the citation
@@ -2354,11 +2355,65 @@ fn semantic_wrap_respects_line_width() {
         ),
         (
             "\\section[\\emph{alpha beta gamma delta epsilon}]{Title}\n",
-            "\\section[\\emph{\n  alpha beta gamma\n  delta epsilon\n}]{Title}\n",
+            "\\section[\\emph{alpha\nbeta gamma delta\nepsilon}]{Title}\n",
         ),
     ] {
         assert_eq!(format_with_style(input, style).unwrap(), expected);
         check_format_invariants(input, style, LexConfig::default()).unwrap();
+    }
+}
+
+#[test]
+fn inline_prose_in_opaque_groups_keeps_delimiters_glued() {
+    for wrap in [WrapMode::Sentence, WrapMode::Semantic] {
+        for line_width in [20, 80, 100] {
+            let style = FormatStyle {
+                wrap,
+                line_width,
+                ..FormatStyle::default()
+            };
+            for command in ["\\textbf{Label}", "\\textbf{\\emph{Label}}"] {
+                let text = format!("{command} {}Text.", "Text ".repeat(13));
+                for input in [format!("{{{text}}}\n"), format!("{{\n  {text}\n}}\n")] {
+                    assert_eq!(
+                        format_with_style(&input, style).unwrap(),
+                        input,
+                        "{wrap:?}, width {line_width}"
+                    );
+                    check_format_invariants(&input, style, LexConfig::default()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn inline_prose_in_opaque_groups_preserves_comments_and_content() {
+    for wrap in [
+        WrapMode::Reflow,
+        WrapMode::Stable,
+        WrapMode::Sentence,
+        WrapMode::Semantic,
+    ] {
+        for line_width in [20, 80] {
+            let style = FormatStyle {
+                wrap,
+                line_width,
+                ..FormatStyle::default()
+            };
+            for input in [
+                "{\\textbf{% comment\nLabel} Text Text Text Text Text.}\n",
+                "{\\textbf{Label% comment\n} Text Text Text Text Text.}\n",
+                "{\\textbf{alpha beta % comment\ngamma delta} Text Text Text Text Text.}\n",
+                "{\\textbf{alpha [beta] gamma delta epsilon} Text Text Text Text Text.}\n",
+                "{\\footnote[1]{alpha beta gamma delta epsilon} Text Text Text Text Text.}\n",
+                "{\\footnote{alpha beta gamma delta epsilon}{opaque} Text Text Text Text Text.}\n",
+            ] {
+                check_format_invariants(input, style, LexConfig::default()).unwrap_or_else(
+                    |error| panic!("{input:?}, {wrap:?}, width {line_width}: {error}"),
+                );
+            }
+        }
     }
 }
 

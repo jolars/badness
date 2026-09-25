@@ -34,3 +34,9 @@ construction and enforced as test oracles:
 - [Getting Started](guide/getting-started.md): format and lint your first file.
 - [Playground](playground/index.html): try the formatter in your browser.
 - [Editor Setup](guide/editor-setup.md): wire up the language server.
+
+## Funding
+
+I am grateful for the financial support offered by the [TeX Users
+Group](https://tug.org/) through the [TeX Development
+Fund](https://tug.org/tc/devfund/).

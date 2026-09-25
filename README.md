@@ -142,6 +142,12 @@ reference, and developer guide.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
+## Funding
+
+I am grateful for the financial support offered by the [TeX Users
+Group](https://tug.org/) through the [TeX Development
+Fund](https://tug.org/tc/devfund/).
+
 ## License
 
 [MIT](LICENSE)

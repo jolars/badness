@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.25.0](https://github.com/jolars/badness/compare/v0.24.0...v0.25.0) (2026-09-25)
+
+### Features
+- **lsp:** support source file and folder renames ([`8640b6d`](https://github.com/jolars/badness/commit/8640b6ddc24a2faf400a7e53616ef503f39607d6))
+
+### Bug Fixes
+- **docs:** repair social previews and accessibility ([`ced6e51`](https://github.com/jolars/badness/commit/ced6e513625c01ab24f350925da534df9ee01a5a))
+- **lsp:** publish IPC advertisements atomically ([`b124210`](https://github.com/jolars/badness/commit/b12421099339d6905ff55ca50fa71084b99392ec))
+- update salsa ([`c65ca08`](https://github.com/jolars/badness/commit/c65ca08bac8f66195307bfe17ce75181544af452))
+- **linter:** allow implicit braces ([`21389da`](https://github.com/jolars/badness/commit/21389daaa2977b4b34e7260154abd7d44f156d8e)), fixes [#186](https://github.com/jolars/badness/issues/186)
+- match exclusions across symlinked project roots ([`8dc3b45`](https://github.com/jolars/badness/commit/8dc3b45f50b41be7a72137a8d80ff872cd7c0722))
+
+### Dependencies
+- updated crates/badness-formatter to v0.10.0
+
 ## [0.24.0](https://github.com/jolars/badness/compare/v0.23.0...v0.24.0) (2026-09-21)
 
 ### Breaking Changes

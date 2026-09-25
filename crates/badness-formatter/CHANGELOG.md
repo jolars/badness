@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0](https://github.com/jolars/badness/compare/badness-formatter-v0.9.0...badness-formatter-v0.10.0) (2026-09-25)
+
+### Features
+- **formatter:** make relation alignment width-aware ([`9cf602e`](https://github.com/jolars/badness/commit/9cf602e266e80838822c8d6651838609092121ea))
+
+### Bug Fixes
+- **formatter:** keep inline prose delimiters glued ([`5607cef`](https://github.com/jolars/badness/commit/5607ceff8415f199743a7ebe1b84a4faaef78425)), fixes [#188](https://github.com/jolars/badness/issues/188)
+
 ## [0.9.0](https://github.com/jolars/badness/compare/badness-formatter-v0.8.3...badness-formatter-v0.9.0) (2026-09-21)
 
 ### Features

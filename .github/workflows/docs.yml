@@ -75,9 +75,9 @@ jobs:
       - name: Build documentation
         run: mdbook build docs
 
-      # mdbook has no `canonical-site-url` setting (rust-lang/mdBook#2706), so
-      # inject a <link rel="canonical"> into every rendered page post-build.
-      - name: Inject canonical links
+      # mdbook has no `canonical-site-url` setting (rust-lang/mdBook#2706).
+      # Publish canonical links, social previews, and accessible navigation.
+      - name: Publish page metadata and navigation
         run: |
           cargo run --quiet --manifest-path docs/doc-utils/Cargo.toml \
             --bin canonical -- docs/book https://badness.dev/

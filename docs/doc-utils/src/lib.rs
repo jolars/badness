@@ -1,7 +1,7 @@
 //! Preprocessor for the docs, plus shared post-build helpers (see [`postbuild`]).
 
-pub mod postbuild;
 mod memory;
+pub mod postbuild;
 
 use mdbook_preprocessor::book::Book;
 use mdbook_preprocessor::errors::Result;
@@ -79,7 +79,7 @@ fn insert_version(book: &mut Book) {
 
 /// Substitute the `{{ changelog }}` marker with the body of the project's root
 /// `CHANGELOG.md`, so the docs changelog page is a build-time copy of the canonical
-/// (release-tooling-generated) changelog and never drifts. The file's leading
+/// (release-tooling-generated) changelog. The file's leading
 /// `# Changelog` heading is stripped because the docs page supplies its own.
 fn insert_changelog(book: &mut Book) {
     const MARKER: &str = "{{ changelog }}";
@@ -98,7 +98,7 @@ fn insert_changelog(book: &mut Book) {
 
     let path = project_root().join("CHANGELOG.md");
     let body = match std::fs::read_to_string(&path) {
-        Ok(s) => strip_changelog_heading(&s).to_string(),
+        Ok(s) => changelog_body(&s),
         Err(_) => format!(
             "_Changelog unavailable (`{}` missing or unreadable)._",
             path.display()
@@ -112,13 +112,31 @@ fn insert_changelog(book: &mut Book) {
     });
 }
 
-/// Drop a leading top-level `# Changelog` heading (and the blank lines after it)
-/// so the inlined body slots under the docs page's own title. Anything else is
-/// returned untouched.
-fn strip_changelog_heading(contents: &str) -> &str {
-    match contents.strip_prefix("# Changelog") {
+/// Render the generated changelog beneath the docs page's own heading.
+fn changelog_body(contents: &str) -> String {
+    let body = match contents.strip_prefix("# Changelog") {
         Some(rest) => rest.trim_start_matches(['\n', '\r']),
         None => contents,
+    };
+    // The first release has no v0.0.1 tag. Repair its historical link when
+    // publishing the docs without modifying Versionary's generated changelog.
+    body.replace(
+        "https://github.com/jolars/badness/compare/v0.0.1...v0.1.0",
+        "https://github.com/jolars/badness/releases/tag/v0.1.0",
+    )
+}
+
+#[cfg(test)]
+mod changelog_tests {
+    #[test]
+    fn initial_release_links_to_its_tag_instead_of_a_nonexistent_predecessor() {
+        let input = "# Changelog\n\n## [0.2.0](https://github.com/jolars/badness/compare/v0.1.0...v0.2.0)\n\n\
+            ## [0.1.0](https://github.com/jolars/badness/compare/v0.0.1...v0.1.0)\n\nInitial release.\n";
+        let rendered = super::changelog_body(input);
+        assert!(rendered.contains("[0.1.0](https://github.com/jolars/badness/releases/tag/v0.1.0)"));
+        assert!(rendered.contains("compare/v0.1.0...v0.2.0"));
+        assert!(rendered.ends_with("Initial release.\n"));
+        assert!(!rendered.contains("# Changelog"));
     }
 }
 
@@ -291,14 +309,17 @@ fn insert_benchmarks(book: &mut Book) {
             ch.content = ch.content.replace(BENCH_RESULTS_MARKER, &rendered.results);
         }
         if ch.content.contains(BENCH_PROJECT_RESULTS_MARKER) {
-            ch.content =
-                ch.content.replace(BENCH_PROJECT_RESULTS_MARKER, &rendered.project_results);
+            ch.content = ch
+                .content
+                .replace(BENCH_PROJECT_RESULTS_MARKER, &rendered.project_results);
         }
         if ch.content.contains(LINT_META_MARKER) {
             ch.content = ch.content.replace(LINT_META_MARKER, &rendered.lint_meta);
         }
         if ch.content.contains(LINT_RESULTS_MARKER) {
-            ch.content = ch.content.replace(LINT_RESULTS_MARKER, &rendered.lint_results);
+            ch.content = ch
+                .content
+                .replace(LINT_RESULTS_MARKER, &rendered.lint_results);
         }
     });
 }

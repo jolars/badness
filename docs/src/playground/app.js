@@ -104,6 +104,10 @@ async function main() {
     state: EditorState.create({
       doc: SAMPLE_TEX,
       extensions: [
+        EditorView.contentAttributes.of({
+          "aria-labelledby": "pg-input-label",
+          tabindex: "0",
+        }),
         lineNumbers(),
         history(),
         highlightActiveLine(),
@@ -125,6 +129,10 @@ async function main() {
     state: EditorState.create({
       doc: "",
       extensions: [
+        EditorView.contentAttributes.of({
+          "aria-labelledby": "pg-output-label",
+          tabindex: "0",
+        }),
         lineNumbers(),
         outputLang.of(stexLang),
         outputTheme.of(themeExt()),

@@ -313,6 +313,18 @@
     return chart;
   }
 
+  const vendorBase = new URL("../vendor/", document.currentScript.src);
+
+  function loadScript(name) {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = new URL(name, vendorBase).href;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error(`Could not load ${script.src}`));
+      document.head.appendChild(script);
+    });
+  }
+
   function renderInto(container) {
     if (!window.vegaEmbed) {
       return;
@@ -334,6 +346,8 @@
     window
       .vegaEmbed(container, vlSpec, { actions: false, renderer: "svg" })
       .then(function (result) {
+        // The named container and adjacent data table describe the whole chart.
+        container.querySelector("svg")?.setAttribute("aria-hidden", "true");
         if (container.__benchView) container.__benchView.finalize();
         container.__benchView = result.view;
         if (!container.__benchRendered) {
@@ -347,9 +361,21 @@
       });
   }
 
-  function init() {
+  async function init() {
     var blocks = document.querySelectorAll(".bench-chart-block");
     if (!blocks.length) {
+      return;
+    }
+    try {
+      for (const name of [
+        "vega.min.js",
+        "vega-lite.min.js",
+        "vega-embed.min.js",
+      ]) {
+        await loadScript(name);
+      }
+    } catch (err) {
+      console.error("bench-charts: runtime unavailable", err);
       return;
     }
     blocks.forEach(function (block) {

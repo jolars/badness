@@ -3,12 +3,13 @@ name = "doc-utils"
 version = "0.1.0"
 edition = "2021"
 publish = false
-# The crate ships two binaries (the mdbook preprocessor `doc-utils` and the
-# post-build `sitemap` generator); pin the preprocessor as the `cargo run`
-# default so book.toml's `cargo run` invocation stays unambiguous.
+# The crate ships the mdbook preprocessor and postbuild tools. Pin the
+# preprocessor as the default so book.toml's `cargo run` stays unambiguous.
 default-run = "doc-utils"
 
 [dependencies]
+html-escape = "0.2"
+lol_html = "2"
 mdbook-preprocessor = "0.5.2"
 semver = "1.0.27"
 serde = { version = "1.0.228", features = ["derive"] }

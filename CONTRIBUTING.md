@@ -192,6 +192,18 @@ with `task docs`. The linter-rules reference and the benchmark page are
 generated; regenerate them with `task docs:rules` and `task bench` respectively
 rather than editing the rendered pages by hand.
 
+Use `task docs` before auditing the production output. Its postbuild steps add
+canonical and social metadata, publish `branding/og.png`, adapt the navigation
+for keyboard access, and generate the sitemap. A plain `mdbook build` or the
+live preview does not run these steps. The standalone playground receives the
+same metadata as the book chapters. Redirect and helper pages stay out of the
+sitemap.
+
+Test the documentation tools with
+`cargo test --manifest-path docs/doc-utils/Cargo.toml`. The benchmark renderer
+loads the vendored scripts in `docs/src/vendor` only when a page contains
+charts.
+
 ## A note on `AGENTS.md`
 
 The repo's `AGENTS.md` is the operational contract for AI coding agents. It

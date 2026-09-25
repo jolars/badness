@@ -10,16 +10,13 @@ default-theme = "light"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/jolars/badness"
 edit-url-template = "https://github.com/jolars/badness/edit/main/docs/{path}"
-# Vendored Vega runtime + the benchmark figure renderer (theme/bench-charts.js).
-# Load order matters: vega, then vega-lite, then vega-embed, then our script.
+# The chart renderer loads its vendored runtime only on pages with charts.
 additional-js = [
-    "theme/vendor/vega.min.js",
-    "theme/vendor/vega-lite.min.js",
-    "theme/vendor/vega-embed.min.js",
     "theme/bench-charts.js",
     "theme/playground-nav.js",
+    "theme/accessibility.js",
 ]
-additional-css = ["theme/bench-charts.css", "theme/brand.css", "theme/playground-nav.css"]
+additional-css = ["theme/bench-charts.css", "theme/brand.css", "theme/playground-nav.css", "theme/accessibility.css"]
 
 [output.html.redirect]
 "/reference/wrap-modes.html" = "configuration.html#wrap"

@@ -30,7 +30,7 @@
                 <a class="pg-brand" href="../">
                     <img class="pg-logo pg-logo-light" src="../images/logo.svg" alt="" />
                     <img class="pg-logo pg-logo-dark" src="../images/logo-dark.svg" alt="" />
-                    <span><strong>Badness</strong> Playground</span>
+                    <h1><strong>Badness</strong> Playground</h1>
                 </a>
                 <span class="pg-header-spacer"></span>
                 <a class="pg-doc-link" href="../reference/configuration.html">Options reference</a>
@@ -39,65 +39,67 @@
                     <span class="pg-theme-light">Dark</span><span class="pg-theme-dark">Light</span>
                 </button>
             </header>
-            <noscript>The playground requires JavaScript and WebAssembly.</noscript>
-            <div class="pg-controls">
-                <label>
-                    File type
-                    <select id="pg-filetype">
-                        <option value="tex" selected>.tex</option>
-                        <option value="sty-cls">.sty / .cls</option>
-                        <option value="dtx">.dtx</option>
-                        <option value="bib">.bib</option>
-                    </select>
-                </label>
-                <label>
-                    Line width (0 = unlimited)
-                    <input id="pg-line-width" type="number" min="0" max="200" value="80" />
-                </label>
-                <label>
-                    Indent
-                    <input id="pg-indent-width" type="number" min="0" max="8" value="2" />
-                </label>
-                <label>
-                    Wrap
-                    <select id="pg-wrap">
-                        <option value="reflow" selected>reflow (default)</option>
-                        <option value="stable">stable</option>
-                        <option value="sentence">sentence</option>
-                        <option value="semantic">semantic</option>
-                        <option value="preserve">preserve</option>
-                    </select>
-                </label>
-                <label>
-                    Math wrap
-                    <select id="pg-math-wrap">
-                        <option value="auto" selected>auto</option>
-                        <option value="preserve">preserve</option>
-                        <option value="single-line">single-line</option>
-                        <option value="break">break</option>
-                    </select>
-                </label>
-                <span class="pg-controls-spacer"></span>
-                <button id="pg-share"
-                        type="button"
-                        title="Copy a link with the current options">Share</button>
-            </div>
-            <div class="pg-panes">
-                <div class="pg-pane">
-                    <div class="pg-pane-title"><span>Input</span></div>
-                    <div id="pg-input"></div>
+            <main class="pg-main">
+                <noscript>The playground requires JavaScript and WebAssembly.</noscript>
+                <div class="pg-controls">
+                    <label>
+                        File type
+                        <select id="pg-filetype">
+                            <option value="tex" selected>.tex</option>
+                            <option value="sty-cls">.sty / .cls</option>
+                            <option value="dtx">.dtx</option>
+                            <option value="bib">.bib</option>
+                        </select>
+                    </label>
+                    <label>
+                        Line width (0 = unlimited)
+                        <input id="pg-line-width" type="number" min="0" max="200" value="80" />
+                    </label>
+                    <label>
+                        Indent
+                        <input id="pg-indent-width" type="number" min="0" max="8" value="2" />
+                    </label>
+                    <label>
+                        Wrap
+                        <select id="pg-wrap">
+                            <option value="reflow" selected>reflow (default)</option>
+                            <option value="stable">stable</option>
+                            <option value="sentence">sentence</option>
+                            <option value="semantic">semantic</option>
+                            <option value="preserve">preserve</option>
+                        </select>
+                    </label>
+                    <label>
+                        Math wrap
+                        <select id="pg-math-wrap">
+                            <option value="auto" selected>auto</option>
+                            <option value="preserve">preserve</option>
+                            <option value="single-line">single-line</option>
+                            <option value="break">break</option>
+                        </select>
+                    </label>
+                    <span class="pg-controls-spacer"></span>
+                    <button id="pg-share"
+                            type="button"
+                            title="Copy a link with the current options">Share</button>
                 </div>
-                <div class="pg-pane">
-                    <div class="pg-pane-title">
-                        <span>Output</span>
-                        <button id="pg-copy" type="button" title="Copy the formatted output">Copy</button>
+                <div class="pg-panes">
+                    <div class="pg-pane">
+                        <div class="pg-pane-title"><span id="pg-input-label">Input</span></div>
+                        <div id="pg-input"></div>
                     </div>
-                    <div id="pg-output"></div>
+                    <div class="pg-pane">
+                        <div class="pg-pane-title">
+                            <span id="pg-output-label">Output</span>
+                            <button id="pg-copy" type="button" title="Copy the formatted output">Copy</button>
+                        </div>
+                        <div id="pg-output"></div>
+                    </div>
                 </div>
-            </div>
-            <div id="pg-status" role="status" aria-live="polite"></div>
-            <ul id="pg-errors" class="pg-errors">
-            </ul>
+                <div id="pg-status" role="status" aria-live="polite"></div>
+                <ul id="pg-errors" class="pg-errors">
+                </ul>
+            </main>
         </div>
         <script type="module" src="app.js"></script>
     </body>

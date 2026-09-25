@@ -1,0 +1,23 @@
+.menu-bar .right-buttons > a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  min-height: var(--menu-bar-height);
+  vertical-align: top;
+}
+
+button.chapter-fold-toggle {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+pre > code:focus-visible,
+.chapter-fold-toggle:focus-visible {
+  outline: 2px solid var(--links);
+  outline-offset: 2px;
+}

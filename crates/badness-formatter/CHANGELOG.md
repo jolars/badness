@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.0](https://github.com/jolars/badness/compare/badness-formatter-v0.9.0...badness-formatter-v0.10.0) (2026-09-27)
+
+### Features
+- **formatter:** make relation alignment width-aware ([`9cf602e`](https://github.com/jolars/badness/commit/9cf602e266e80838822c8d6651838609092121ea))
+
+### Bug Fixes
+- **formatter:** keep environment argument values intact ([`8b50184`](https://github.com/jolars/badness/commit/8b501845e18182ecb9eee6cf68cbe04f6601a744))
+- **formatter:** ignore trailing header comment width ([`21c5b49`](https://github.com/jolars/badness/commit/21c5b49baf8653dde26090de5b758fe393095d49))
+- **formatter:** fill textual optional arguments ([`34b86fe`](https://github.com/jolars/badness/commit/34b86fe1df0603461950c776a8b44c0d2aeb0ea3))
+- **formatter:** keep inline prose delimiters glued ([`5607cef`](https://github.com/jolars/badness/commit/5607ceff8415f199743a7ebe1b84a4faaef78425)), fixes [#188](https://github.com/jolars/badness/issues/188)
+
 ## [0.9.0](https://github.com/jolars/badness/compare/badness-formatter-v0.8.3...badness-formatter-v0.9.0) (2026-09-21)
 
 ### Features

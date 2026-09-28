@@ -327,6 +327,11 @@ pub(super) fn arg_slot(kind: ArgKind) -> &'static str {
     }
 }
 
+/// The concatenated `{}`/`[]` slots for an argument list.
+pub(super) fn arg_slots(args: &[crate::semantic::signature::ArgSpec]) -> String {
+    args.iter().map(|a| arg_slot(a.kind)).collect()
+}
+
 // --- Package / class name (CTAN metadata) -------------------------------------
 
 /// A `\usepackage`/`\documentclass` name the cursor sits on: the stem to look up in

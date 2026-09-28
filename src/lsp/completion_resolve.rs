@@ -23,7 +23,6 @@
 use super::*;
 use crate::bib::ast as bib_ast;
 use crate::bib::syntax::{SyntaxKind as BibSyntaxKind, SyntaxNode as BibSyntaxNode};
-use crate::semantic::signature::ArgSpec;
 use lsp_types::{Documentation, MarkupContent, MarkupKind};
 use serde::{Deserialize, Serialize};
 
@@ -164,10 +163,7 @@ fn first_author(authors: &str) -> String {
 fn command_detail(snapshot: &Analysis, file: &Path, name: &str) -> Option<(String, String)> {
     let scope = scope_for(snapshot, file);
     let (sig, provenance) = super::hover::lookup_command(&scope, name)?;
-    let mut detail = format!("\\{name}");
-    for arg in sig.args.iter() {
-        detail.push_str(super::hover::arg_slot(arg.kind));
-    }
+    let detail = format!("\\{name}{}", super::hover::arg_slots(&sig.args));
     Some((detail, super::hover::render_command(name, sig, &provenance)))
 }
 
@@ -176,7 +172,7 @@ fn command_detail(snapshot: &Analysis, file: &Path, name: &str) -> Option<(Strin
 fn environment_detail(snapshot: &Analysis, file: &Path, name: &str) -> Option<(String, String)> {
     let scope = scope_for(snapshot, file);
     let (sig, provenance) = super::hover::lookup_environment(&scope, name)?;
-    let detail = format!("\\begin{{{name}}}{}", arg_slots(&sig.args));
+    let detail = format!("\\begin{{{name}}}{}", super::hover::arg_slots(&sig.args));
     Some((
         detail,
         super::hover::render_environment(name, sig, &provenance),
@@ -191,13 +187,6 @@ fn scope_for(snapshot: &Analysis, file: &Path) -> SignatureDb {
         Some(source) => snapshot.scope_signatures(source).clone(),
         None => SignatureDb::default(),
     }
-}
-
-/// The concatenated `{}`/`[]` slots for an argument list.
-fn arg_slots(args: &[ArgSpec]) -> String {
-    args.iter()
-        .map(|a| super::hover::arg_slot(a.kind))
-        .collect()
 }
 
 #[cfg(test)]
@@ -366,5 +355,42 @@ mod tests {
         };
         let resolved = resolve_item(&db, item.clone());
         assert_eq!(resolved, item);
+    }
+
+    #[test]
+    fn command_completion_label_details_arity() {
+        let src = "\\v\n\\o";
+        let path = Path::new("/p/main.tex");
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(path, src.to_string());
+
+        let items_v = complete(&db, path, src, "\\v");
+        let vspace = items_v
+            .into_iter()
+            .find(|i| i.label == "vspace")
+            .expect("vspace candidate");
+        let vspace_detail = vspace
+            .label_details
+            .as_ref()
+            .and_then(|ld| ld.detail.as_deref());
+        assert!(
+            vspace_detail.is_some_and(|detail| !detail.is_empty()),
+            "expected non-empty label_details.detail for \\vspace, got {vspace_detail:?}"
+        );
+        assert_eq!(vspace_detail, Some("{}"));
+
+        let items_o = complete(&db, path, src, "\\o");
+        let omega = items_o
+            .into_iter()
+            .find(|i| i.label == "omega")
+            .expect("omega candidate");
+        let omega_detail = omega
+            .label_details
+            .as_ref()
+            .and_then(|ld| ld.detail.as_deref());
+        assert!(
+            omega_detail.is_none(),
+            "expected no label_details.detail for \\omega, got {omega_detail:?}"
+        );
     }
 }

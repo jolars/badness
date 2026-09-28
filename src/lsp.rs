@@ -91,18 +91,18 @@ use lsp_types::request::{
 use lsp_types::{
     ApplyWorkspaceEditParams, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CodeDescription, CompletionItem, CompletionItemKind,
-    CompletionList, CompletionOptions, CompletionParams, CompletionResponse, Diagnostic,
-    DiagnosticOptions, DiagnosticRelatedInformation, DiagnosticServerCapabilities,
-    DiagnosticSeverity, DiagnosticTag, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-    DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
-    DocumentDiagnosticReport, DocumentDiagnosticReportResult, DocumentFormattingParams,
-    DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams, DocumentLink,
-    DocumentLinkOptions, DocumentLinkParams, DocumentOnTypeFormattingOptions,
-    DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
-    DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandOptions, ExecuteCommandParams,
-    FileChangeType, FileSystemWatcher, FoldingRange, FoldingRangeParams,
-    FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
+    CompletionItemLabelDetails, CompletionList, CompletionOptions, CompletionParams,
+    CompletionResponse, Diagnostic, DiagnosticOptions, DiagnosticRelatedInformation,
+    DiagnosticServerCapabilities, DiagnosticSeverity, DiagnosticTag, DidChangeConfigurationParams,
+    DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
+    DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentHighlight,
+    DocumentHighlightKind, DocumentHighlightParams, DocumentLink, DocumentLinkOptions,
+    DocumentLinkParams, DocumentOnTypeFormattingOptions, DocumentOnTypeFormattingParams,
+    DocumentRangeFormattingParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    ExecuteCommandOptions, ExecuteCommandParams, FileChangeType, FileSystemWatcher, FoldingRange,
+    FoldingRangeParams, FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PositionEncodingKind,
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, Registration,
@@ -7116,7 +7116,7 @@ fn build_completion_items(
             crate::completion::candidates_with_symbols(ctx, sigs, model, declared, symbols)
                 .into_iter()
                 .map(|candidate| {
-                    let mut item = candidate_to_item(candidate, file.as_deref());
+                    let mut item = candidate_to_item(candidate, file.as_deref(), sigs);
                     if let Some(range) = replacement {
                         item.text_edit = Some(lsp_types::CompletionTextEdit::Edit(TextEdit {
                             range,
@@ -7133,7 +7133,11 @@ fn build_completion_items(
 /// Map a neutral [`CompletionCandidate`] onto an `lsp_types::CompletionItem`. A
 /// command/environment carries resolve `data` (its name + originating `file`) so
 /// its signature can be attached lazily; a label carries none.
-fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> CompletionItem {
+fn candidate_to_item(
+    candidate: CompletionCandidate,
+    file: Option<&Path>,
+    sigs: &SignatureDb,
+) -> CompletionItem {
     let kind = match candidate.kind {
         CandidateKind::Command => CompletionItemKind::FUNCTION,
         CandidateKind::Variable => CompletionItemKind::VARIABLE,
@@ -7145,6 +7149,18 @@ fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> Com
         CandidateKind::ColorModel => CompletionItemKind::ENUM_MEMBER,
         CandidateKind::TikzLibrary => CompletionItemKind::MODULE,
         CandidateKind::ArgumentEnum => CompletionItemKind::ENUM_MEMBER,
+    };
+    let label_details = match candidate.kind {
+        CandidateKind::Command => {
+            hover::lookup_command(sigs, &candidate.label).and_then(|(sig, _)| {
+                let slots = hover::arg_slots(&sig.args);
+                (!slots.is_empty()).then_some(CompletionItemLabelDetails {
+                    detail: Some(slots),
+                    description: None,
+                })
+            })
+        }
+        _ => None,
     };
     let data = file.and_then(|file| {
         let payload = match candidate.kind {
@@ -7172,6 +7188,7 @@ fn candidate_to_item(candidate: CompletionCandidate, file: Option<&Path>) -> Com
     });
     CompletionItem {
         label: candidate.label,
+        label_details,
         kind: Some(kind),
         insert_text: candidate.insert_text,
         insert_text_format: candidate.snippet.then_some(InsertTextFormat::SNIPPET),
@@ -7289,7 +7306,7 @@ fn package_completion_items(
         if seen.contains(&candidate.label) {
             continue;
         }
-        items.push(candidate_to_item(candidate, file.as_deref()));
+        items.push(candidate_to_item(candidate, file.as_deref(), sigs));
     }
     for (i, item) in items.iter_mut().enumerate() {
         // Attach the CTAN description as detail (when this stem has metadata and no

@@ -493,8 +493,8 @@ fn definition_body(call: &Call, definitions: &[u8]) -> Option<(Group, u8)> {
     let count = if let Some(argument) = call.arguments.iter().find(|a| a.specifier == b'p') {
         let atoms = argument.atoms(definitions)?;
         let mut count = 0;
-        let mut pairs = atoms.chunks_exact(2);
-        for pair in &mut pairs {
+        let (pairs, remainder) = atoms.as_chunks::<2>();
+        for pair in pairs {
             count += 1;
             if count > 9
                 || pair[0].kind != AtomKind::Hash
@@ -503,7 +503,7 @@ fn definition_body(call: &Call, definitions: &[u8]) -> Option<(Group, u8)> {
                 return None;
             }
         }
-        if !pairs.remainder().is_empty() {
+        if !remainder.is_empty() {
             return None;
         }
         count

@@ -7138,7 +7138,8 @@ fn build_completion_items(
             // `completionItem/resolve` repeats; unsaved buffers have none.
             let file = uri_to_fs_path(uri);
             let replacement = match ctx {
-                CompletionContext::CommandName { replace, .. } => {
+                CompletionContext::CommandName { replace, .. }
+                | CompletionContext::LabelRef { replace, .. } => {
                     Some(lsp_range(&text.line_index(), *replace))
                 }
                 _ => None,
@@ -8723,6 +8724,41 @@ mod tests {
             assert!(items.iter().any(|item| item.label == "demo:nn"));
             assert!(!items.iter().any(|item| item.label == "demo:n"));
         }
+    }
+
+    #[test]
+    fn label_completion_replaces_the_full_reference_key() {
+        let source = "\\label{eq:label}\n\\cref{eq:lab-or-wrong}\n";
+        let text = TextBuffer::new(source, PositionEncoding::Utf16);
+        let offset = source.find("\\cref{eq:lab").unwrap() + "\\cref{eq:lab".len();
+        let (line, character) = text.line_index().position(offset);
+        let uri = uri("file:///label-completion.tex");
+        let path = uri_to_path(&uri);
+        let texmf = TexmfConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let mut db = IncrementalDatabase::default();
+        let file = db.upsert_file(&path, source.to_owned());
+        db.reparse_stage_edits(file, None);
+        let items = compute_completion(
+            &db.snapshot(),
+            &uri,
+            &path,
+            &text,
+            Position::new(line, character),
+            &texmf,
+        );
+        let item = items.iter().find(|item| item.label == "eq:label").unwrap();
+        let Some(lsp_types::CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("label replacement edit")
+        };
+        let idx = text.line_index();
+        let range = idx.offset_at(edit.range.start.line, edit.range.start.character)
+            ..idx.offset_at(edit.range.end.line, edit.range.end.character);
+        let mut applied = source.to_owned();
+        applied.replace_range(range, &edit.new_text);
+        assert_eq!(applied, "\\label{eq:label}\n\\cref{eq:label}\n");
     }
 
     /// The byte offset of the first occurrence of `needle` in `text`.

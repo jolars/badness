@@ -49,7 +49,11 @@ pub enum CompletionContext {
     /// Inside a `\begin{…}` / `\end{…}` name group. `closing` is true for `\end`.
     EnvironmentName { prefix: String, closing: bool },
     /// Inside the key group of a `\ref`-family command (`\ref`, `\cref`, …).
-    LabelRef { prefix: String },
+    LabelRef {
+        prefix: String,
+        /// The typed key after the last comma, excluding surrounding whitespace.
+        replace: TextRange,
+    },
     /// Inside the key group of a `\cite`-family command. Keys come from the project
     /// bibliography (a cross-file snapshot query), so — like [`FilePath`] — this is
     /// resolved in the LSP layer, not by [`candidates`].
@@ -291,11 +295,8 @@ fn command_arg_context(
     let semantic_name = declared.command_like(name).unwrap_or(name);
     if ref_command(semantic_name).is_some() && index == 0 {
         // A `\cref{a,b|}` completes the key after the last comma.
-        let inner = group_prefix(group, offset);
-        let prefix = inner.rsplit(',').next().unwrap_or(&inner).trim_start();
-        return Some(CompletionContext::LabelRef {
-            prefix: prefix.to_string(),
-        });
+        let (prefix, replace) = comma_separated_key(group, offset);
+        return Some(CompletionContext::LabelRef { prefix, replace });
     }
     if cite_command(semantic_name).is_some() && index == 0 {
         // A `\cite{a,b|}` completes the key after the last comma, like `\cref`.
@@ -448,6 +449,36 @@ fn group_index(command: &SyntaxNode, group: &SyntaxNode) -> Option<usize> {
         .position(|child| &child == group)
 }
 
+/// The comma-separated key containing `offset`, with surrounding whitespace
+/// excluded. The replacement reaches the whole key, not just the prefix before
+/// the cursor, and never includes the group's closing brace.
+fn comma_separated_key(group: &SyntaxNode, offset: TextSize) -> (String, TextRange) {
+    let text = group.to_string();
+    let range = group.text_range();
+    let leading_brace = usize::from(text.starts_with('{'));
+    let trailing_brace = usize::from(text.ends_with('}'));
+    let inner_start = range.start() + TextSize::from(leading_brace as u32);
+    let inner_end = range.end() - TextSize::from(trailing_brace as u32);
+    let inner = &text[leading_brace..text.len() - trailing_brace];
+    let cursor = offset.clamp(inner_start, inner_end);
+    let cursor = usize::from(cursor - inner_start);
+    let field_start = inner[..cursor].rfind(',').map_or(0, |index| index + 1);
+    let field_end = cursor + inner[cursor..].find(',').unwrap_or(inner.len() - cursor);
+    let field = &inner[field_start..field_end];
+    let key = field.trim();
+    let key_start = field_start + field.len() - field.trim_start().len();
+    let key_end = key_start + key.len();
+    let prefix_end = cursor.clamp(key_start, key_end);
+
+    (
+        inner[key_start..prefix_end].to_string(),
+        TextRange::new(
+            inner_start + TextSize::from(key_start as u32),
+            inner_start + TextSize::from(key_end as u32),
+        ),
+    )
+}
+
 /// The inner text of `group` (braces dropped) from its start up to `offset` — the
 /// prefix the user has typed inside the braces.
 fn group_prefix(group: &SyntaxNode, offset: TextSize) -> String {
@@ -503,7 +534,7 @@ pub fn candidates_with_symbols(
         CompletionContext::EnvironmentName { prefix, closing } => {
             environment_candidates(user_sigs, prefix, *closing)
         }
-        CompletionContext::LabelRef { prefix } => label_candidates(model, prefix),
+        CompletionContext::LabelRef { prefix, .. } => label_candidates(model, prefix),
         CompletionContext::PackageName { prefix, kind } => package_candidates(*kind, prefix),
         CompletionContext::ColorName { prefix } => color_name_candidates(model, prefix),
         CompletionContext::ColorModel { prefix } => {
@@ -842,6 +873,7 @@ mod tests {
             classify_context_with_declarations(&root(src), at(src, "first,sec"), &declarations,),
             CompletionContext::LabelRef {
                 prefix: "sec".to_string(),
+                replace: TextRange::new(14.into(), 17.into()),
             }
         );
     }
@@ -957,7 +989,8 @@ mod tests {
         assert_eq!(
             classify(src, offset),
             CompletionContext::LabelRef {
-                prefix: "sec".to_string()
+                prefix: "sec".to_string(),
+                replace: TextRange::new(23.into(), 26.into()),
             }
         );
         let got = labels(src, offset);
@@ -965,13 +998,26 @@ mod tests {
     }
 
     #[test]
-    fn cref_completes_key_after_last_comma() {
-        let src = "\\label{a:one}\\label{a:two}\n\\cref{a:one,a}\n";
-        let offset = at(src, "\\cref{a:one,a");
+    fn ref_completion_after_closing_brace_preserves_the_brace() {
+        let src = "\\label{sec:intro}\n\\ref{sec}\n";
+        assert_eq!(
+            classify(src, at(src, "\\ref{sec}")),
+            CompletionContext::LabelRef {
+                prefix: "sec".to_string(),
+                replace: TextRange::new(23.into(), 26.into()),
+            }
+        );
+    }
+
+    #[test]
+    fn cref_completes_and_replaces_the_current_key() {
+        let src = "\\label{a:one}\\label{a:two}\n\\cref{a:one, a:wrong,other}\n";
+        let offset = at(src, "\\cref{a:one, a");
         assert_eq!(
             classify(src, offset),
             CompletionContext::LabelRef {
-                prefix: "a".to_string()
+                prefix: "a".to_string(),
+                replace: TextRange::new(40.into(), 47.into()),
             }
         );
         let got = labels(src, offset);

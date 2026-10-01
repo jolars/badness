@@ -183,6 +183,7 @@ fn schema_rejects_unknown_keys() {
 #[test]
 fn schema_rejects_invalid_enums_and_types() {
     for source in [
+        "extend = 42",
         "[format]\nitem-indent = 'same'",
         "[format]\nwrap = 'smart'",
         "[format]\nmath-wrap = 'never'",
@@ -195,6 +196,11 @@ fn schema_rejects_invalid_enums_and_types() {
             "schema accepted invalid value in:\n{source}"
         );
     }
+}
+
+#[test]
+fn schema_accepts_extend() {
+    assert!(validation_errors("extend = '../shared/badness.toml'").is_empty());
 }
 
 #[test]

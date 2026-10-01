@@ -2,10 +2,12 @@
 
 Badness is configured through a `badness.toml` file. All keys are optional and
 spelled in kebab-case; an unknown key or section is a hard error, not a silent
-no-op. Run `badness init` to write a commented starter file showing every key at
-its default.
+no-op. Run `badness init` to write a commented starter file with defaults and
+examples.
 
 ```toml
+# extend = "../shared/badness.toml"
+
 # Gitignore-style patterns to skip during directory discovery.
 # exclude = [".git/"]
 # extend-exclude = []
@@ -107,6 +109,34 @@ with `taplo-lsp`, Zed, and IntelliJ—can use the same URL through its TOML sche
 settings.
 
 ## Top level
+
+### `extend`
+
+Load another configuration file as a base. A relative path starts at the
+directory containing the file that declares `extend`; absolute paths and paths
+starting with `~/` also work. An extended file may itself use `extend`. A
+missing file or a cycle is an error.
+
+Badness merges tables by key, so a child can override one `[format]` setting
+while inheriting the others. Values in the child replace inherited values,
+including arrays. `extend-exclude` is the exception: its patterns append to the
+inherited patterns, in base-to-child order. Named `[commands]` and
+`[environments]` declarations merge by name. Relative paths in inherited
+settings use the selected config's path root. For project configs, that root is
+the selected config's directory.
+
+**Default value**: unset
+
+**Type**: string
+
+**Example**:
+
+```toml
+extend = "../shared/badness.toml"
+
+[format]
+line-width = 100
+```
 
 ### `exclude`
 

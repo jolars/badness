@@ -57,6 +57,11 @@ pub const DEFAULT_EXCLUDE: &[&str] = &[".git/"];
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
+    /// Path to a config file whose settings this file inherits. Relative paths
+    /// are resolved from the directory containing the file that declares them.
+    /// Chains are allowed; values in this file override inherited values.
+    #[serde(default)]
+    pub extend: Option<String>,
     /// Gitignore-style patterns to exclude from directory discovery, resolved
     /// relative to the directory containing this `badness.toml`. Applies to *both*
     /// `format` and `lint` (which share one file walk), so it is a top-level key,
@@ -500,11 +505,24 @@ impl std::error::Error for ConfigError {
 impl Config {
     /// Parse a `badness.toml` from disk and validate it.
     pub fn load_from(path: &Path) -> Result<Self, ConfigError> {
+        Self::load_from_with_paths(path).map(|(config, _)| config)
+    }
+
+    /// Load a config and return the files that contributed to it, leaf first.
+    /// The language server uses these paths to invalidate cached settings.
+    pub fn load_from_with_paths(path: &Path) -> Result<(Self, Vec<PathBuf>), ConfigError> {
         let text = fs::read_to_string(path).map_err(|source| ConfigError::Io {
             path: path.to_path_buf(),
             source,
         })?;
-        Self::parse_str(&text, path)
+        let table = parse_table(&text, path)?;
+        let mut chain = vec![path.to_path_buf()];
+        if !table.contains_key("extend") {
+            return Ok((Self::parse_str(&text, path)?, chain));
+        }
+        let merged = merge_extended(table, path, &mut chain)?;
+        let text = toml::to_string(&merged).expect("a parsed TOML table can be serialized");
+        Ok((Self::parse_str(&text, path)?, chain))
     }
 
     fn parse_str(text: &str, path: &Path) -> Result<Self, ConfigError> {
@@ -546,6 +564,12 @@ impl Config {
     /// filesystem root. The global user config is *not* consulted here; that
     /// fallback lives in [`resolve`](Self::resolve).
     pub fn discover(start: &Path) -> Result<Option<(PathBuf, Self)>, ConfigError> {
+        Self::discover_with_paths(start).map(|found| found.map(|(path, config, _)| (path, config)))
+    }
+
+    fn discover_with_paths(
+        start: &Path,
+    ) -> Result<Option<(PathBuf, Self, Vec<PathBuf>)>, ConfigError> {
         let canonical = start.canonicalize().map_err(|source| ConfigError::Io {
             path: start.to_path_buf(),
             source,
@@ -553,8 +577,8 @@ impl Config {
         for dir in canonical.ancestors() {
             let candidate = dir.join(CONFIG_FILE_NAME);
             if candidate.is_file() {
-                let config = Self::load_from(&candidate)?;
-                return Ok(Some((candidate, config)));
+                let (config, paths) = Self::load_from_with_paths(&candidate)?;
+                return Ok(Some((candidate, config, paths)));
             }
             if dir.join(".git").exists() {
                 return Ok(None);
@@ -575,7 +599,17 @@ impl Config {
         no_config: bool,
         anchor: &Path,
     ) -> Result<(Self, ConfigSource), ConfigError> {
-        Self::resolve_with_fallbacks(
+        Self::resolve_with_paths(explicit, no_config, anchor)
+            .map(|(config, source, _)| (config, source))
+    }
+
+    /// Resolve configuration and return every file in its `extend` chain.
+    pub fn resolve_with_paths(
+        explicit: Option<&Path>,
+        no_config: bool,
+        anchor: &Path,
+    ) -> Result<(Self, ConfigSource, Vec<PathBuf>), ConfigError> {
+        Self::resolve_with_fallbacks_and_paths(
             explicit,
             no_config,
             anchor,
@@ -587,6 +621,7 @@ impl Config {
     /// [`resolve`](Self::resolve) with the env and global fallback paths
     /// injected, so tests can exercise them without touching the real
     /// environment or home directory.
+    #[cfg(test)]
     fn resolve_with_fallbacks(
         explicit: Option<&Path>,
         no_config: bool,
@@ -594,31 +629,143 @@ impl Config {
         env: Option<&Path>,
         global: Option<&Path>,
     ) -> Result<(Self, ConfigSource), ConfigError> {
+        Self::resolve_with_fallbacks_and_paths(explicit, no_config, anchor, env, global)
+            .map(|(config, source, _)| (config, source))
+    }
+
+    fn resolve_with_fallbacks_and_paths(
+        explicit: Option<&Path>,
+        no_config: bool,
+        anchor: &Path,
+        env: Option<&Path>,
+        global: Option<&Path>,
+    ) -> Result<(Self, ConfigSource, Vec<PathBuf>), ConfigError> {
         if no_config {
-            return Ok((Self::default(), ConfigSource::None));
+            return Ok((Self::default(), ConfigSource::None, Vec::new()));
         }
         if let Some(path) = explicit {
-            let config = Self::load_from(path)?;
-            return Ok((config, ConfigSource::Explicit(path.to_path_buf())));
+            let (config, paths) = Self::load_from_with_paths(path)?;
+            return Ok((config, ConfigSource::Explicit(path.to_path_buf()), paths));
         }
-        if let Some((path, config)) = Self::discover(anchor)? {
-            return Ok((config, ConfigSource::Discovered(path)));
+        if let Some((path, config, paths)) = Self::discover_with_paths(anchor)? {
+            return Ok((config, ConfigSource::Discovered(path), paths));
         }
         // A set `$BADNESS_CONFIG` shadows the global config entirely, and a
         // missing or broken file is a hard error rather than a fall-through:
         // it is the config that would apply, and silently ignoring it would
         // hide a typo'd path indefinitely.
         if let Some(path) = env {
-            let config = Self::load_from(path)?;
-            return Ok((config, ConfigSource::Env(path.to_path_buf())));
+            let (config, paths) = Self::load_from_with_paths(path)?;
+            return Ok((config, ConfigSource::Env(path.to_path_buf()), paths));
         }
         // Same rationale: a broken global config is a hard error, not a
         // silent fall-through to built-in defaults.
         if let Some(path) = global {
-            let config = Self::load_from(path)?;
-            return Ok((config, ConfigSource::Global(path.to_path_buf())));
+            let (config, paths) = Self::load_from_with_paths(path)?;
+            return Ok((config, ConfigSource::Global(path.to_path_buf()), paths));
         }
-        Ok((Self::default(), ConfigSource::None))
+        Ok((Self::default(), ConfigSource::None, Vec::new()))
+    }
+}
+
+fn parse_table(text: &str, path: &Path) -> Result<toml::Table, ConfigError> {
+    toml::from_str(text).map_err(|err: toml::de::Error| {
+        let (line, column) = err
+            .span()
+            .map(|span| byte_offset_to_line_col(text, span.start))
+            .unwrap_or((1, 1));
+        ConfigError::Parse {
+            path: path.to_path_buf(),
+            line,
+            column,
+            message: err.message().to_owned(),
+        }
+    })
+}
+
+fn canonical_config_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn merge_extended(
+    mut child: toml::Table,
+    path: &Path,
+    chain: &mut Vec<PathBuf>,
+) -> Result<toml::Table, ConfigError> {
+    let Some(extend) = child.get("extend") else {
+        return Ok(child);
+    };
+    let extend = extend.as_str().ok_or_else(|| ConfigError::InvalidValue {
+        path: Some(path.to_path_buf()),
+        field: "extend",
+        message: "must be a string path".to_owned(),
+    })?;
+    let base = extend_path(extend, path);
+    let canonical = canonical_config_path(&base);
+    if chain
+        .iter()
+        .any(|existing| canonical_config_path(existing) == canonical)
+    {
+        return Err(ConfigError::InvalidValue {
+            path: Some(path.to_path_buf()),
+            field: "extend",
+            message: format!("configuration cycle: {}", canonical.display()),
+        });
+    }
+    chain.push(base.clone());
+    let text = fs::read_to_string(&base).map_err(|source| ConfigError::Io {
+        path: base.clone(),
+        source,
+    })?;
+    let parent = merge_extended(parse_table(&text, &base)?, &base, chain)?;
+    merge_config_tables(&mut child, parent);
+    Ok(child)
+}
+
+fn extend_path(extend: &str, path: &Path) -> PathBuf {
+    let expanded = if let Some(home) = dirs::home_dir() {
+        if extend == "~" {
+            home
+        } else if let Some(rest) = extend.strip_prefix("~/") {
+            home.join(rest)
+        } else {
+            PathBuf::from(extend)
+        }
+    } else {
+        PathBuf::from(extend)
+    };
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        path.parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(expanded)
+    }
+}
+
+/// Fill keys absent from the child, recursively preserving sibling settings.
+/// Only `extend-exclude` accumulates across files; other arrays replace.
+fn merge_config_tables(child: &mut toml::Table, parent: toml::Table) {
+    for (key, inherited) in parent {
+        match child.get_mut(&key) {
+            None => {
+                child.insert(key, inherited);
+            }
+            Some(current)
+                if key == "extend-exclude" && current.is_array() && inherited.is_array() =>
+            {
+                let mut combined = inherited.as_array().expect("checked array").clone();
+                combined.extend(current.as_array().expect("checked array").iter().cloned());
+                *current = toml::Value::Array(combined);
+            }
+            Some(toml::Value::Table(current)) if inherited.is_table() => {
+                merge_config_tables(
+                    current,
+                    inherited.as_table().expect("checked table").clone(),
+                );
+            }
+            Some(_) => {}
+        }
     }
 }
 
@@ -740,6 +887,81 @@ mod tests {
 
     fn parse(text: &str) -> Result<Config, ConfigError> {
         Config::parse_str(text, Path::new("badness.toml"))
+    }
+
+    #[test]
+    fn extend_merges_sections_and_declarations() {
+        let dir = tempdir().unwrap();
+        let base = dir.path().join("base.toml");
+        fs::write(&base, "exclude = ['base/']\nextend-exclude = ['one/']\n[format]\nline-width = 60\nwrap = 'preserve'\n[lint]\nselect = ['duplicate-label']\n[commands.refs]\nlike = 'cref'\n[environments.myenv]\nlike = 'align'\n").unwrap();
+        let child_dir = dir.path().join("project");
+        fs::create_dir(&child_dir).unwrap();
+        let child = child_dir.join("badness.toml");
+        fs::write(&child, "extend = '../base.toml'\nexclude = ['child/']\nextend-exclude = ['two/']\n[format]\nline-width = 90\n[lint]\nignore = ['duplicate-label']\n[commands.refs]\nlike = 'Cref'\n[environments.myenv]\nbegin = ['\\bea']\n").unwrap();
+
+        let config = Config::load_from(&child).unwrap();
+        assert_eq!(
+            config.exclude.as_deref(),
+            Some(["child/".to_owned()].as_slice())
+        );
+        assert_eq!(config.extend_exclude, ["one/", "two/"]);
+        assert_eq!(config.format.line_width, 90);
+        assert_eq!(config.format.wrap, Some(WrapModeConfig::Preserve));
+        assert_eq!(config.lint.select, Some(vec!["duplicate-label".to_owned()]));
+        assert_eq!(config.lint.ignore, ["duplicate-label"]);
+        assert_eq!(config.commands["refs"].like.as_deref(), Some("Cref"));
+        assert_eq!(config.environments["myenv"].like.as_deref(), Some("align"));
+        assert_eq!(config.environments["myenv"].begin[0].as_str(), "bea");
+    }
+
+    #[test]
+    fn extend_follows_transitive_chain() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.toml"), "[format]\nwrap = 'stable'\n").unwrap();
+        fs::write(
+            dir.path().join("b.toml"),
+            "extend = 'a.toml'\n[format]\nline-width = 42\n",
+        )
+        .unwrap();
+        let child = dir.path().join("badness.toml");
+        fs::write(&child, "extend = 'b.toml'\n").unwrap();
+        let (config, paths) = Config::load_from_with_paths(&child).unwrap();
+        assert_eq!(config.format.line_width, 42);
+        assert_eq!(config.format.wrap, Some(WrapModeConfig::Stable));
+        assert_eq!(
+            paths,
+            [child, dir.path().join("b.toml"), dir.path().join("a.toml")]
+        );
+    }
+
+    #[test]
+    fn extend_reports_cycles_and_missing_files() {
+        let dir = tempdir().unwrap();
+        let child = dir.path().join("badness.toml");
+        fs::write(&child, "extend = 'missing.toml'\n").unwrap();
+        let err = Config::load_from(&child).unwrap_err().to_string();
+        assert!(err.contains("missing.toml"), "{err}");
+
+        fs::write(&child, "extend = 'base.toml'\n").unwrap();
+        fs::write(dir.path().join("base.toml"), "extend = 'badness.toml'\n").unwrap();
+        let err = Config::load_from(&child).unwrap_err().to_string();
+        assert!(err.contains("cycle"), "{err}");
+        assert!(err.contains("base.toml"), "{err}");
+    }
+
+    #[test]
+    fn extend_rejects_non_string_and_reports_base_parse_errors() {
+        let dir = tempdir().unwrap();
+        let child = dir.path().join("badness.toml");
+        fs::write(&child, "extend = 42\n").unwrap();
+        let err = Config::load_from(&child).unwrap_err().to_string();
+        assert!(err.contains("extend"), "{err}");
+
+        let base = dir.path().join("base.toml");
+        fs::write(&child, "extend = 'base.toml'\n").unwrap();
+        fs::write(&base, "[format\n").unwrap();
+        let err = Config::load_from(&child).unwrap_err().to_string();
+        assert!(err.contains(&base.display().to_string()), "{err}");
     }
 
     #[test]

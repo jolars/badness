@@ -427,9 +427,12 @@ fn build_exclude_filter(
     })
 }
 
-/// A commented starter `badness.toml` showing every key at its default.
+/// A commented starter `badness.toml` showing defaults and examples.
 const STARTER_CONFIG: &str = "\
-# badness configuration. All keys are optional; values shown are the defaults.
+# badness configuration. All keys are optional; values are defaults or examples.
+
+# Inherit settings from another config; relative paths use this file's directory.
+# extend = \"../shared/badness.toml\"
 
 # Gitignore-style patterns to skip during directory discovery. `exclude` replaces
 # the built-in default set (`.git/`); `extend-exclude` adds on top of it. Both

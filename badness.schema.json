@@ -336,6 +336,14 @@
         "null"
       ]
     },
+    "extend": {
+      "default": null,
+      "description": "Path to a config file whose settings this file inherits. Relative paths\nare resolved from the directory containing the file that declares them.\nChains are allowed; values in this file override inherited values.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "extend-exclude": {
       "default": [],
       "description": "Gitignore-style patterns added *in addition to* whichever base set\n[`exclude`](Self::exclude) selects (Ruff's `extend-exclude` semantics). Use\nthis to skip a few extra paths without restating the defaults.",

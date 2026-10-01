@@ -378,7 +378,7 @@ struct GlobalState {
     /// analog of the push path's `RelintAll`).
     supports_diagnostic_refresh: bool,
     /// The client advertised `workspace.didChangeWatchedFiles.dynamicRegistration`, so
-    /// on `initialized` we register watchers for `**/*.{tex,bib}` and `badness.toml`
+    /// on `initialized` we register watchers for `**/*.{tex,bib}` and TOML files
     /// and reanalyze on on-disk edits to non-open project files.
     supports_dynamic_watchers: bool,
     supports_completion_label_details: bool,
@@ -630,30 +630,25 @@ impl ProjectConfigFingerprint {
 struct CachedSettings {
     resolved: ResolvedSettings,
     project_fingerprint: Option<ProjectConfigFingerprint>,
-    /// The resolved environment/global file may live outside the project walk.
-    source_fingerprint: Option<(PathBuf, Option<ConfigFileStamp>)>,
+    /// Extended files, and environment/global files, may live outside the walk.
+    source_fingerprints: Vec<(PathBuf, PathBuf, Option<ConfigFileStamp>)>,
 }
 
 impl CachedSettings {
-    fn new(resolved: ResolvedSettings, anchor: &Path, source: Option<PathBuf>) -> Self {
+    fn new(resolved: ResolvedSettings, anchor: &Path, paths: Vec<PathBuf>) -> Self {
         let project_fingerprint = ProjectConfigFingerprint::new(anchor);
-        let source_fingerprint = source
-            .filter(|path| {
-                !project_fingerprint.as_ref().is_some_and(|project| {
-                    project
-                        .candidates
-                        .iter()
-                        .any(|(candidate, _)| candidate == path)
-                })
-            })
+        let source_fingerprints = paths
+            .into_iter()
             .map(|path| {
                 let stamp = config_file_stamp(&path);
-                (path, stamp)
-            });
+                let canonical = canonical_config_event_path(&path);
+                (path, canonical, stamp)
+            })
+            .collect();
         Self {
             resolved,
             project_fingerprint,
-            source_fingerprint,
+            source_fingerprints,
         }
     }
 
@@ -662,9 +657,12 @@ impl CachedSettings {
             .as_ref()
             .is_some_and(|project| project.is_fresh(anchor))
             && self
-                .source_fingerprint
-                .as_ref()
-                .is_none_or(|(path, stamp)| *stamp == config_file_stamp(path))
+                .source_fingerprints
+                .iter()
+                .all(|(path, canonical, stamp)| {
+                    *stamp == config_file_stamp(path)
+                        && *canonical == canonical_config_event_path(path)
+                })
     }
 }
 
@@ -743,10 +741,9 @@ impl GlobalState {
         {
             return cached.resolved.clone();
         }
-        let (resolved, source_path) = match Config::resolve(None, false, &anchor) {
-            Ok((config, source)) => {
+        let (resolved, source_paths) = match Config::resolve_with_paths(None, false, &anchor) {
+            Ok((config, source, paths)) => {
                 let present = source.path().is_some();
-                let source_path = source.path().map(Path::to_path_buf);
                 let mut resolved =
                     ResolvedSettings::from_config(&config, present, &self.editor_settings);
                 if present {
@@ -773,7 +770,7 @@ impl GlobalState {
                         resolved.build.root = Some(root.join(build_root));
                     }
                 }
-                (resolved, source_path)
+                (resolved, paths)
             }
             // No good channel to report a bad/unreadable config; fall back without
             // caching so a fix is picked up next time.
@@ -781,7 +778,7 @@ impl GlobalState {
         };
         self.config_cache.insert(
             anchor.clone(),
-            CachedSettings::new(resolved.clone(), &anchor, source_path),
+            CachedSettings::new(resolved.clone(), &anchor, source_paths),
         );
         resolved
     }
@@ -1712,7 +1709,7 @@ fn on_notification(
 const WATCHED_FILES_REGISTRATION_ID: &str = "badness-watched-files";
 
 /// Dynamically register file watchers for the project's on-disk leaves
-/// (`**/*.{tex,bib}`) and the config file (`badness.toml`), so out-of-editor edits to
+/// (`**/*.{tex,bib}`) and TOML config files, so out-of-editor edits to
 /// non-open includes reanalyze open documents. Called once right after the initialize
 /// handshake. A no-op when the client lacks
 /// `didChangeWatchedFiles.dynamicRegistration` (we then rely on seed-on-open). The
@@ -1728,7 +1725,7 @@ fn register_file_watchers(connection: &Connection, state: &mut GlobalState) {
                 kind: None,
             },
             FileSystemWatcher {
-                glob_pattern: GlobPattern::String("**/badness.toml".to_owned()),
+                glob_pattern: GlobPattern::String("**/*.toml".to_owned()),
                 kind: None,
             },
         ],
@@ -1755,7 +1752,7 @@ fn register_file_watchers(connection: &Connection, state: &mut GlobalState) {
 
 /// Handle a `workspace/didChangeWatchedFiles` batch. For each event on a **non-open**
 /// file (an open buffer's overlay text is authoritative, so it is skipped — `didChange`
-/// keeps it current): a `badness.toml` change clears the config cache and re-lints open
+/// keeps it current): a config change clears the config cache and re-lints open
 /// docs; a `.tex`/`.bib` change is forwarded to the worker to re-read/evict and re-lint.
 fn on_watched_files_change(
     connection: &Connection,
@@ -1772,9 +1769,21 @@ fn on_watched_files_change(
         if state.documents.keys().any(|open| uri_to_path(open) == path) {
             continue;
         }
-        if path.file_name().is_some_and(|name| name == "badness.toml") {
+        let canonical_path = canonical_config_event_path(&path);
+        let config_dependency_changed = path.extension().is_some_and(|ext| ext == "toml")
+            && state.config_cache.values().any(|cached| {
+                cached
+                    .source_fingerprints
+                    .iter()
+                    .any(|(_, source, _)| *source == canonical_path)
+            });
+        if path.file_name().is_some_and(|name| name == "badness.toml") || config_dependency_changed
+        {
             config_changed = true;
-        } else {
+        } else if matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("tex" | "bib")
+        ) {
             let _ = job_tx.send(WorkerJob::WatchedChange {
                 path,
                 deleted: event.typ == FileChangeType::DELETED,
@@ -1782,12 +1791,16 @@ fn on_watched_files_change(
         }
     }
     if config_changed {
-        // A discovered `badness.toml` changed on disk: drop cached resolutions so the
+        // A config file changed on disk: drop cached resolutions so the
         // next analyze re-reads it, then re-lint open docs (mirrors
         // `didChangeConfiguration`, plus the relint a fresh config implies).
         state.config_cache.clear();
         relint_all_open(connection, state, job_tx);
     }
+}
+
+fn canonical_config_event_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Apply a batch of `didChange` content changes to `buffer`, in order, and report
@@ -8516,7 +8529,7 @@ mod tests {
             CachedSettings::new(
                 ResolvedSettings::from_editor(&EditorSettings::default()),
                 project.path(),
-                Some(source.clone()),
+                vec![source.clone()],
             )
         };
         let cached = snapshot();
@@ -8535,6 +8548,27 @@ mod tests {
         assert!(cached.is_fresh(project.path()));
         std::fs::remove_file(&source).unwrap();
         assert!(!cached.is_fresh(project.path()));
+    }
+
+    #[test]
+    fn resolve_settings_refreshes_when_extended_config_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("shared.toml");
+        std::fs::write(&base, "[format]\nline-width = 40\n").unwrap();
+        std::fs::write(dir.path().join("badness.toml"), "extend = 'shared.toml'\n").unwrap();
+        let uri = file_uri_in(dir.path());
+        let mut state = state_with_editor(EditorSettings::default());
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 40);
+
+        let modified = std::fs::metadata(&base).unwrap().modified().unwrap();
+        std::fs::write(&base, "[format]\nline-width = 60\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&base)
+            .unwrap()
+            .set_modified(modified + std::time::Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(state.resolve_settings(&uri).style.line_width, 60);
     }
 
     #[test]

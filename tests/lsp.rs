@@ -6541,7 +6541,7 @@ fn lsp_registers_file_watchers_on_initialized() {
         "expected the tex/bib glob, got {globs:?}"
     );
     assert!(
-        globs.contains(&"**/badness.toml".to_owned()),
+        globs.contains(&"**/*.toml".to_owned()),
         "expected the config glob, got {globs:?}"
     );
 
@@ -6683,6 +6683,35 @@ fn lsp_watched_config_change_reanalyzes_open_doc() {
         "deprecated-command must stop firing once the config ignores it, got {:?}",
         diags.diagnostics
     );
+
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_watched_extended_config_change_reanalyzes_open_doc() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let main_path = dir.path().join("main.tex");
+    let base_path = dir.path().join("shared.toml");
+    let main = "\\bf hi\n";
+    std::fs::write(&main_path, main).unwrap();
+    std::fs::write(&base_path, "[lint]\nignore = []\n").unwrap();
+    std::fs::write(dir.path().join("badness.toml"), "extend = 'shared.toml'\n").unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    recv_diagnostics_matching(&client, &uri, |codes| {
+        codes.iter().any(|c| c == "deprecated-command")
+    });
+
+    std::fs::write(&base_path, "[lint]\nignore = ['deprecated-command']\n").unwrap();
+    did_change_watched_files(
+        &client,
+        &[(path_to_file_uri(&base_path), FileChangeType::CHANGED)],
+    );
+    recv_diagnostics_matching(&client, &uri, |codes| {
+        !codes.iter().any(|c| c == "deprecated-command")
+    });
 
     shutdown(&client, server_thread);
 }

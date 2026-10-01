@@ -8761,6 +8761,39 @@ mod tests {
         assert_eq!(applied, "\\label{eq:label}\n\\cref{eq:label}\n");
     }
 
+    #[test]
+    fn label_completion_is_not_offered_outside_the_key_range() {
+        let source = "\\label{eq:label}\n\\cref{a, eq:lab-or-wrong }\n";
+        let text = TextBuffer::new(source, PositionEncoding::Utf16);
+        let uri = uri("file:///label-completion.tex");
+        let path = uri_to_path(&uri);
+        let texmf = TexmfConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let mut db = IncrementalDatabase::default();
+        let file = db.upsert_file(&path, source.to_owned());
+        db.reparse_stage_edits(file, None);
+
+        for needle in [
+            "\\cref{a,",
+            "\\cref{a, eq:lab-or-wrong ",
+            "\\cref{a, eq:lab-or-wrong }",
+        ] {
+            let offset = source.find(needle).unwrap() + needle.len();
+            let (line, character) = text.line_index().position(offset);
+            let items = compute_completion(
+                &db.snapshot(),
+                &uri,
+                &path,
+                &text,
+                Position::new(line, character),
+                &texmf,
+            );
+            assert!(items.is_empty(), "unexpected completion after {needle:?}");
+        }
+    }
+
     /// The byte offset of the first occurrence of `needle` in `text`.
     fn offset_of(text: &str, needle: &str) -> usize {
         text.find(needle).expect("needle present")

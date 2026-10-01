@@ -296,6 +296,9 @@ fn command_arg_context(
     if ref_command(semantic_name).is_some() && index == 0 {
         // A `\cref{a,b|}` completes the key after the last comma.
         let (prefix, replace) = comma_separated_key(group, offset);
+        if offset < replace.start() || offset > replace.end() {
+            return None;
+        }
         return Some(CompletionContext::LabelRef { prefix, replace });
     }
     if cite_command(semantic_name).is_some() && index == 0 {
@@ -998,15 +1001,20 @@ mod tests {
     }
 
     #[test]
-    fn ref_completion_after_closing_brace_preserves_the_brace() {
+    fn ref_completion_after_closing_brace_is_not_offered() {
         let src = "\\label{sec:intro}\n\\ref{sec}\n";
         assert_eq!(
             classify(src, at(src, "\\ref{sec}")),
-            CompletionContext::LabelRef {
-                prefix: "sec".to_string(),
-                replace: TextRange::new(23.into(), 26.into()),
-            }
+            CompletionContext::None
         );
+    }
+
+    #[test]
+    fn ref_completion_outside_trimmed_key_is_not_offered() {
+        let src = "\\label{sec:intro}\n\\cref{a, sec }\n";
+        for offset in [at(src, "\\cref{a,"), at(src, "\\cref{a, sec ")] {
+            assert_eq!(classify(src, offset), CompletionContext::None);
+        }
     }
 
     #[test]

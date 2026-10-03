@@ -1,29 +1,33 @@
 {
   "manifest-version": 1,
-  "baseline-sha": "8b501845e18182ecb9eee6cf68cbe04f6601a744",
+  "baseline-sha": "7b73d1523b3c5ac613b0de5611d0ebb327baf2e2",
   "release-targets": [
     {
       "path": ".",
-      "version": "0.25.0",
-      "tag": "v0.25.0",
+      "version": "0.26.0",
+      "tag": "v0.26.0",
       "dependencies": [
-        "crates/badness-formatter"
+        "crates/badness-formatter",
+        "crates/badness-parser"
       ]
     },
     {
       "path": "crates/badness-formatter",
-      "version": "0.10.0",
-      "tag": "badness-formatter-v0.10.0"
+      "version": "0.10.1",
+      "tag": "badness-formatter-v0.10.1",
+      "dependencies": [
+        "crates/badness-parser"
+      ]
     },
     {
       "path": "crates/badness-parser",
-      "version": "0.10.0",
-      "tag": "badness-parser-v0.10.0"
+      "version": "0.11.0",
+      "tag": "badness-parser-v0.11.0"
     },
     {
       "path": "editors/code",
-      "version": "0.25.0",
-      "tag": "badness-code-v0.25.0",
+      "version": "0.26.0",
+      "tag": "badness-code-v0.26.0",
       "dependencies": [
         "."
       ]
@@ -32,21 +36,30 @@
   "pending-release-targets": [
     {
       "path": ".",
-      "version": "0.25.0",
-      "tag": "v0.25.0",
+      "version": "0.26.0",
+      "tag": "v0.26.0",
       "dependencies": [
-        "crates/badness-formatter"
+        "crates/badness-formatter",
+        "crates/badness-parser"
       ]
     },
     {
       "path": "crates/badness-formatter",
-      "version": "0.10.0",
-      "tag": "badness-formatter-v0.10.0"
+      "version": "0.10.1",
+      "tag": "badness-formatter-v0.10.1",
+      "dependencies": [
+        "crates/badness-parser"
+      ]
+    },
+    {
+      "path": "crates/badness-parser",
+      "version": "0.11.0",
+      "tag": "badness-parser-v0.11.0"
     },
     {
       "path": "editors/code",
-      "version": "0.25.0",
-      "tag": "badness-code-v0.25.0",
+      "version": "0.26.0",
+      "tag": "badness-code-v0.26.0",
       "dependencies": [
         "."
       ]

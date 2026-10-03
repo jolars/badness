@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.26.0](https://github.com/jolars/badness/compare/v0.25.0...v0.26.0) (2026-10-03)
+
+### Features
+
+- lint lonely items in document body ([`7b73d15`](https://github.com/jolars/badness/commit/7b73d1523b3c5ac613b0de5611d0ebb327baf2e2))
+- **config:** support extending config files ([`a376f19`](https://github.com/jolars/badness/commit/a376f1976c9532b19d54e178f2df2ee5fd2a3ce8))
+- **lsp:** distinguish symbol completions ([`92ed0e4`](https://github.com/jolars/badness/commit/92ed0e486bd7700fe99edfe99725c52882ea0196)), closes [#190](https://github.com/jolars/badness/issues/190)
+- **lsp:** show command signatures in completion ([`9d5d913`](https://github.com/jolars/badness/commit/9d5d913b36843c606953e922f91e19b129dd45a2)), fixes [#190](https://github.com/jolars/badness/issues/190)
+
+### Bug Fixes
+
+- constrain label completion to key range ([`19230cc`](https://github.com/jolars/badness/commit/19230cc45ca418f12f6a4cf3fedd67cd12a2e09f))
+- replace full reference completion keys ([`cc2ab0e`](https://github.com/jolars/badness/commit/cc2ab0e167c9d9713dfafe8fb2f7f6c23db1d8b4))
+- **lint:** honor simple equation reference ranges ([`1b43349`](https://github.com/jolars/badness/commit/1b43349293d0a3ca6667d1298a2e8931dc0e7db4)), refs [#195](https://github.com/jolars/badness/issues/195)
+- **format:** normalize algorithm2e statement spacing ([`aaff9b9`](https://github.com/jolars/badness/commit/aaff9b96397c3f324231eec8e30bd7360165196c)), fixes [#193](https://github.com/jolars/badness/issues/193)
+- **lsp:** broaden command completion kinds ([`5474ca2`](https://github.com/jolars/badness/commit/5474ca245b7c5393ef97ae4801c06a4020ab3dc3)), refs [#190](https://github.com/jolars/badness/issues/190)
+
+### Dependencies
+
+- updated crates/badness-formatter to v0.10.1
+- updated crates/badness-parser to v0.11.0
+
 ## [0.25.0](https://github.com/jolars/badness/compare/v0.24.0...v0.25.0) (2026-09-27)
 
 ### Features

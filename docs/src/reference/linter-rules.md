@@ -1102,6 +1102,28 @@ warning: label-before-caption
   |   ^^^^^^^^^^^^^^^^ `\label` before `\captionof` in this `minipage` does not capture the caption number
 ```
 
+## `lonely-item`
+
+Flag `\item` written directly in the `document` environment, where LaTeX reports a lonely item because there is no list. The rule leaves items inside other environments, command arguments, low-level `\list`/`\trivlist` pairs, and standalone fragments alone because their list context may come from a custom definition or an including file. Report-only: the intended list type and boundaries cannot be inferred from the item.
+
+This rule is **enabled by default**.
+
+An item directly in the document body has no list:
+
+```tex
+\begin{document}
+\item A
+\end{document}
+```
+
+```text
+error: lonely-item
+ --> example.tex:2:1
+  |
+2 | \item A
+  | ^^^^^ `\item` has no enclosing list environment
+```
+
 ## Suppression
 
 To suppress a rule at a single site, use a comment directive:

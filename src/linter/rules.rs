@@ -38,6 +38,7 @@ pub mod indented_docstrip_guard;
 pub mod inert_suppression;
 pub mod invalid_macrocode_frame;
 pub mod label_before_caption;
+pub mod lonely_item;
 pub mod makeat_macro;
 pub mod math_operator_name;
 pub mod missing_nonbreaking_space;
@@ -76,6 +77,7 @@ pub use indented_docstrip_guard::IndentedDocstripGuard;
 pub use inert_suppression::InertSuppression;
 pub use invalid_macrocode_frame::InvalidMacrocodeFrame;
 pub use label_before_caption::LabelBeforeCaption;
+pub use lonely_item::LonelyItem;
 pub use makeat_macro::MakeatMacro;
 pub use math_operator_name::MathOperatorName;
 pub use missing_nonbreaking_space::MissingNonbreakingSpace;
@@ -775,6 +777,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(RedundantScriptBraces),
         Box::new(UnclosedMathDelimiter),
         Box::new(LabelBeforeCaption),
+        Box::new(LonelyItem),
     ]
 }
 
@@ -870,6 +873,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "redundant-script-braces",
     "unclosed-math-delimiter",
     "label-before-caption",
+    "lonely-item",
 ];
 
 /// Retired LaTeX rule ids that remain recognized in configuration.

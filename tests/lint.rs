@@ -28,6 +28,18 @@ fn lint(src: &str) -> Vec<(&'static str, Severity)> {
 }
 
 #[test]
+fn lonely_item_runs_through_the_public_driver() {
+    let findings = lint("\\documentclass{article}\n\\begin{document}\n\\item A\n\\end{document}\n");
+    assert_eq!(
+        findings
+            .into_iter()
+            .filter(|(rule, _)| *rule == "lonely-item")
+            .collect::<Vec<_>>(),
+        vec![("lonely-item", Severity::Error)]
+    );
+}
+
+#[test]
 fn extra_alignment_tab_runs_through_the_public_driver() {
     let findings = lint(
         "\\begin{tabular}{ll}\n  a & b & c \\\\\n+\\end{tabular}\n\n\\begin{tabular}{lll}\n  a & b \\\\\n+\\end{tabular}\n",

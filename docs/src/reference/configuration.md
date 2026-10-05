@@ -316,6 +316,11 @@ rewrapping would push a `%` off column 0. Asking for `wrap = "reflow"` on a
 `.dtx` cannot corrupt it; asking for `wrap = "preserve"` on a `.tex` is a
 stylistic choice, not a safety one.
 
+Beamer overlay bodies in `\only`, `\uncover`, `\visible`, `\invisible`,
+`\onslide`, `\action`, `\alt`, and `\temporal` retain their authored line breaks
+in every wrap mode. Multiline bodies stay multiline, and inline bodies stay
+inline even when they exceed `line-width`. Indentation still normalizes.
+
 Code, in practice, has little to reflow: expl3 regions
 (`\ExplSyntaxOn`…`\ExplSyntaxOff`) are laid out by their own rules whatever
 `wrap` says, and a source line consisting only of commands keeps its own line.

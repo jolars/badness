@@ -731,6 +731,15 @@ spelling is the single space that newline reproduces. Interior blank lines,
 comments, embedded newlines, and forced child breaks select a block form; edge
 blank lines cannot select it because that form trims them away.
 
+Recognized Beamer overlay bodies are a Tier 2 exception. The formatter matches
+the complete body slots of `\only`, `\uncover`, `\visible`, `\invisible`,
+`\onslide`, `\action`, `\alt`, and `\temporal`, including bounded angle
+specifications left generic by the parser. These bodies keep authored line
+breaks and inline gaps while their indentation normalizes. Width does not reflow
+them. Each emitted gap retains its line structure on the next pass, including at
+the braces, so both inline and multiline bodies are fixed points. Unmatched
+syntax and groups beyond the wrapper's body slots keep ordinary group layout.
+
 Signature-matched opaque braced environment arguments keep their top-level words
 together. A value such as `{section in head/foot}` should not split at spaces to
 keep an earlier option list flat. Lone source newlines normalize to spaces;

@@ -5,6 +5,7 @@
 //! Wadler/Prettier layout engine; the LaTeX-specific part is the lowering in
 //! [`core`].
 
+mod beamer;
 pub(crate) mod colspec;
 pub(crate) mod context;
 pub mod core;

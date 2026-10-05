@@ -1279,6 +1279,9 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             if opaque_group_has_glued_environment_sibling(node) {
                 return Ir::verbatim(node.text().to_string());
             }
+            if super::beamer::is_body_group(node) {
+                return lower_beamer_body(node, cx);
+            }
             // Width-driven Opaque layout under the default mode: block-vs-inline
             // is decided by width, content, and preserved predicates — never by
             // whether the author happened to break the line. A group *opening
@@ -2657,7 +2660,17 @@ fn reflow_elements_checked(
                 continue;
             }
             SyntaxElement::Node(child) => {
-                let ir = lower_node(child, cx);
+                let (ir, source) = if let Some(last) = super::beamer::wrapper_end(&elements, idx)
+                    && !run_carries_doc_margin(&elements[idx..=last], cx)
+                {
+                    let wrapper = &elements[idx..=last];
+                    let ir = Ir::concat(lower_element_stream(wrapper.iter().cloned(), cx));
+                    let source = wrapper.iter().map(ToString::to_string).collect::<String>();
+                    idx = last;
+                    (ir, source)
+                } else {
+                    (lower_node(child, cx), child.text().to_string())
+                };
                 // A block-level command — sectioning (`\part` … `\subparagraph`) or
                 // curated block (`\usepackage`, `\newcommand`, …) — is a block-level
                 // statement: it opens a line and closes one, whatever trivia the
@@ -2728,7 +2741,7 @@ fn reflow_elements_checked(
                     if !glued_to_previous_label {
                         b.end_line();
                     }
-                    b.push_atom_piece(ir, &child.text().to_string());
+                    b.push_atom_piece(ir, &source);
                     if section_label_closes_line {
                         b.end_line();
                         if next_nontrivia_is_label(&elements, idx, cx) {
@@ -2751,7 +2764,7 @@ fn reflow_elements_checked(
                     if is_section_boundary {
                         b.separate_section();
                     }
-                    b.push_atom_piece(ir, &child.text().to_string());
+                    b.push_atom_piece(ir, &source);
                     b.end_line();
                     if is_section_boundary && !next_nontrivia_is_label(&elements, idx, cx) {
                         b.separate_section();
@@ -2819,7 +2832,7 @@ fn reflow_elements_checked(
                         // through the explicit hugging-fill rule below. Both paths
                         // are skipped under a `.dtx` margin, where a generated line
                         // also needs physical framing.
-                        b.push_atom_piece(ir, &child.text().to_string());
+                        b.push_atom_piece(ir, &source);
                         if hugs_preceding_prose {
                             // Inline math remains inline at its opening edge even
                             // when protected comments force later lines. A hugging
@@ -2900,9 +2913,9 @@ fn reflow_elements_checked(
                         && let Some(placement) = command_citation_placement(child, cx)
                         && placement != CitationPlacement::Textual
                     {
-                        b.push_trailing_citation(ir, &child.text().to_string(), placement);
+                        b.push_trailing_citation(ir, &source, placement);
                     } else {
-                        b.push_atom_piece(ir, &child.text().to_string());
+                        b.push_atom_piece(ir, &source);
                     }
                     line_has_content = true;
                     line_all_commands &=
@@ -8015,6 +8028,35 @@ fn lower_opaque_group(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     }
     parts.push(close);
     Ir::group(Ir::concat(parts))
+}
+
+/// Overlay bodies often arrange slide content rather than running prose. Keep
+/// their authored breaks even under reflow, while normalizing indentation and
+/// formatting nested constructs with the ordinary preservation policy.
+///
+/// This is Tier 2: each direct gap reproduces its newline count (normalizing
+/// blank runs), and inline gaps stay inline regardless of width. The closing
+/// gap lives outside the body's indent, so the next pass reads the same gaps
+/// and reproduces the same framing, including empty and comment-only bodies.
+fn lower_beamer_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    let cx = LowerCtx {
+        wrap: WrapMode::Preserve,
+        ..cx
+    };
+    let mut elements: Vec<_> = node.children_with_tokens().collect();
+    let close = elements.pop().expect("a parsed group has a closer");
+    let open = elements.remove(0);
+    let trailing = elements
+        .iter()
+        .rposition(|element| !is_collapsible_trivia_element(element))
+        .map_or(0, |index| index + 1);
+    let closing_gap = elements.split_off(trailing);
+    Ir::concat([
+        Ir::verbatim(open.to_string()),
+        Ir::indent(Ir::concat(lower_element_stream(elements.into_iter(), cx))),
+        Ir::concat(lower_element_stream(closing_gap.into_iter(), cx)),
+        Ir::verbatim(close.to_string()),
+    ])
 }
 
 /// Whether an opaque group is the plain text argument of a command that alone

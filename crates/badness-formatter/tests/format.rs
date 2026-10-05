@@ -2373,6 +2373,112 @@ fn opaque_group_glued_environment_is_preserved_in_every_wrap_mode() {
     }
 }
 
+#[test]
+fn beamer_bodies_keep_authored_lines() {
+    for head in [
+        "only<1->",
+        "uncover<1->",
+        "visible<2>",
+        "invisible<2>",
+        "onslide<2->",
+        "onslide*<2->",
+        "onslide+<2->",
+        "onslide*",
+        "onslide+",
+        "action<2-|alert@3>",
+        "only<1,3-5>",
+        "only<+->",
+        "only<.(2)->",
+        "only<beamer:2-|handout:1>",
+        "only <1- | alert@2>",
+        "only",
+        "uncover",
+    ] {
+        let input = format!(
+            "\\begin{{frame}}\n\\{head}{{\n\\includegraphics[width=\\linewidth]{{images/og.pdf}}\nA short\nsecond line.\n}}\n\\end{{frame}}\n"
+        );
+        let expected = format!(
+            "\\begin{{frame}}\n  \\{head}{{\n    \\includegraphics[width=\\linewidth]{{images/og.pdf}}\n    A short\n    second line.\n  }}\n\\end{{frame}}\n"
+        );
+        for wrap in [
+            WrapMode::Reflow,
+            WrapMode::Stable,
+            WrapMode::Sentence,
+            WrapMode::Semantic,
+            WrapMode::Preserve,
+        ] {
+            let style = FormatStyle {
+                wrap,
+                ..FormatStyle::default()
+            };
+            assert_eq!(
+                format_with_style(&input, style).unwrap(),
+                expected,
+                "{head}, {wrap:?}"
+            );
+            assert_format_invariants_with_style(&input, style);
+        }
+    }
+}
+
+#[test]
+fn beamer_inline_bodies_do_not_reflow_to_width() {
+    let input = "Before \\only<2->{a long inline body with several words} after.\n";
+    let style = FormatStyle {
+        line_width: 32,
+        ..FormatStyle::default()
+    };
+    let output = format_with_style(input, style).unwrap();
+    assert!(
+        output.contains("\\only<2->{a long inline body with several words}"),
+        "{output}"
+    );
+    assert_format_invariants_with_style(input, style);
+}
+
+#[test]
+fn beamer_alternative_bodies_and_comments_keep_lines() {
+    for input in [
+        "\\alt<2>{\n  First\n  branch\n}{\n  Second\n  branch\n}\n",
+        "\\temporal<2>{\n  Before\n}{\n  During\n}{\n  After\n}\n",
+        "\\only{\n  A\n}<2->\n",
+        "\\only<2->{% keep opener\n  A% keep body\n}\n",
+        "\\only<2->{\n\n  A\n\n}\n",
+        "\\only<2->{\n  \\uncover<3->{\n    A\n  }\n}\n",
+        "\\only<2->{\n  \\begin{itemize}\n    \\item A\n  \\end{itemize}\n}\n",
+        "\\only<2->{\n}\n",
+        "\\only<2->{first\n  second}\n",
+        "\\only<2->{ first\n  second }\n",
+        "\\only<2->{% empty body\n}\n",
+        "\\only% keep head\n<2->{\n  A\n}\n",
+        "\\alt{\n  First\n}{\n  Second\n}<2>\n",
+    ] {
+        assert_eq!(format(input).unwrap(), input);
+        assert_format_invariants(input);
+    }
+}
+
+#[test]
+fn beamer_body_policy_requires_a_complete_wrapper_shape() {
+    for (input, expected) in [
+        ("\\other<2->{\n  A\n}\n", "\\other<2->{ A }\n"),
+        ("\\only<2-{\n  A\n}\n", "\\only<2-{ A }\n"),
+        ("\\only<2>text{\n  A\n}\n", "\\only<2>text{ A }\n"),
+        ("\\only*<2>{\n  A\n}\n", "\\only*<2>{ A }\n"),
+        ("\\alt<2>{\n  A\n}\n", "\\alt<2>{ A }\n"),
+        ("\\temporal{\n  A\n}{B}{C}\n", "\\temporal{ A }{B}{C}\n"),
+        ("\\only<2->{A}{\n  B\n}\n", "\\only<2->{A}{ B }\n"),
+        ("\\only{A}{\n  B\n}\n", "\\only{A}{ B }\n"),
+        (
+            "\\onslide<2-> text {\n  A\n}\n",
+            "\\onslide<2-> text { A }\n",
+        ),
+    ] {
+        assert_eq!(format(input).unwrap(), expected, "{input}");
+        assert_format_invariants(input);
+    }
+}
+
 /// Fixtures for the `math-wrap` knob (display-math break policy) and its `auto`
 /// derivation from the wrap mode. Scope: `\[…\]`, `$$…$$`, and non-grid math
 /// environments; grids and inline math are untouched by the knob.

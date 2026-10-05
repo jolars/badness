@@ -1,4 +1,11 @@
 const MARKDOWN_ROOT = "/agent-markdown";
+const HOMEPAGE_LINKS = '<https://badness.dev/guide/getting-started.html>; rel="service-doc", <https://badness.dev/agent-markdown/index.md>; rel="describedby"';
+
+function addHomepageLinks(headers, pathname) {
+  if (pathname === "/" || pathname === "/index.html") {
+    headers.set("Link", HOMEPAGE_LINKS);
+  }
+}
 
 function markdownPath(pathname) {
   if (pathname.startsWith(`${MARKDOWN_ROOT}/`)) return null;
@@ -53,6 +60,7 @@ export default {
         headers.delete("ETag");
         headers.delete("Last-Modified");
         varyOnAccept(headers);
+        addHomepageLinks(headers, url.pathname);
         return new Response(markdown.body, { status: markdown.status, headers });
       }
     }
@@ -65,6 +73,7 @@ export default {
     headers.delete("Content-Encoding");
     headers.delete("Content-Length");
     varyOnAccept(headers);
+    addHomepageLinks(headers, url.pathname);
     return new Response(html.body, { status: html.status, statusText: html.statusText, headers });
   },
 };

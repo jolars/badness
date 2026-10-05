@@ -3,5 +3,21 @@ main = "markdown-worker.mjs"
 compatibility_date = "2026-10-05"
 routes = [
   { pattern = "badness.dev/", zone_name = "badness.dev" },
-  { pattern = "badness.dev/*.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/index.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/changelog.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/development/architecture.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/development/contributing.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/guide/editor-setup.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/guide/formatting.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/guide/getting-started.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/guide/installation.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/guide/linting.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/guide/pre-commit.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/playground/", zone_name = "badness.dev" },
+  { pattern = "badness.dev/playground/index.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/reference/benchmarks.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/reference/bib-linter-rules.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/reference/cli.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/reference/configuration.html", zone_name = "badness.dev" },
+  { pattern = "badness.dev/reference/linter-rules.html", zone_name = "badness.dev" },
 ]

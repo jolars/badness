@@ -79,6 +79,13 @@ fn publish_markdown(book: &Book, dir: &std::path::Path) -> Result<()> {
                     })
                     .collect::<Vec<_>>()
                     .join("\n")
+            } else if source_path == std::path::Path::new("index.md") {
+                chapter
+                    .content
+                    .lines()
+                    .filter(|line| !line.starts_with("<img src=\"./images/logo"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             } else {
                 chapter.content.clone()
             };
@@ -103,7 +110,7 @@ mod markdown_tests {
     fn exports_processed_chapters_without_chart_scripts() {
         let dir = std::env::temp_dir().join(format!("badness-markdown-{}", std::process::id()));
         let book = Book::new_with_items(vec![
-            Chapter::new("Home", "# Home\n\nVersion 1.2.3\n".into(), "index.md", vec![]).into(),
+            Chapter::new("Home", "# Home\n<img src=\"./images/logo.svg\" alt=\"\" />\n\nVersion 1.2.3\n".into(), "index.md", vec![]).into(),
             Chapter::new(
                 "Benchmarks",
                 "# Benchmarks\n<script type=\"application/json\" class=\"bench-data\">lots of data</script>\n\nResults.\n".into(),
@@ -114,7 +121,7 @@ mod markdown_tests {
         publish_markdown(&book, &dir).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("index.md")).unwrap(),
-            "# Home\n\nVersion 1.2.3\n"
+            "# Home\n\nVersion 1.2.3"
         );
         let benchmarks = std::fs::read_to_string(dir.join("reference/benchmarks.md")).unwrap();
         assert!(benchmarks.contains("Results."));

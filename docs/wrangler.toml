@@ -1,4 +1,7 @@
 name = "badness-markdown"
 main = "markdown-worker.mjs"
 compatibility_date = "2026-10-05"
-routes = [{ pattern = "badness.dev/*", zone_name = "badness.dev" }]
+routes = [
+  { pattern = "badness.dev/", zone_name = "badness.dev" },
+  { pattern = "badness.dev/*.html", zone_name = "badness.dev" },
+]

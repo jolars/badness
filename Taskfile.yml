@@ -297,6 +297,7 @@ tasks:
     dir: docs
     cmds:
       - cp -R .agent-markdown-stage book/agent-markdown
+      - cp -R .agent-markdown-stage/. book/
 
   docs:serve:
     desc: Serve the docs locally with live reload

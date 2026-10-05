@@ -252,9 +252,10 @@ tasks:
     deps: [docs:rules, playground:wasm]
     dir: docs
     cmds:
-      - mdbook build
+      - BADNESS_MARKDOWN_DIR=.agent-markdown-stage mdbook build
       - task: docs:canonical
       - task: docs:sitemap
+      - task: docs:markdown
 
   playground:wasm:
     desc: Build the badness-wasm playground bundle into docs/src/playground/pkg
@@ -290,6 +291,12 @@ tasks:
       - >-
         cargo run --quiet --manifest-path doc-utils/Cargo.toml --bin sitemap --
         book https://badness.dev/
+
+  docs:markdown:
+    desc: Publish processed Markdown chapters for agent requests
+    dir: docs
+    cmds:
+      - cp -R .agent-markdown-stage book/agent-markdown
 
   docs:serve:
     desc: Serve the docs locally with live reload

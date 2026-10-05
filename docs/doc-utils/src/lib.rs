@@ -3,7 +3,7 @@
 mod memory;
 pub mod postbuild;
 
-use mdbook_preprocessor::book::Book;
+use mdbook_preprocessor::book::{Book, BookItem};
 use mdbook_preprocessor::errors::Result;
 use mdbook_preprocessor::{Preprocessor, PreprocessorContext};
 use semver::{Version, VersionReq};
@@ -47,7 +47,80 @@ impl Preprocessor for GuideHelper {
         insert_benchmarks(&mut book);
         memory::insert(&mut book, &project_root());
         insert_changelog(&mut book);
+        if let Some(dir) = std::env::var_os("BADNESS_MARKDOWN_DIR") {
+            publish_markdown(&book, &PathBuf::from(dir))?;
+        }
         Ok(book)
+    }
+}
+
+/// Export the processed chapters so the public site can serve the same content
+/// to Markdown clients without including mdBook's navigation and scripts.
+fn publish_markdown(book: &Book, dir: &std::path::Path) -> Result<()> {
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)?;
+    }
+    std::fs::create_dir_all(dir)?;
+    for item in book.iter() {
+        if let BookItem::Chapter(chapter) = item {
+            let Some(source_path) = &chapter.path else {
+                continue;
+            };
+            let path = dir.join(source_path);
+            std::fs::create_dir_all(path.parent().unwrap())?;
+            let content = if source_path == std::path::Path::new("reference/benchmarks.md") {
+                chapter
+                    .content
+                    .lines()
+                    .filter(|line| {
+                        !line
+                            .trim_start()
+                            .starts_with("<script type=\"application/json\" class=\"bench-data\">")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                chapter.content.clone()
+            };
+            std::fs::write(path, content)?;
+        }
+    }
+    let playground = dir.join("playground/index.md");
+    std::fs::create_dir_all(playground.parent().unwrap())?;
+    std::fs::write(
+        playground,
+        "# Playground\n\nTry Badness formatting and linting in the [interactive playground](https://badness.dev/playground/).\n",
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod markdown_tests {
+    use super::*;
+    use mdbook_preprocessor::book::Chapter;
+
+    #[test]
+    fn exports_processed_chapters_without_chart_scripts() {
+        let dir = std::env::temp_dir().join(format!("badness-markdown-{}", std::process::id()));
+        let book = Book::new_with_items(vec![
+            Chapter::new("Home", "# Home\n\nVersion 1.2.3\n".into(), "index.md", vec![]).into(),
+            Chapter::new(
+                "Benchmarks",
+                "# Benchmarks\n<script type=\"application/json\" class=\"bench-data\">lots of data</script>\n\nResults.\n".into(),
+                "reference/benchmarks.md",
+                vec![],
+            ).into(),
+        ]);
+        publish_markdown(&book, &dir).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("index.md")).unwrap(),
+            "# Home\n\nVersion 1.2.3\n"
+        );
+        let benchmarks = std::fs::read_to_string(dir.join("reference/benchmarks.md")).unwrap();
+        assert!(benchmarks.contains("Results."));
+        assert!(!benchmarks.contains("lots of data"));
+        assert!(dir.join("playground/index.md").exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 

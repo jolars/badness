@@ -356,6 +356,7 @@ TSWLatexianTemp*
 
 # mdBook docs
 /docs/book/
+/docs/.agent-markdown-stage/
 /docs/doc-utils/target/
 
 # Playground: wasm bundle (built by `task playground:wasm`) and the vendor

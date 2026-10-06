@@ -7,7 +7,6 @@
 //! ancestor walk stops there and a developer's own `badness.toml` cannot leak
 //! in.
 
-use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
@@ -22,25 +21,20 @@ fn repo_dir() -> TempDir {
 }
 
 fn format_stdin(dir: &Path, env_config: Option<&str>, extra_args: &[&str]) -> Output {
+    let input_path = dir.join("stdin.tex");
+    std::fs::write(&input_path, LONG_LINE).unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_badness"));
     cmd.arg("format")
         .args(extra_args)
         .current_dir(dir)
         .env_remove("BADNESS_CONFIG")
-        .stdin(Stdio::piped())
+        .stdin(Stdio::from(std::fs::File::open(input_path).unwrap()))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(value) = env_config {
         cmd.env("BADNESS_CONFIG", value);
     }
-    let mut child = cmd.spawn().expect("run badness");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(LONG_LINE.as_bytes())
-        .unwrap();
-    child.wait_with_output().expect("wait for badness")
+    cmd.output().expect("run badness")
 }
 
 fn max_line_width(stdout: &[u8]) -> usize {

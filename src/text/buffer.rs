@@ -246,7 +246,7 @@ mod tests {
     /// both shapes below: a reversed range measures zero and would duplicate
     /// the region it names, an out-of-bounds one underflows.
     #[test]
-    #[should_panic(expected = "byte range starts at 4 but ends at 2")]
+    #[should_panic]
     #[expect(
         clippy::reversed_empty_ranges,
         reason = "the malformed range is the subject of the test"

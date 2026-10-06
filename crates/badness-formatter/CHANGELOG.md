@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.1](https://github.com/jolars/badness/compare/badness-formatter-v0.10.0...badness-formatter-v0.10.1) (2026-10-06)
+
+### Bug Fixes
+
+- **formatter:** preserve Beamer overlay body lines ([`1576e17`](https://github.com/jolars/badness/commit/1576e1741bda11543cacd90fa16607c310fa92d6))
+- **format:** normalize algorithm2e statement spacing ([`aaff9b9`](https://github.com/jolars/badness/commit/aaff9b96397c3f324231eec8e30bd7360165196c)), fixes [#193](https://github.com/jolars/badness/issues/193)
+
+### Dependencies
+
+- updated crates/badness-parser to v0.11.0
+
 ## [0.10.0](https://github.com/jolars/badness/compare/badness-formatter-v0.9.0...badness-formatter-v0.10.0) (2026-09-27)
 
 ### Features

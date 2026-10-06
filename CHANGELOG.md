@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.26.0](https://github.com/jolars/badness/compare/v0.25.0...v0.26.0) (2026-10-06)
+
+### Features
+
+- **docs:** add homepage link headers ([`a5b01eb`](https://github.com/jolars/badness/commit/a5b01eb997e88838bfc622cf62363271c766a33a))
+- **docs:** serve markdown to agents ([`9b97446`](https://github.com/jolars/badness/commit/9b9744647c449565909231a0215da865a99f1bff))
+- lint lonely items in document body ([`7b73d15`](https://github.com/jolars/badness/commit/7b73d1523b3c5ac613b0de5611d0ebb327baf2e2))
+- **config:** support extending config files ([`a376f19`](https://github.com/jolars/badness/commit/a376f1976c9532b19d54e178f2df2ee5fd2a3ce8))
+- **lsp:** distinguish symbol completions ([`92ed0e4`](https://github.com/jolars/badness/commit/92ed0e486bd7700fe99edfe99725c52882ea0196)), closes [#190](https://github.com/jolars/badness/issues/190)
+- **lsp:** show command signatures in completion ([`9d5d913`](https://github.com/jolars/badness/commit/9d5d913b36843c606953e922f91e19b129dd45a2)), fixes [#190](https://github.com/jolars/badness/issues/190)
+
+### Bug Fixes
+
+- **tests:** avoid Nix build race and panic wording ([`a0eefb2`](https://github.com/jolars/badness/commit/a0eefb2b1fb51a557694b96f716212ea455a4648))
+- **linter:** infer equation ranges across files ([`7fb6654`](https://github.com/jolars/badness/commit/7fb6654e76f193c9f1db7249291cb85d8dcc3f49)), closes [#195](https://github.com/jolars/badness/issues/195)
+- **lint:** count referenced subequations labels ([`516a421`](https://github.com/jolars/badness/commit/516a421a29da9bdc1d1dd6b71a5067967c0dbb50)), refs [#195](https://github.com/jolars/badness/issues/195)
+- **formatter:** preserve Beamer overlay body lines ([`1576e17`](https://github.com/jolars/badness/commit/1576e1741bda11543cacd90fa16607c310fa92d6))
+- **docs:** omit decorative logos from markdown ([`7e82888`](https://github.com/jolars/badness/commit/7e828881ab7d2fda99fa0acaef86c8c4fce443fe))
+- **docs:** scope worker to content pages ([`f25e029`](https://github.com/jolars/badness/commit/f25e02944789185af139739c23e50c1fefc97dd8))
+- **docs:** keep markdown chapter links usable ([`246d691`](https://github.com/jolars/badness/commit/246d6914d9c569e9dcc1a8a9c0392511f1336c31))
+- constrain label completion to key range ([`19230cc`](https://github.com/jolars/badness/commit/19230cc45ca418f12f6a4cf3fedd67cd12a2e09f))
+- replace full reference completion keys ([`cc2ab0e`](https://github.com/jolars/badness/commit/cc2ab0e167c9d9713dfafe8fb2f7f6c23db1d8b4))
+- **lint:** honor simple equation reference ranges ([`1b43349`](https://github.com/jolars/badness/commit/1b43349293d0a3ca6667d1298a2e8931dc0e7db4)), refs [#195](https://github.com/jolars/badness/issues/195)
+- **format:** normalize algorithm2e statement spacing ([`aaff9b9`](https://github.com/jolars/badness/commit/aaff9b96397c3f324231eec8e30bd7360165196c)), fixes [#193](https://github.com/jolars/badness/issues/193)
+- **lsp:** broaden command completion kinds ([`5474ca2`](https://github.com/jolars/badness/commit/5474ca245b7c5393ef97ae4801c06a4020ab3dc3)), refs [#190](https://github.com/jolars/badness/issues/190)
+
+### Dependencies
+
+- updated crates/badness-formatter to v0.10.1
+- updated crates/badness-parser to v0.11.0
+
 ## [0.25.0](https://github.com/jolars/badness/compare/v0.24.0...v0.25.0) (2026-09-27)
 
 ### Features

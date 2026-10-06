@@ -11,8 +11,8 @@ use badness::linter::{Severity, lint_document};
 use badness::parser::{parse, parse_with_flavor, reconstruct};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
-    FileFacts, IncludeGraph, ResolvedLabels, ResolvedPackageOptions, collect_include_edge_keys,
-    package_option_facts,
+    EquationRangeFacts, FileFacts, IncludeGraph, ResolvedLabels, ResolvedPackageOptions,
+    collect_include_edge_keys, package_option_facts,
 };
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
@@ -114,7 +114,12 @@ fn lint_project(files: &[(&str, &str)]) -> Vec<(String, &'static str, String)> {
             )
         })
         .collect();
-    let resolved = ResolvedLabels::build(&label_inputs, &IncludeGraph::build(&facts, None));
+    let range_facts: Vec<_> = parsed
+        .iter()
+        .map(|(path, root, model)| EquationRangeFacts::collect(path, root, model))
+        .collect();
+    let graph = IncludeGraph::build(&facts, None);
+    let resolved = ResolvedLabels::build_with_range_facts(&label_inputs, &graph, &range_facts);
     let resolved_packages = ResolvedPackageOptions::build(
         parsed
             .iter()
@@ -167,7 +172,12 @@ fn lint_project_full(files: &[(&str, &str)]) -> Vec<(String, badness::linter::Di
             )
         })
         .collect();
-    let resolved = ResolvedLabels::build(&label_inputs, &IncludeGraph::build(&facts, None));
+    let range_facts: Vec<_> = parsed
+        .iter()
+        .map(|(path, root, model)| EquationRangeFacts::collect(path, root, model))
+        .collect();
+    let graph = IncludeGraph::build(&facts, None);
+    let resolved = ResolvedLabels::build_with_range_facts(&label_inputs, &graph, &range_facts);
 
     let mut out = Vec::new();
     for (path, root, model) in &parsed {
@@ -927,6 +937,183 @@ fn unreferenced_label_accepts_consecutive_equation_range() {
     assert!(
         !rules_only(&findings).contains(&"unreferenced-label"),
         "the range uses B and C: {findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_accepts_numbered_align_and_gather_rows() {
+    for environment in ["align", "gather"] {
+        let source = format!(
+            "\\documentclass{{article}}\n\\begin{{document}}\n\\begin{{{environment}}}\na=1\\label{{A}}\\\\\nb=2\\label{{B}}\\\\\nc=3\\label{{C}}\\\\\nd=4\\label{{D}}\n\\end{{{environment}}}\nSee \\eqref{{A}}--\\eqref{{D}}.\n\\end{{document}}\n"
+        );
+        let findings = lint_project(&[("main.tex", &source)]);
+        assert!(
+            !rules_only(&findings).contains(&"unreferenced-label"),
+            "{environment}: {findings:?}"
+        );
+    }
+}
+
+#[test]
+fn unreferenced_label_accepts_range_across_included_files() {
+    let findings = lint_project(&[
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\begin{document}\n\\input{first}\n\\input{last}\nSee \\eqref{A}--\\eqref{D}.\n\\end{document}\n",
+        ),
+        (
+            "first.tex",
+            "\\begin{equation}a=1\\label{A}\\end{equation}\n\\begin{equation}b=2\\label{B}\\end{equation}\n",
+        ),
+        (
+            "last.tex",
+            "\\begin{gather}c=3\\label{C}\\\\\nd=4\\label{D}\\end{gather}\n",
+        ),
+    ]);
+    assert!(
+        !rules_only(&findings).contains(&"unreferenced-label"),
+        "the included equations form one range: {findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_accepts_reference_in_an_included_file() {
+    let findings = lint_project(&[
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\begin{document}\n\\input{equations}\\input{references}\n\\end{document}\n",
+        ),
+        (
+            "equations.tex",
+            "\\begin{align}a=1\\label{A}\\\\\nb=2\\label{B}\\\\\nc=3\\label{C}\\end{align}\n",
+        ),
+        ("references.tex", "See \\eqref{A}--\\eqref{C}.\n"),
+    ]);
+    assert!(
+        !rules_only(&findings).contains(&"unreferenced-label"),
+        "the included reference uses B: {findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_keeps_warning_for_unnumbered_align_row() {
+    let findings = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\\begin{document}\n\\begin{align}a=1\\label{A}\\\\\nb=2\\notag\\label{B}\\\\\nc=3\\label{C}\\end{align}\nSee \\eqref{A}--\\eqref{C}.\n\\end{document}\n",
+    )]);
+    assert!(
+        findings
+            .iter()
+            .any(|(_, rule, message)| *rule == "unreferenced-label" && message.contains("B")),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_does_not_cross_an_unlabeled_numbered_row() {
+    let findings = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\\begin{document}\n\\begin{gather}a=1\\label{A}\\\\\nb=2\\label{B}\\\\\nc=3\\\\\nd=4\\label{D}\\end{gather}\nSee \\eqref{A}--\\eqref{D}.\n\\end{document}\n",
+    )]);
+    assert!(
+        findings
+            .iter()
+            .any(|(_, rule, message)| *rule == "unreferenced-label" && message.contains("B")),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_does_not_infer_from_starred_or_tagged_rows() {
+    for environment in ["align*", "gather*"] {
+        let source = format!(
+            "\\documentclass{{article}}\n\\begin{{document}}\n\\begin{{{environment}}}a=1\\label{{A}}\\\\\nb=2\\label{{B}}\\\\\nc=3\\label{{C}}\\end{{{environment}}}\nSee \\eqref{{A}}--\\eqref{{C}}.\n\\end{{document}}\n"
+        );
+        let findings = lint_project(&[("main.tex", &source)]);
+        assert!(
+            findings
+                .iter()
+                .any(|(_, rule, message)| *rule == "unreferenced-label" && message.contains("B")),
+            "{environment}: {findings:?}"
+        );
+    }
+    let findings = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\\begin{document}\n\\begin{align}a=1\\label{A}\\\\\nb=2\\tag{99}\\label{B}\\\\\nc=3\\label{C}\\end{align}\nSee \\eqref{A}--\\eqref{C}.\n\\end{document}\n",
+    )]);
+    assert!(
+        findings
+            .iter()
+            .any(|(_, rule, message)| *rule == "unreferenced-label" && message.contains("B")),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_does_not_cross_a_counter_change_in_an_include() {
+    let findings = lint_project(&[
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\begin{document}\n\\input{first}\\input{last}\nSee \\eqref{A}--\\eqref{D}.\n\\end{document}\n",
+        ),
+        (
+            "first.tex",
+            "\\begin{equation}a=1\\label{A}\\end{equation}\n\\begin{equation}b=2\\label{B}\\end{equation}\n",
+        ),
+        (
+            "last.tex",
+            "\\addtocounter{equation}{2}\n\\begin{equation}c=3\\label{C}\\end{equation}\n\\begin{equation}d=4\\label{D}\\end{equation}\n",
+        ),
+    ]);
+    assert!(
+        findings
+            .iter()
+            .any(|(_, rule, message)| *rule == "unreferenced-label" && message.contains("B")),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_keeps_warning_when_include_order_is_ambiguous() {
+    let findings = lint_project(&[
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\begin{document}\n\\input{part}\\input{part}\nSee \\eqref{A}--\\eqref{C}.\n\\end{document}\n",
+        ),
+        (
+            "part.tex",
+            "\\begin{equation}a=1\\label{A}\\end{equation}\n\\begin{equation}b=2\\label{B}\\end{equation}\n\\begin{equation}c=3\\label{C}\\end{equation}\n",
+        ),
+    ]);
+    assert!(
+        findings
+            .iter()
+            .any(|(_, rule, message)| *rule == "unreferenced-label" && message.contains("B")),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_does_not_infer_with_duplicate_endpoint() {
+    let findings = lint_project(&[
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\begin{document}\n\\input{first}\\input{last}\nSee \\eqref{A}--\\eqref{C}.\n\\end{document}\n",
+        ),
+        (
+            "first.tex",
+            "\\begin{equation}a=1\\label{A}\\end{equation}\n\\begin{equation}b=2\\label{B}\\end{equation}\n",
+        ),
+        (
+            "last.tex",
+            "\\begin{equation}c=3\\label{C}\\end{equation}\n\\label{A}\n",
+        ),
+    ]);
+    assert!(
+        findings
+            .iter()
+            .any(|(_, rule, message)| *rule == "unreferenced-label" && message.contains("B")),
+        "{findings:?}"
     );
 }
 

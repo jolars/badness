@@ -26,12 +26,10 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use smol_str::SmolStr;
-
-use crate::ast::{command_name, environment_name};
+use crate::ast::environment_name;
 use crate::linter::diagnostic::{Diagnostic, Severity};
-use crate::semantic::{LabelDef, RefCommand};
-use crate::syntax::{SyntaxKind, SyntaxNode};
+use crate::project::labels::EquationRangeFacts;
+use crate::syntax::SyntaxKind;
 
 use super::{Example, Rule, RuleContext};
 
@@ -54,10 +52,12 @@ impl Rule for UnreferencedLabel {
     fn description(&self) -> &'static str {
         "Flag a label definition unused by a `\\ref`-family command anywhere in the \
          document. A `\\eqref{A}--\\eqref{D}` range also uses labels between A and D \
-         when they occur in consecutive `equation` environments in the same \
-         file without manual numbering changes. Referencing a `subequations` \
-         group label also uses the labels in its enclosed math environments. \
-         Other equation layouts keep their warnings. The mirror of `undefined-ref`, \
+         when they occur in consecutive, singly labeled `equation` environments \
+         or numbered `align` and `gather` rows, including through literal \
+         included files with an unambiguous source order. Manual tags, \
+         suppressed numbers, and counter changes stop inference. Referencing a \
+         `subequations` group label also uses the labels in its enclosed math \
+         environments. The mirror of `undefined-ref`, \
          and sound only when the label \
          namespace is complete, so it stays silent unless the project view is \
          **closed** (every include resolves to an analyzed file) and **rooted**. \
@@ -80,7 +80,9 @@ impl Rule for UnreferencedLabel {
             return;
         }
 
-        let ranged = ranged_equation_labels(ctx);
+        let ranged = (!resolution.has_range_facts(ctx.path)).then(|| {
+            EquationRangeFacts::collect(ctx.path, ctx.root, ctx.model).local_inferred(resolution)
+        });
         let grouped = referenced_subequation_labels(ctx);
 
         sink.extend(
@@ -89,7 +91,11 @@ impl Rule for UnreferencedLabel {
                 .iter()
                 .filter(|label| {
                     !resolution.is_referenced(ctx.path, &label.name)
-                        && !ranged.contains(&label.name)
+                        && !resolution
+                            .is_range_referenced(ctx.path, usize::from(label.range.start()))
+                        && !ranged.as_ref().is_some_and(|offsets| {
+                            offsets.contains(&usize::from(label.range.start()))
+                        })
                         && !grouped.contains(&usize::from(label.range.start()))
                 })
                 .map(|label| Diagnostic {
@@ -170,125 +176,6 @@ fn referenced_subequation_labels(ctx: &RuleContext<'_>) -> HashSet<usize> {
     grouped
 }
 
-struct Equation<'a> {
-    node: SyntaxNode,
-    label: Option<&'a LabelDef>,
-}
-
-/// A textual range is evidence for the labels inside it only when its endpoints
-/// bound consecutive, plainly numbered equations in this file. This does not
-/// alter the reference model: navigation still points to the two explicit keys.
-fn ranged_equation_labels(ctx: &RuleContext<'_>) -> HashSet<SmolStr> {
-    let Some(resolution) = ctx.resolution else {
-        return HashSet::new();
-    };
-    let mut refs: Vec<_> = ctx
-        .model
-        .refs()
-        .iter()
-        .filter(|reference| reference.command == RefCommand::EqRef)
-        .collect();
-    if refs.len() < 2 {
-        return HashSet::new();
-    }
-    refs.sort_by_key(|reference| reference.range.start());
-    let source = ctx.root.text().to_string();
-    let equations: Vec<_> = ctx
-        .root
-        .descendants()
-        .filter(|node| node.kind() == SyntaxKind::ENVIRONMENT)
-        .filter(|node| {
-            node.children()
-                .find(|child| child.kind() == SyntaxKind::BEGIN)
-                .and_then(|begin| environment_name(&begin))
-                .as_deref()
-                == Some("equation")
-        })
-        .map(|node| {
-            let labels: Vec<_> = ctx
-                .model
-                .labels()
-                .iter()
-                .filter(|label| node.text_range().contains_range(label.range))
-                .collect();
-            let label = (labels.len() == 1
-                && ctx
-                    .model
-                    .labels()
-                    .iter()
-                    .filter(|other| other.name == labels[0].name)
-                    .count()
-                    == 1
-                && node.children().any(|child| {
-                    child.kind() == SyntaxKind::END
-                        && environment_name(&child).as_deref() == Some("equation")
-                })
-                && !node.descendants().any(|child| {
-                    child.kind() == SyntaxKind::COMMAND
-                        && command_name(&child)
-                            .as_deref()
-                            .is_some_and(changes_equation_number)
-                }))
-            .then_some(labels.first().copied())
-            .flatten();
-            Equation { node, label }
-        })
-        .collect();
-
-    let mut ranged = HashSet::new();
-    for pair in refs.windows(2) {
-        let [first, last] = pair else { continue };
-        let gap = usize::from(first.range.end())..usize::from(last.range.start());
-        if source.get(gap).is_none_or(|gap| gap.trim() != "--") {
-            continue;
-        }
-        let Some(start) = equations.iter().position(|equation| {
-            equation.label.is_some_and(|label| label.name == first.name)
-                && resolution.definers(ctx.path, &first.name) == [ctx.path]
-        }) else {
-            continue;
-        };
-        let Some(end) = equations.iter().position(|equation| {
-            equation.label.is_some_and(|label| label.name == last.name)
-                && resolution.definers(ctx.path, &last.name) == [ctx.path]
-        }) else {
-            continue;
-        };
-        if end <= start + 1 || !equations[start..=end].iter().all(|eq| eq.label.is_some()) {
-            continue;
-        }
-        if !equations[start..=end].windows(2).all(|pair| {
-            let gap = usize::from(pair[0].node.text_range().end())
-                ..usize::from(pair[1].node.text_range().start());
-            source.get(gap).is_some_and(|gap| gap.trim().is_empty())
-        }) {
-            continue;
-        }
-        for equation in &equations[start + 1..end] {
-            let label = equation.label.expect("checked above");
-            if resolution.definers(ctx.path, &label.name) == [ctx.path] {
-                ranged.insert(label.name.clone());
-            }
-        }
-    }
-    ranged
-}
-
-fn changes_equation_number(name: &str) -> bool {
-    matches!(
-        name,
-        "tag"
-            | "notag"
-            | "nonumber"
-            | "setcounter"
-            | "addtocounter"
-            | "stepcounter"
-            | "refstepcounter"
-            | "counterwithin"
-            | "numberwithin"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,7 +185,6 @@ mod tests {
     use crate::semantic::SemanticModel;
     use crate::syntax::SyntaxNode;
     use smol_str::SmolStr;
-
     const DOC: &str = "doc.tex";
 
     /// A single-file, no-includes namespace defining `labels` and using `refs`,

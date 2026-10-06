@@ -33,7 +33,7 @@ pub use include::{
     BibTarget, IncludeEdge, IncludeEdgeKey, IncludeKind, IncludeTarget,
     collect_bib_resource_targets, collect_include_edge_keys, collect_include_edges,
 };
-pub use labels::{ResolvedLabels, resolved_labels};
+pub use labels::{EquationRangeFacts, ResolvedLabels, resolved_labels};
 pub use options::{
     PackageOptionFacts, ResolvedPackageOptions, package_option_facts, resolved_package_options,
 };

@@ -855,7 +855,7 @@ warning: undefined-citation
 
 ## `unreferenced-label`
 
-Flag a label definition unused by a `\ref`-family command anywhere in the document. A `\eqref{A}--\eqref{D}` range also uses labels between A and D when they occur in consecutive `equation` environments in the same file without manual numbering changes. Referencing a `subequations` group label also uses the labels in its enclosed math environments. Other equation layouts keep their warnings. The mirror of `undefined-ref`, and sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. Report-only: removing the dead label or adding a reference are both valid, so there is no autofix.
+Flag a label definition unused by a `\ref`-family command anywhere in the document. A `\eqref{A}--\eqref{D}` range also uses labels between A and D when they occur in consecutive, singly labeled `equation` environments or numbered `align` and `gather` rows, including through literal included files with an unambiguous source order. Manual tags, suppressed numbers, and counter changes stop inference. Referencing a `subequations` group label also uses the labels in its enclosed math environments. The mirror of `undefined-ref`, and sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. Report-only: removing the dead label or adding a reference are both valid, so there is no autofix.
 
 This rule is **enabled by default**.
 

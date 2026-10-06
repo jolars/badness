@@ -138,13 +138,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
-- [ ] **Extend `unreferenced-label` range inference (issue #195).** The current
-  `\\eqref{A}--\\eqref{D}` handling counts intermediate labels only in adjacent,
-  single-label `equation` environments in one file. Cover numbered rows in
-  `align`/`gather` and ranges whose reference and definitions span included
-  files. Keep the inference conservative around manual tags, skipped numbers,
-  counter changes, and ambiguous source order; preserve explicit-key behavior
-  for definition navigation and rename.
+- [x] **Extend `unreferenced-label` range inference (issue #195).** A literal
+  `\\eqref{A}--\\eqref{D}` also uses intermediate labels in numbered `align` and
+  `gather` rows and across ordered, literal includes. Manual tags, skipped
+  numbers, counter changes, and ambiguous include order prevent inference.
+  Inferred uses remain separate from explicit keys for navigation and rename.
 
 ### Conditional reasoning for duplicate checks
 

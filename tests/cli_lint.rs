@@ -373,6 +373,44 @@ fn lint_honors_declared_reference_commands() {
 }
 
 #[test]
+fn lint_infers_equation_range_across_includes() {
+    let dir = repo_dir();
+    std::fs::write(
+        dir.path().join("main.tex"),
+        "\\documentclass{article}\n\\begin{document}\n\\input{first}\\input{last}\nSee \\eqref{A}--\\eqref{D}.\n\\end{document}\n",
+    ).unwrap();
+    std::fs::write(
+        dir.path().join("first.tex"),
+        "\\begin{align}a&=1\\label{A}\\\\\nb&=2\\label{B}\\end{align}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("last.tex"),
+        "\\begin{gather}c=3\\label{C}\\\\\nd=4\\label{D}\\end{gather}\n",
+    )
+    .unwrap();
+
+    let output = lint(
+        dir.path(),
+        &[
+            "--output=json",
+            "--select",
+            "unreferenced-label",
+            "main.tex",
+            "first.tex",
+            "last.tex",
+        ],
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "[]");
+}
+
+#[test]
 fn lint_honors_declared_citation_commands() {
     let dir = repo_dir();
     std::fs::write(

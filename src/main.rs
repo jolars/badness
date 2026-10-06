@@ -41,8 +41,8 @@ use badness::cli::{
 use badness::parser::{LexConfig, parse_with_declarations, parse_with_flavor};
 use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
 use badness::project::{
-    BibTarget, CiteFileFacts, FileFacts, IncludeGraph, PackageOptionFacts, ResolvedCitations,
-    ResolvedLabels, ResolvedPackageOptions, collect_bib_resource_targets,
+    BibTarget, CiteFileFacts, EquationRangeFacts, FileFacts, IncludeGraph, PackageOptionFacts,
+    ResolvedCitations, ResolvedLabels, ResolvedPackageOptions, collect_bib_resource_targets,
     collect_include_edge_keys, package_option_facts,
 };
 use badness::semantic::SemanticModel;
@@ -605,6 +605,7 @@ struct TexAnalysis {
     model: SemanticModel,
     facts: FileFacts,
     label_input: (PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool),
+    range_facts: EquationRangeFacts,
     cite_fact: CiteFileFacts,
     /// The file's declared-option surface when it is a `.sty`, feeding the
     /// cross-file package-option model (`unknown-option`).
@@ -675,6 +676,7 @@ fn analyze_source(
                 document_ref_names(&model),
                 is_document_root(&root),
             );
+            let range_facts = EquationRangeFacts::collect(path, &root, &model);
             let cite_fact = CiteFileFacts {
                 path: path.to_path_buf(),
                 bib_targets: collect_bib_resource_targets(&root, path.parent()),
@@ -689,6 +691,7 @@ fn analyze_source(
                 model,
                 facts,
                 label_input,
+                range_facts,
                 cite_fact,
                 option_facts,
             }))
@@ -923,6 +926,7 @@ fn collect_project_diagnostics_with_bibliographies(
     let mut analyzed: Vec<(PathBuf, GreenNode, SemanticModel)> = Vec::new();
     let mut facts: Vec<FileFacts> = Vec::new();
     let mut label_inputs = Vec::new();
+    let mut range_facts = Vec::new();
     let mut cite_facts: Vec<CiteFileFacts> = Vec::new();
     let mut option_facts: Vec<PackageOptionFacts> = Vec::new();
     // Cite keys per analyzed `.bib` path, feeding the cross-file citation resolver.
@@ -945,12 +949,14 @@ fn collect_project_diagnostics_with_bibliographies(
                     model,
                     facts: f,
                     label_input,
+                    range_facts: ranges,
                     cite_fact,
                     option_facts: o,
                 } = *tex;
                 diagnostics.extend(d);
                 facts.push(f);
                 label_inputs.push(label_input);
+                range_facts.push(ranges);
                 cite_facts.push(cite_fact);
                 option_facts.extend(o);
                 analyzed.push((path, green, model));
@@ -973,7 +979,7 @@ fn collect_project_diagnostics_with_bibliographies(
     // Phase 2 — cross-file resolution: a serial barrier (needs the whole analyzed
     // set) over the collected facts. Pure graph work, no re-parsing.
     let graph = IncludeGraph::build(&facts, None);
-    let resolved = ResolvedLabels::build(&label_inputs, &graph);
+    let resolved = ResolvedLabels::build_with_range_facts(&label_inputs, &graph, &range_facts);
     let resolved_citations = ResolvedCitations::build_with_aliases(
         &cite_facts,
         &graph,

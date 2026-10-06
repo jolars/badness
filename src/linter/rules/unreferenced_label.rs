@@ -1,5 +1,5 @@
 //! `unreferenced-label`: a label definition unused by a reference command
-//! or a recognized equation range in its document's label namespace.
+//! or a recognized equation group or range in its document's label namespace.
 //!
 //! The mirror image of [`undefined-ref`](super::undefined_ref): that rule flags a
 //! *reference* with no definition, this one flags a *definition* with no
@@ -55,8 +55,10 @@ impl Rule for UnreferencedLabel {
         "Flag a label definition unused by a `\\ref`-family command anywhere in the \
          document. A `\\eqref{A}--\\eqref{D}` range also uses labels between A and D \
          when they occur in consecutive `equation` environments in the same \
-         file without manual numbering changes. Other equation layouts keep their \
-         warnings. The mirror of `undefined-ref`, and sound only when the label \
+         file without manual numbering changes. Referencing a `subequations` \
+         group label also uses the labels in its enclosed math environments. \
+         Other equation layouts keep their warnings. The mirror of `undefined-ref`, \
+         and sound only when the label \
          namespace is complete, so it stays silent unless the project view is \
          **closed** (every include resolves to an analyzed file) and **rooted**. \
          Inert on stdin or wherever no cross-file label resolution is available. \
@@ -79,6 +81,7 @@ impl Rule for UnreferencedLabel {
         }
 
         let ranged = ranged_equation_labels(ctx);
+        let grouped = referenced_subequation_labels(ctx);
 
         sink.extend(
             ctx.model
@@ -87,6 +90,7 @@ impl Rule for UnreferencedLabel {
                 .filter(|label| {
                     !resolution.is_referenced(ctx.path, &label.name)
                         && !ranged.contains(&label.name)
+                        && !grouped.contains(&usize::from(label.range.start()))
                 })
                 .map(|label| Diagnostic {
                     rule: self.id(),
@@ -100,6 +104,70 @@ impl Rule for UnreferencedLabel {
                 }),
         );
     }
+}
+
+/// A reference to a `subequations` group names the numbered equations inside
+/// it. Only a label outside the nested environments can identify that group.
+fn referenced_subequation_labels(ctx: &RuleContext<'_>) -> HashSet<usize> {
+    let Some(resolution) = ctx.resolution else {
+        return HashSet::new();
+    };
+    let mut grouped = HashSet::new();
+    for group in ctx.root.descendants().filter(|node| {
+        node.kind() == SyntaxKind::ENVIRONMENT
+            && node
+                .children()
+                .find(|child| child.kind() == SyntaxKind::BEGIN)
+                .and_then(|begin| environment_name(&begin))
+                .as_deref()
+                == Some("subequations")
+    }) {
+        if !group.children().any(|child| {
+            child.kind() == SyntaxKind::END
+                && environment_name(&child).as_deref() == Some("subequations")
+        }) {
+            continue;
+        }
+        let nested: Vec<_> = group
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::ENVIRONMENT && *node != group)
+            .collect();
+        let parent_referenced = ctx.model.labels().iter().any(|label| {
+            group.text_range().contains_range(label.range)
+                && !nested
+                    .iter()
+                    .any(|environment| environment.text_range().contains_range(label.range))
+                && resolution.is_referenced(ctx.path, &label.name)
+                && resolution.definers(ctx.path, &label.name) == [ctx.path]
+                && ctx
+                    .model
+                    .labels()
+                    .iter()
+                    .filter(|other| other.name == label.name)
+                    .count()
+                    == 1
+        });
+        if !parent_referenced {
+            continue;
+        }
+        for environment in nested {
+            let Some(math) = environment
+                .children()
+                .find(|child| child.kind() == SyntaxKind::MATH)
+            else {
+                continue;
+            };
+            for label in ctx
+                .model
+                .labels()
+                .iter()
+                .filter(|label| math.text_range().contains_range(label.range))
+            {
+                grouped.insert(usize::from(label.range.start()));
+            }
+        }
+    }
+    grouped
 }
 
 struct Equation<'a> {

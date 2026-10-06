@@ -931,6 +931,62 @@ fn unreferenced_label_accepts_consecutive_equation_range() {
 }
 
 #[test]
+fn unreferenced_label_accepts_referenced_subequations_group() {
+    let findings = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\\begin{document}\n\\begin{subequations}\\label{eq:group}\n\\begin{equation}a=1\\label{eq:a}\\end{equation}\n\\begin{equation}b=2\\label{eq:b}\\end{equation}\n\\end{subequations}\nSee \\eqref{eq:group}.\n\\end{document}\n",
+    )]);
+    assert!(
+        !rules_only(&findings).contains(&"unreferenced-label"),
+        "the parent reference uses the subequations: {findings:?}"
+    );
+}
+
+#[test]
+fn unreferenced_label_keeps_subequations_warnings_without_a_parent_reference() {
+    let findings = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\\begin{document}\n\\begin{subequations}\\label{eq:group}\n\\begin{equation}a=1\\label{eq:a}\\end{equation}\n\\begin{equation}b=2\\label{eq:b}\\end{equation}\n\\end{subequations}\n\\end{document}\n",
+    )]);
+    let warnings: Vec<_> = findings
+        .iter()
+        .filter(|(_, rule, _)| *rule == "unreferenced-label")
+        .map(|(_, _, message)| message.as_str())
+        .collect();
+    assert_eq!(warnings.len(), 3, "{findings:?}");
+    assert!(warnings.iter().any(|message| message.contains("eq:group")));
+    assert!(warnings.iter().any(|message| message.contains("eq:a")));
+    assert!(warnings.iter().any(|message| message.contains("eq:b")));
+}
+
+#[test]
+fn unreferenced_label_does_not_treat_a_child_reference_as_a_group_reference() {
+    let findings = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\\begin{document}\n\\begin{subequations}\n\\begin{equation}a=1\\label{eq:a}\\end{equation}\n\\begin{equation}b=2\\label{eq:b}\\end{equation}\n\\end{subequations}\nSee \\eqref{eq:a}.\n\\end{document}\n",
+    )]);
+    let warnings: Vec<_> = findings
+        .iter()
+        .filter(|(_, rule, _)| *rule == "unreferenced-label")
+        .map(|(_, _, message)| message.as_str())
+        .collect();
+    assert_eq!(warnings.len(), 1, "{findings:?}");
+    assert!(warnings[0].contains("eq:b"));
+}
+
+#[test]
+fn unreferenced_label_accepts_align_inside_referenced_subequations() {
+    let findings = lint_project(&[(
+        "main.tex",
+        "\\documentclass{article}\n\\begin{document}\n\\begin{subequations}\\label{eq:group}\n\\begin{align}a&=1\\label{eq:a}\\\\\nb&=2\\label{eq:b}\\end{align}\n\\end{subequations}\nSee \\eqref{eq:group}.\n\\end{document}\n",
+    )]);
+    assert!(
+        !rules_only(&findings).contains(&"unreferenced-label"),
+        "the parent reference uses the align rows: {findings:?}"
+    );
+}
+
+#[test]
 fn unreferenced_label_does_not_infer_a_range_across_a_manual_tag() {
     let findings = lint_project(&[(
         "main.tex",

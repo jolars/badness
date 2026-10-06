@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/jolars/badness/compare/badness-parser-v0.10.0...badness-parser-v0.11.0) (2026-10-06)
+
+### Features
+
+- **lsp:** distinguish symbol completions ([`92ed0e4`](https://github.com/jolars/badness/commit/92ed0e486bd7700fe99edfe99725c52882ea0196)), closes [#190](https://github.com/jolars/badness/issues/190)
+
+### Bug Fixes
+
+- replace full reference completion keys ([`cc2ab0e`](https://github.com/jolars/badness/commit/cc2ab0e167c9d9713dfafe8fb2f7f6c23db1d8b4))
+- **format:** normalize algorithm2e statement spacing ([`aaff9b9`](https://github.com/jolars/badness/commit/aaff9b96397c3f324231eec8e30bd7360165196c)), fixes [#193](https://github.com/jolars/badness/issues/193)
+- **lsp:** broaden command completion kinds ([`5474ca2`](https://github.com/jolars/badness/commit/5474ca245b7c5393ef97ae4801c06a4020ab3dc3)), refs [#190](https://github.com/jolars/badness/issues/190)
+
 ## [0.10.0](https://github.com/jolars/badness/compare/badness-parser-v0.9.0...badness-parser-v0.10.0) (2026-09-21)
 
 ### Features

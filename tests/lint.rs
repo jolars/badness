@@ -54,6 +54,69 @@ fn extra_alignment_tab_runs_through_the_public_driver() {
 }
 
 #[test]
+fn extra_math_linebreak_runs_through_the_public_driver() {
+    let src = "\\begin{align}\n  a &= b \\\\\n  \\intertext{hello world}\\\\\n  c &= d \\\\\n  e &= f \\\\\n\\end{align}\n";
+    assert_eq!(
+        lint(src)
+            .into_iter()
+            .filter(|(rule, _)| *rule == "extra-math-linebreak")
+            .collect::<Vec<_>>(),
+        vec![
+            ("extra-math-linebreak", Severity::Warning),
+            ("extra-math-linebreak", Severity::Warning),
+        ],
+    );
+}
+
+#[test]
+fn extra_math_linebreak_fixes_require_opt_in_and_preserve_trivia() {
+    let src = "\\begin{align}\r\n  α &= b \\\\ % first\r\n  \\intertext{hello}\\\\ % extra\r\n  c &= d \\\\ % final\r\n\\end{align}\r\n";
+    let root = SyntaxNode::new_root(parse(src).green);
+    let model = SemanticModel::build(&root);
+    let fixes: Vec<_> = lint_document(Path::new("doc.tex"), &root, &model, None, None, None)
+        .into_iter()
+        .filter(|d| d.rule == "extra-math-linebreak")
+        .map(|d| d.fix.expect("extra math linebreaks have a removal fix"))
+        .collect();
+    assert_eq!(fixes.len(), 2);
+    assert!(
+        fixes
+            .iter()
+            .all(|fix| { fix.applicability == badness::linter::diagnostic::Applicability::Unsafe })
+    );
+    assert_eq!(apply_fixes(src, &fixes, false).output, src);
+
+    let expected = "\\begin{align}\r\n  α &= b \\\\ % first\r\n  \\intertext{hello} % extra\r\n  c &= d  % final\r\n\\end{align}\r\n";
+    let fixed = apply_fixes(src, &fixes, true).output;
+    assert_eq!(fixed, expected);
+    assert!(parse(&fixed).errors.is_empty());
+    assert_eq!(reconstruct(&fixed), fixed);
+    assert!(
+        !lint(&fixed)
+            .iter()
+            .any(|(rule, _)| *rule == "extra-math-linebreak")
+    );
+    assert_fix_is_correct(src);
+}
+
+#[test]
+fn extra_math_linebreak_respects_rule_suppression() {
+    let src = "% badness-lint skip extra-math-linebreak\n\\begin{align}a&=b\\\\\\end{align}\n";
+    assert!(
+        !lint(src)
+            .iter()
+            .any(|(rule, _)| *rule == "extra-math-linebreak")
+    );
+}
+
+#[test]
+fn extra_math_linebreak_removes_consecutive_empty_rows_to_fixpoint() {
+    let src = "\\begin{align}a&=b\\\\\\\\\\end{align}\n";
+    assert_eq!(fix_to_fixpoint(src), "\\begin{align}a&=b\\end{align}\n");
+    assert_fix_is_correct(src);
+}
+
+#[test]
 fn indented_docstrip_guard_runs_with_dtx_lexing() {
     let findings = lint_project(&[(
         "pkg.dtx",

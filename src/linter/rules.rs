@@ -33,6 +33,7 @@ pub mod expl3_invalid_message_parameter;
 pub mod expl3_protected_predicate;
 pub mod expl3_variant_type;
 pub mod extra_alignment_tab;
+pub mod extra_math_linebreak;
 pub mod hard_coded_reference;
 pub mod indented_docstrip_guard;
 pub mod inert_suppression;
@@ -72,6 +73,7 @@ pub use expl3_invalid_message_parameter::Expl3InvalidMessageParameter;
 pub use expl3_protected_predicate::Expl3ProtectedPredicate;
 pub use expl3_variant_type::Expl3VariantType;
 pub use extra_alignment_tab::ExtraAlignmentTab;
+pub use extra_math_linebreak::ExtraMathLinebreak;
 pub use hard_coded_reference::HardCodedReference;
 pub use indented_docstrip_guard::IndentedDocstripGuard;
 pub use inert_suppression::InertSuppression;
@@ -754,6 +756,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(Expl3ProtectedPredicate),
         Box::new(Expl3VariantType),
         Box::new(ExtraAlignmentTab),
+        Box::new(ExtraMathLinebreak),
         Box::new(HardCodedReference),
         Box::new(IndentedDocstripGuard),
         Box::new(InertSuppression),
@@ -850,6 +853,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "expl3-protected-predicate",
     "expl3-variant-type",
     "extra-alignment-tab",
+    "extra-math-linebreak",
     "hard-coded-reference",
     "indented-docstrip-guard",
     "inert-suppression",

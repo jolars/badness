@@ -431,6 +431,46 @@ error: extra-alignment-tab
   |         ^ row uses at least 3 columns, but the table preamble declares 2
 ```
 
+## `extra-math-linebreak`
+
+Flag a plain `\\` at the end of an `align`, `alignat`, `flalign`, `gather`, or `multline` environment, including their starred forms, or immediately after `\intertext{...}` or `\shortintertext{...}` in an environment that supports intertext. These breaks add an empty row, increasing vertical space and potentially adding an equation number. Breaks before intertext, starred breaks, explicit spacing arguments, subsidiary environments such as `aligned`, and locally redefined environments or intertext commands are left alone. The fix deletes only the offending `\\`, preserving comments and surrounding whitespace. It is **unsafe** because it changes typeset spacing and potentially numbering; use `--fix --unsafe-fixes` or an explicit editor action.
+
+This rule is **enabled by default**.
+
+A final linebreak adds an empty equation row:
+
+```tex
+\begin{align}
+  a &= b \\
+\end{align}
+```
+
+```text
+warning: extra-math-linebreak
+ --> example.tex:2:10
+  |
+2 |   a &= b \\
+  |          ^^ final linebreak adds an empty math row
+```
+
+Intertext already separates the surrounding equation rows:
+
+```tex
+\begin{align*}
+  a &= b \\
+  \intertext{and therefore}\\
+  c &= d
+\end{align*}
+```
+
+```text
+warning: extra-math-linebreak
+ --> example.tex:3:28
+  |
+3 |   \intertext{and therefore}\\
+  |                            ^^ linebreak after `\intertext` adds an empty math row
+```
+
 ## `hard-coded-reference`
 
 Flag a literal cross-reference written in prose -- `Figure 3`, `Table~1`, `Section 2` -- instead of `\ref`/`\cref` to a `\label` (textidote sh:hcfig/hctab/hcsec). Hard-coding the number defeats LaTeX's automatic numbering: renumbering a float or reordering sections silently breaks the reference and drops the hyperlink. The rule is **report-only** -- the correct rewrite needs the label the number refers to, which is not in the text, so no autofix is offered. To stay conservative it fires only for a capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) matched as a whole word and directly followed, across one space or a tie `~`, by an arabic number; plurals, lowercase, `Figure~\ref{x}`, and `Figure three` are left alone. It also skips a citation locator (`\cite[Section~8.1]{...}`, a reference into external work), an environment title (`\begin{thm}[Conway's Theorem 0]`, a proper name), and an `\item[label]` description-list caption (`\item[Part 3.]`). It never touches math, comments, or verbatim.

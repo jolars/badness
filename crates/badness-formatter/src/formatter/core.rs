@@ -21,6 +21,7 @@ use crate::parser::is_def_prefix_command;
 use crate::parser::lexer::{ExplToggle, expl_toggle};
 use crate::parser::{LatexFlavor, parse_with_declarations, parse_with_flavor};
 use crate::semantic::expl3::{StatementMap, segment_expl_statements};
+use crate::semantic::signature::document_class_signatures;
 use crate::semantic::tikz::statement_glue;
 use crate::semantic::{
     ArgKind, ArgSpec, ArgumentDomain, CitationPlacement, ContentKind, DelimiterRole, MathClass,
@@ -324,14 +325,15 @@ fn format_root(
     external: &SignatureDb,
     range: Option<TextRange>,
 ) -> String {
+    // Class meanings depend only on the document's literal declaration. Loaded
+    // local packages and document redefinitions override these curated defaults.
+    let mut user = document_class_signatures(root).cloned().unwrap_or_default();
+    user.merge_from(external, None);
     // Scan the document's own `\newcommand`/`\newenvironment`/xparse definitions
     // once, so the lowering resolves a locally-defined construct's arity (not just
     // the built-in DB's). They are overlaid on top of `external` — the merged
     // signatures of any loaded local packages — so a document redefinition wins
-    // over a package. `external` is empty for the contextless entry points, in
-    // which case this is exactly the old document-only scan. Held by value for the
-    // whole lowering.
-    let mut user = external.clone();
+    // over a package. Held by value for the whole lowering.
     user.merge_from(&scan_definitions(root), None);
     // The expl3 source regions, recomputed read-only from the same toggle set the
     // lexer uses ([`expl_toggle`]). Inside them source whitespace is catcode-9

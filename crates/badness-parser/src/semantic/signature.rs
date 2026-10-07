@@ -26,6 +26,10 @@
 //! environment signatures so adding a local meaning does not grant parser or
 //! formatter behavior to the containing environment.
 //!
+//! `classCommands` records formatter signatures selected by a literal top-level
+//! `\documentclass`. These remain separate from global signatures because a
+//! command such as `\affiliation` has different argument meanings across classes.
+//!
 //! Lower-precision external sources layer *underneath* this, ingested into the
 //! same schema rather than replacing it. The TeXstudio/Kile **CWL corpus** is one
 //! such tier: a
@@ -891,6 +895,7 @@ const SIGNATURES_JSON: &str = include_str!("../../data/signatures.json");
 struct BuiltinData {
     signatures: SignatureDb,
     command_completions: HashMap<SmolStr, CommandCompletionKind>,
+    class_signatures: HashMap<SmolStr, SignatureDb>,
 }
 
 static DB: LazyLock<BuiltinData> = LazyLock::new(|| {
@@ -900,6 +905,38 @@ static DB: LazyLock<BuiltinData> = LazyLock::new(|| {
 /// The process-wide built-in signature database.
 pub fn builtin() -> &'static SignatureDb {
     &DB.signatures
+}
+
+/// Curated formatter signatures for a document's literal class declaration.
+///
+/// Nested declarations may be macro bodies or conditional code, so only direct
+/// commands in root paragraphs qualify. Multiple declarations and computed names
+/// leave the class unresolved rather than granting unproved layout behavior.
+pub fn document_class_signatures(root: &SyntaxNode) -> Option<&'static SignatureDb> {
+    use crate::ast::{command_name, nth_group, nth_group_text};
+
+    if root.kind() != SyntaxKind::ROOT {
+        return None;
+    }
+    let mut declarations = root
+        .children()
+        .filter(|node| node.kind() == SyntaxKind::PARAGRAPH)
+        .flat_map(|paragraph| paragraph.children())
+        .filter(|node| command_name(node).as_deref() == Some("documentclass"));
+    let declaration = declarations.next()?;
+    if declarations.next().is_some() {
+        return None;
+    }
+    // Greedy attachment leaves an unbraced definition target as a sibling of
+    // its defining command, so top-level ancestry alone cannot prove a call.
+    if declaration.prev_sibling().is_some_and(|previous| {
+        command_name(&previous).is_some_and(|name| super::define::is_definition_command(&name))
+            && nth_group(&previous, 0).is_none()
+    }) {
+        return None;
+    }
+    let name = nth_group_text(&declaration, 0)?;
+    DB.class_signatures.get(name.trim())
 }
 
 /// Curated command presentation. Definitions and declarations take precedence.
@@ -1244,6 +1281,8 @@ struct RawDb {
     commands: HashMap<String, RawCommand>,
     #[serde(default, rename = "environmentCommands")]
     environment_commands: HashMap<String, HashMap<String, RawCommand>>,
+    #[serde(default, rename = "classCommands")]
+    class_commands: HashMap<String, HashMap<String, RawCommand>>,
     #[serde(default)]
     environments: HashMap<String, RawEnvironment>,
     #[serde(default, rename = "expl3Names")]
@@ -1297,6 +1336,22 @@ fn parse_data(json: &str) -> serde_json::Result<BuiltinData> {
     Ok(BuiltinData {
         signatures,
         command_completions,
+        class_signatures: raw
+            .class_commands
+            .into_iter()
+            .map(|(class, commands)| {
+                (
+                    SmolStr::new(class),
+                    SignatureDb {
+                        commands: commands
+                            .into_iter()
+                            .map(|(name, sig)| (SmolStr::new(name), sig.into()))
+                            .collect(),
+                        ..SignatureDb::default()
+                    },
+                )
+            })
+            .collect(),
     })
 }
 
@@ -1306,6 +1361,47 @@ mod tests {
 
     fn parse(json: &str) -> serde_json::Result<SignatureDb> {
         parse_data(json).map(|data| data.signatures)
+    }
+
+    #[test]
+    fn cas_class_signatures_require_one_literal_top_level_declaration() {
+        use crate::parser::parse;
+
+        for source in [
+            "\\documentclass{cas-sc}\n",
+            "\\documentclass[a4paper]{cas-dc}\n",
+            "\\documentclass{\n cas-sc\n}\n",
+        ] {
+            let root = parse(source).syntax();
+            let db = document_class_signatures(&root).expect("literal CAS class");
+            let sig = db.command("affiliation").unwrap();
+            assert_eq!(sig.args.len(), 3);
+            assert_eq!(sig.args[0].kind, ArgKind::Bracket);
+            assert_eq!(sig.args[0].content, ContentKind::Opaque);
+            assert_eq!(sig.args[1].kind, ArgKind::Brace);
+            assert_eq!(sig.args[1].content, ContentKind::Keyval);
+            assert_eq!(sig.args[2].kind, ArgKind::Bracket);
+            assert_eq!(sig.args[2].content, ContentKind::Keyval);
+        }
+        for source in [
+            "\\affiliation{Plain text}\n",
+            "\\documentclass{revtex4-2}\n",
+            "\\documentclass{\\myclass}\n",
+            "\\documentclass{{cas-sc}}\n",
+            "\\documentclass{cas-sc,article}\n",
+            "\\newcommand{\\example}{\\documentclass{cas-sc}}\n",
+            "\\newcommand\\documentclass[1]{cas-sc}\n",
+            "{\\documentclass{cas-sc}}\n",
+            "\\iftrue\\documentclass{cas-sc}\\fi\n",
+            "\\documentclass{cas-sc}\n\\documentclass{article}\n",
+            "\\documentclass{article}\n\\documentclass{cas-sc}\n",
+        ] {
+            assert!(
+                document_class_signatures(&parse(source).syntax()).is_none(),
+                "{source}"
+            );
+        }
+        assert!(builtin().command("affiliation").is_none());
     }
 
     #[test]

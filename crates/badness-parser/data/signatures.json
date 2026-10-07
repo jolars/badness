@@ -386,6 +386,14 @@
     "multicolumn": { "args": ["req", "req", "req"] }
   },
 
+  "classCommands": {
+    "cas-sc": {
+      "affiliation": { "args": ["opt", { "kind": "req", "content": "keyval" }, { "kind": "opt", "content": "keyval" }] }
+    },
+    "cas-dc": {
+      "affiliation": { "args": ["opt", { "kind": "req", "content": "keyval" }, { "kind": "opt", "content": "keyval" }] }
+    }
+  },
   "environmentCommands": {
     "algorithm": {
       "KwIn": { "args": [{ "kind": "req", "content": "prose", "domain": "text" }], "block": true },

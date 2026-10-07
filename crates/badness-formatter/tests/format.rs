@@ -2334,6 +2334,73 @@ fn textual_environment_optionals_preserve_invariants() {
 }
 
 #[test]
+fn cas_affiliation_formats_as_keyvals() {
+    let affiliation = concat!(
+        "\\affiliation[1]{\n",
+        "  organization={Department of Mathematical Sciences, University of Copenhagen},\n",
+        "  addressline={Universitetsparken 5},\n",
+        "  city={Copenhagen \\O},\n",
+        "  postcode={2100},\n",
+        "  country={Denmark}\n",
+        "}\n",
+    );
+    for class in ["cas-sc", "cas-dc"] {
+        let input = format!("\\documentclass[a4paper,fleqn]{{{class}}}\n\n{affiliation}");
+        assert_eq!(format(&input).unwrap(), input);
+        let inline = input.replace("\n  ", "").replace("\n}", "}");
+        assert_eq!(format(&inline).unwrap(), input);
+        for line_width in [30, 60, 80, 120] {
+            assert_format_invariants_with_style(
+                &input,
+                FormatStyle {
+                    line_width,
+                    ..FormatStyle::default()
+                },
+            );
+        }
+        let short = format!(
+            "\\documentclass{{{class}}}\n\n\\affiliation{{city={{Copenhagen}},country={{Denmark}}}}\n"
+        );
+        assert_eq!(format(&short).unwrap(), short);
+    }
+}
+
+#[test]
+fn cas_class_signature_yields_to_redefinitions() {
+    use badness_formatter::formatter::format_node_with_signatures;
+    use badness_formatter::semantic::scan_definitions;
+
+    let body = "\\affiliation{red,green,blue,yellow,orange}\n";
+    let style = FormatStyle {
+        line_width: 20,
+        ..FormatStyle::default()
+    };
+    let generic = format_with_style(body, style).unwrap();
+    for definition in [
+        "\\newcommand{\\affiliation}[1]{#1}\n",
+        "\\RenewDocumentCommand{\\affiliation}{m}{#1}\n",
+    ] {
+        let input = format!("\\documentclass{{cas-sc}}\n\n{definition}\n{body}");
+        let formatted = format_with_style(&input, style).unwrap();
+        assert!(formatted.ends_with(&generic), "{formatted}");
+        assert_format_invariants_with_style(&input, style);
+    }
+    let external = scan_definitions(&parse("\\newcommand{\\affiliation}[1]{#1}\n").syntax());
+    let root = parse(&format!("\\documentclass{{cas-sc}}\n\n{body}")).syntax();
+    let formatted = format_node_with_signatures(&root, style, &external).unwrap();
+    assert!(formatted.ends_with(&generic), "{formatted}");
+
+    for class in ["article", "revtex4-2"] {
+        let input = format!("\\documentclass{{{class}}}\n\n{body}");
+        assert!(
+            format_with_style(&input, style)
+                .unwrap()
+                .ends_with(&generic)
+        );
+    }
+}
+
+#[test]
 fn fill_suffix_measurement_keeps_expl3_fallbacks_convergent() {
     let input = concat!(
         "\\ExplSyntaxOn\n",

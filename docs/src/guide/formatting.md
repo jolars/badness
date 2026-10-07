@@ -37,6 +37,13 @@ they do not fit. Opaque braced environment arguments keep values such as
 comments retain their binding; the formatter does not insert `%` markers to
 create new break opportunities.
 
+For a literal top-level `\documentclass{cas-sc}` or `\documentclass{cas-dc}`,
+badness treats the braced affiliation fields and the trailing address options of
+`\affiliation` as key-value lists. Short lists stay inline; longer lists expand
+to one entry per line. Other classes retain ordinary argument formatting, and
+definitions in the document or a loaded local package override the class
+signature.
+
 Inside `algorithm` and `algorithm2e` environments (including their starred
 forms), badness normalizes text in `\KwIn`, `\KwOut`, `\KwData`, and
 `\KwResult`. It indents the braced bodies of `\For`, `\ForEach`, `\ForAll`,

@@ -244,6 +244,14 @@ entries do not change parser grouping. The formatter resolves the same local
 signatures through `Signatures::command_at`, with scanned definitions taking
 precedence over the curated database.
 
+The formatter also selects curated `classCommands` from one literal top-level
+`\documentclass` declaration. These signatures sit below loaded local package
+definitions and document definitions. For `cas-sc` and `cas-dc`, this identifies
+the key-value arguments of `\affiliation` without assigning that meaning to the
+same command in other classes. Selection reads only the CST; it neither changes
+parser grouping nor consults the TeX installation. Computed, nested, and
+multiple class declarations do not select a class signature.
+
 Facts that authorize a rewrite need stronger evidence than facts used for
 completion. `ContentKind::Keyval` permits breaks after commas that had no
 following whitespace, so a wrong classification can change typeset output.

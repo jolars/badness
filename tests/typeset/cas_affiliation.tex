@@ -1,0 +1,15 @@
+% CAS processes affiliation fields with l3keys. Splitting glued commas must
+% preserve the address, including commas inside braced values.
+\documentclass[a4paper,fleqn]{cas-sc}
+\begin{document}
+\shorttitle{Affiliation formatting}
+\shortauthors{Larsson}
+\title[mode=title]{Affiliation formatting}
+\author[1]{Johan Larsson}
+\affiliation[1]{organization={Department of Mathematical Sciences, University of Copenhagen},addressline={Universitetsparken 5},city={Copenhagen \O},postcode={2100},country={Denmark}}[type=custom,name={Correspondence address},foot=false]
+\begin{abstract}
+An affiliation formatting check.
+\end{abstract}
+\maketitle
+Body.
+\end{document}

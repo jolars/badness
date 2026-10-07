@@ -393,6 +393,10 @@ const STRICT_TRIVIA_INVARIANT_SHAPES: &[(&str, &str)] = &[
         "optional-collapsed",
         "alpha (\\baz[a, b] x) beta gamma\n",
     ),
+    (
+        "math-intertext-rows",
+        "\\begin{align*}\na & b\n\\intertext{hello world}\nc & d \\\\\n\\shortintertext{more text}\ne & f\n\\end{align*}\n",
+    ),
 ];
 
 /// Every registered shape must hold strict trivia invariance at **all** sweep
@@ -1189,6 +1193,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // environment is still aligned in its own right.
     ("align_columns_basic", WrapMode::Preserve, 80),
     ("issue_201_align_leading_label", WrapMode::Sentence, 80),
+    ("issue_202_math_intertext", WrapMode::Preserve, 80),
     // A user-defined (unclassified) environment with a top-level `&` grid-aligns
     // like a curated alignment env: `&` at catcode 4 is a column tab, a static
     // CST-shape fact (issue #84, `\begin{myaligned}`). Uneven columns pad, and a
@@ -2734,6 +2739,103 @@ fn assert_fixture(name: &str, style: FormatStyle) {
         formatted,
         "fixture {name} formatted output must round-trip"
     );
+}
+
+#[test]
+fn math_grid_intertext_has_its_own_line() {
+    for command in ["intertext", "shortintertext"] {
+        for environment in ["align", "align*", "gather", "gather*"] {
+            let (first, second) = if environment.starts_with("align") {
+                ("a & b", "c & d")
+            } else {
+                ("a = b", "c = d")
+            };
+            for terminator in ["", r" \\", r" \\*[2pt]"] {
+                let expected = format!(
+                    "\\begin{{{environment}}}\n    {first}{terminator}\n    \\{command}{{hello world}}\n    {second}\n\\end{{{environment}}}\n"
+                );
+                for input in [expected.clone(), expected.replace('\n', " ")] {
+                    for wrap in [WrapMode::Preserve, WrapMode::Reflow, WrapMode::Sentence] {
+                        let style = FormatStyle {
+                            wrap,
+                            indent_width: 4,
+                            ..FormatStyle::default()
+                        };
+                        assert_eq!(format_with_style(&input, style).unwrap(), expected);
+                        assert_format_invariants_with_style(&input, style);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn math_grid_intertext_keeps_formula_groups_and_comments() {
+    for command in ["intertext", "shortintertext"] {
+        for (body, expected_body) in [
+            (
+                format!("a & b \\{command}{{hello world}}{{c}} & d"),
+                format!("    a   & b\n    \\{command}{{hello world}}\n    {{c}} & d"),
+            ),
+            (
+                format!("a & b\n% explanation\n\\{command}{{hello world}} c & d"),
+                format!("    a & b\n    % explanation\n    \\{command}{{hello world}}\n    c & d"),
+            ),
+            (
+                format!("a & b \\{command}{{hello world}} % explanation\nc & d"),
+                format!("    a & b\n    \\{command}{{hello world}} % explanation\n    c & d"),
+            ),
+            (
+                format!("a & b % equation\n\\{command}{{hello world}} c & d"),
+                format!("    a & b % equation\n    \\{command}{{hello world}}\n    c & d"),
+            ),
+        ] {
+            let input = format!("\\begin{{align*}}\n{body}\n\\end{{align*}}\n");
+            let expected = format!("\\begin{{align*}}\n{expected_body}\n\\end{{align*}}\n");
+            for wrap in [WrapMode::Preserve, WrapMode::Reflow, WrapMode::Sentence] {
+                let style = FormatStyle {
+                    wrap,
+                    indent_width: 4,
+                    ..FormatStyle::default()
+                };
+                assert_eq!(format_with_style(&input, style).unwrap(), expected);
+                assert_format_invariants_with_style(&input, style);
+            }
+        }
+    }
+}
+
+#[test]
+fn math_grid_intertext_requires_a_top_level_text_argument() {
+    for command in ["intertext", "shortintertext"] {
+        for body in [
+            format!("a & {{\\{command}{{hello world}}}} c & d"),
+            format!("a & \\{command}[o]{{hello world}} c & d"),
+            format!("a & \\{command} c & d"),
+        ] {
+            let input = format!("\\begin{{align*}}\n{body}\n\\end{{align*}}\n");
+            let expected = format!("\\begin{{align*}}\n  {body}\n\\end{{align*}}\n");
+            assert_eq!(format(&input).unwrap(), expected);
+            assert_format_invariants(&input);
+        }
+        let input = format!(
+            "\\begin{{tabular}}{{ll}}\na & \\{command}{{hello world}} c \\\\\n\\end{{tabular}}\n"
+        );
+        let expected = input.replace("\na &", "\n  a &");
+        assert_eq!(format(&input).unwrap(), expected);
+        assert_format_invariants(&input);
+
+        let input = format!(
+            "\\renewcommand{{\\{command}}}[2]{{#1#2}}\n\\begin{{align*}}\na & \\{command}{{left}}{{right}}c & d\n\\end{{align*}}\n"
+        );
+        assert!(
+            format(&input)
+                .unwrap()
+                .contains(&format!("\n  a & \\{command}{{left}}{{right}}c & d\n"))
+        );
+        assert_format_invariants(&input);
+    }
 }
 
 #[test]

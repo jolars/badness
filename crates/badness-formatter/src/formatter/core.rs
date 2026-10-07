@@ -6702,14 +6702,13 @@ struct AlignRow {
     trailing_comment: Option<String>,
 }
 
-/// One item in an alignment grid: either a [`AlignRow`] or a *passthrough* line —
-/// a physical line that is not a grid row (a comment-only line, or a line made up
-/// solely of horizontal-rule commands like `\hline`/`\midrule`, or a leading
-/// math label). A passthrough is kept between rows and never counted toward column
-/// widths.
+/// One item in an alignment grid: a row, intertext, or a passthrough
+/// line (comments, horizontal rules, or a leading math label). Only rows
+/// contribute to column widths.
 enum GridItem {
     Row(AlignRow),
     Passthrough(String),
+    Intertext(Ir),
 }
 
 /// Lower an `align`/matrix-family environment, laying out its `&` columns into a
@@ -6770,12 +6769,13 @@ fn lower_aligned_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// whose body the parser wrapped in a `MATH` node. Two layouts, chosen by the body's
 /// shape:
 ///
-/// - **Grid** (a top-level `&` or `\\`): `align`/matrix column-and-row grids, and
-///   `gather`/`multline` row stacks (a single column). Reuses [`build_alignment_grid`]
-///   in `math` mode, so cells get role-aware math spacing.
-/// - **Single formula** (neither): `equation`/`displaymath`. Routes the `MATH` body
-///   through [`lower_display_math_body`], the relation-aware amsmath-style breaker,
-///   so a too-long formula breaks at its top-level relations/operators.
+/// - **Grid** (a top-level `&`, `\\`, or intertext): `align`/matrix column-and-row
+///   grids, and `gather`/`multline` row stacks (a single column). Reuses
+///   [`build_alignment_grid`] in `math` mode, so cells get role-aware math spacing.
+/// - **Single formula** (none of those): `equation`/`displaymath`. Routes the
+///   `MATH` body through [`lower_display_math_body`], the relation-aware
+///   amsmath-style breaker, so a too-long formula breaks at its top-level
+///   relations/operators.
 ///
 /// Framing (leading, `\begin` header, indented body, `\end`) mirrors
 /// [`lower_display_math`] and [`lower_aligned_environment`]. If the body is not a
@@ -6806,11 +6806,11 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         return lower_environment(node, cx);
     };
 
-    // A top-level `&` or `\\` inside the `MATH` body means a grid; otherwise it is a
-    // single formula.
-    let is_grid = math_node
-        .children_with_tokens()
-        .any(|e| matches!(e.kind(), SyntaxKind::AMPERSAND | SyntaxKind::LINE_BREAK));
+    // Intertext also separates equation rows when no explicit `\\` is present.
+    let is_grid = math_node.children_with_tokens().any(|e| {
+        matches!(e.kind(), SyntaxKind::AMPERSAND | SyntaxKind::LINE_BREAK)
+            || grid_intertext(&e, body_cx).is_some()
+    });
 
     let body = if is_grid {
         match build_alignment_grid(&body_elements, body_cx, true, false, lifted.as_ref()) {
@@ -6867,8 +6867,9 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 /// passthrough lines), or `None` to signal the caller should fall back to the
 /// generic environment lowering.
 ///
-/// Rows are delimited by *top-level* `\\` ([`SyntaxKind::LINE_BREAK`]) nodes and
-/// cells by top-level `&` ([`SyntaxKind::AMPERSAND`]) tokens; a `&` nested inside a
+/// Rows are delimited by *top-level* `\\` ([`SyntaxKind::LINE_BREAK`]) nodes or
+/// intertext commands in math, and cells by top-level `&` ([`SyntaxKind::AMPERSAND`])
+/// tokens; a `&` nested inside a
 /// group or sub-environment lives in a child node, never a direct body child, so
 /// it is correctly invisible here. Each cell's elements lower through the generic
 /// [`lower_element_stream`] and render *flat* (so inline math/groups normalize as
@@ -7095,6 +7096,37 @@ fn build_alignment_grid(
         // boundary trivia. Only here can a non-row (passthrough / trailing-comment)
         // line begin.
         let at_boundary = cells.is_empty() && cell_is_blank(&cell);
+        if math && let Some((mut text, tail)) = grid_intertext(&inline[idx], cell_cx) {
+            // Intertext ends the preceding equation even without an explicit
+            // `\\`, and its text must not contribute to formula column widths.
+            if !at_boundary {
+                finish_cell(&mut cell, &mut cells, &printer, cell_cx, math)?;
+                items.push(GridItem::Row(AlignRow {
+                    cells: std::mem::take(&mut cells),
+                    line_break: None,
+                    trailing_comment: None,
+                }));
+            }
+            cell.clear();
+            inline.splice(idx + 1..idx + 1, tail);
+            idx += 1;
+            let mut comment_idx = idx;
+            while inline
+                .get(comment_idx)
+                .is_some_and(|element| element.kind() == SyntaxKind::WHITESPACE)
+            {
+                comment_idx += 1;
+            }
+            if let Some(token) = inline.get(comment_idx).and_then(SyntaxElement::as_token)
+                && token.kind() == SyntaxKind::COMMENT
+            {
+                text = Ir::concat([text, Ir::text(" "), Ir::verbatim(token.text().trim_end())]);
+                idx = comment_idx + 1;
+            }
+            items.push(GridItem::Intertext(text));
+            leading = false;
+            continue;
+        }
         if at_boundary
             && is_comment_or_rule_start(&inline[idx], cx)
             && let Some(line) = non_row_line(&inline, idx, &printer, cx)
@@ -7162,6 +7194,35 @@ fn build_alignment_grid(
                 }));
             }
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
+                let before_intertext = math
+                    && inline[idx + 1..]
+                        .iter()
+                        .find(|element| {
+                            !is_collapsible_trivia_element(element)
+                                && element.kind() != SyntaxKind::COMMENT
+                        })
+                        .is_some_and(|element| grid_intertext(element, cell_cx).is_some());
+                if before_intertext {
+                    // Intertext proves the equation ends here, so a comment
+                    // cannot hide later cells when this row is flattened.
+                    let own_line = cell
+                        .iter()
+                        .rev()
+                        .take_while(|element| is_collapsible_trivia_element(element))
+                        .any(|element| element.kind() == SyntaxKind::NEWLINE);
+                    let text = token.text().trim_end().to_string();
+                    finish_cell(&mut cell, &mut cells, &printer, cell_cx, math)?;
+                    items.push(GridItem::Row(AlignRow {
+                        cells: std::mem::take(&mut cells),
+                        line_break: None,
+                        trailing_comment: (!own_line).then(|| text.clone()),
+                    }));
+                    if own_line {
+                        items.push(GridItem::Passthrough(text));
+                    }
+                    idx += 1;
+                    continue;
+                }
                 // A comment that is *not* at a boundary trails cell content. It is
                 // clean only when nothing more of the row can follow: trivia and
                 // own-line comments (each a passthrough line, handled by the
@@ -7202,6 +7263,49 @@ fn build_alignment_grid(
     }
 
     Some(items)
+}
+
+/// Split off the single text argument of an intertext command. The greedy
+/// parser may attach the following formula's leading groups, so return those
+/// original elements to the grid instead of including them in the text line.
+fn grid_intertext(element: &SyntaxElement, cx: LowerCtx<'_>) -> Option<(Ir, Vec<SyntaxElement>)> {
+    let command = Command::cast(element.as_node()?.clone())?;
+    if !matches!(command.name()?.as_str(), "intertext" | "shortintertext")
+        || cx.suppressed(command.syntax().text_range())
+    {
+        return None;
+    }
+    // A redefinition with different arity no longer proves a text-row boundary.
+    let signature = cx.signatures.command_at(command.syntax())?;
+    if signature.args.len() != 1
+        || !signature.args[0].required
+        || signature.args[0].kind != ArgKind::Brace
+    {
+        return None;
+    }
+    let children: Vec<_> = command.syntax().children_with_tokens().collect();
+    let argument = children
+        .iter()
+        .position(|child| matches!(child.kind(), SyntaxKind::GROUP | SyntaxKind::OPTIONAL))?;
+    if children[argument].kind() != SyntaxKind::GROUP
+        || children[..argument].iter().any(|child| {
+            !matches!(
+                child.kind(),
+                SyntaxKind::CONTROL_WORD | SyntaxKind::DOC_COMMENT
+            ) && !is_collapsible_trivia_element(child)
+        })
+    {
+        return None;
+    }
+    let mut text = lower_element_stream(
+        children[..argument]
+            .iter()
+            .filter(|child| !is_collapsible_trivia_element(child))
+            .cloned(),
+        cx,
+    );
+    text.push(lower_node(children[argument].as_node()?, cx));
+    Some((Ir::concat(text), children[argument + 1..].to_vec()))
 }
 
 /// Give a leading math label its own line without moving formula content that
@@ -7643,6 +7747,7 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
 
     let lines = items.iter().map(|item| {
         let row = match item {
+            GridItem::Intertext(ir) => return ir.clone(),
             GridItem::Passthrough(text) => {
                 // A passthrough spans physical lines when a comment-only line
                 // binds into a rule command as its `DOC_COMMENT` (issue #49):

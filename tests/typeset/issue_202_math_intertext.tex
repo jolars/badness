@@ -1,0 +1,10 @@
+\documentclass{article}
+\usepackage{mathtools}
+\begin{document}
+\begin{align*} a &= b \intertext{Without an explicit row break.} c &= d \end{align*}
+\begin{align*} a &= b \\ \intertext{With an explicit row break.} c &= d \end{align*}
+\begin{align*} a &= b \shortintertext{Without an explicit row break.} {c} &= d \end{align*}
+\begin{align*} a &= b \\ \shortintertext{With an explicit row break.} c &= d \end{align*}
+\begin{gather*} a = b \intertext{Between single-column equations.} c = d \end{gather*}
+\begin{gather*} a = b \shortintertext{Between single-column equations.} c = d \end{gather*}
+\end{document}

@@ -1188,6 +1188,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // the cell) falls back to the plain indented body — while a nested alignment
     // environment is still aligned in its own right.
     ("align_columns_basic", WrapMode::Preserve, 80),
+    ("issue_201_align_leading_label", WrapMode::Sentence, 80),
     // A user-defined (unclassified) environment with a top-level `&` grid-aligns
     // like a curated alignment env: `&` at catcode 4 is a column tab, a static
     // CST-shape fact (issue #84, `\begin{myaligned}`). Uneven columns pad, and a
@@ -2626,6 +2627,75 @@ fn math_wrap_fixtures_match_expected() {
             ..FormatStyle::default()
         };
         assert_fixture(name, style);
+    }
+}
+
+#[test]
+fn math_grid_leading_label_has_its_own_line() {
+    let authored = include_str!("fixtures/formatter/issue_201_align_leading_label/input.tex");
+    let expected = include_str!("fixtures/formatter/issue_201_align_leading_label/expected.tex")
+        .replace("\n  ", "\n    ");
+    for wrap in [WrapMode::Preserve, WrapMode::Reflow, WrapMode::Sentence] {
+        for math_wrap in [
+            MathWrap::Auto,
+            MathWrap::Preserve,
+            MathWrap::SingleLine,
+            MathWrap::Break,
+        ] {
+            let style = FormatStyle {
+                wrap,
+                math_wrap,
+                indent_width: 4,
+                ..FormatStyle::default()
+            };
+            assert_eq!(format_with_style(authored, style).unwrap(), expected);
+            assert_format_invariants_with_style(authored, style);
+
+            let input = authored.replace("\\label{a}\n    a", "\\label{a} a");
+            assert_eq!(format_with_style(&input, style).unwrap(), expected);
+            assert_format_invariants_with_style(&input, style);
+        }
+    }
+}
+
+#[test]
+fn math_grid_leading_labels_preserve_comments_and_row_content() {
+    for (input, expected) in [
+        (
+            "\\begin{align}\n\\label{first} % first label\n% second label\n\\label{second}\na&=b\\\\\nc&=d\\label{tail}\n\\end{align}\n",
+            "\\begin{align}\n    \\label{first} % first label\n    % second label\n    \\label{second}\n    a & = b             \\\\\n    c & = d\\label{tail}\n\\end{align}\n",
+        ),
+        (
+            "\\begin{align}\n\\label{first}\\label{second}a&=b\\\\\nc&=d\n\\end{align}\n",
+            "\\begin{align}\n    \\label{first}\n    \\label{second}\n    a & = b \\\\\n    c & = d\n\\end{align}\n",
+        ),
+        (
+            "\\begin{align}\na&=b\\\\\n\\label{second}c&=d\n\\end{align}\n",
+            "\\begin{align}\n    a               & = b \\\\\n    \\label{second}c & = d\n\\end{align}\n",
+        ),
+        (
+            "\\begin{align}\n\\label{first}{a+b}&=c\\\\\nd&=e\n\\end{align}\n",
+            "\\begin{align}\n    \\label{first}{a+b} & = c \\\\\n    d                  & = e\n\\end{align}\n",
+        ),
+        (
+            "\\begin{tabular}{ll}\n\\label{a}a&b\\\\\nc&d\n\\end{tabular}\n",
+            "\\begin{tabular}{ll}\n    \\label{a}a & b \\\\\n    c          & d\n\\end{tabular}\n",
+        ),
+        (
+            "\\begin{equation}\n\\begin{aligned}\n\\label{a}a&=b\\\\\nc&=d\n\\end{aligned}\n\\end{equation}\n",
+            "\\begin{equation}\n    \\begin{aligned}\n        \\label{a}\n        a & = b \\\\\n        c & = d\n    \\end{aligned}\n\\end{equation}\n",
+        ),
+    ] {
+        for wrap in [WrapMode::Preserve, WrapMode::Reflow, WrapMode::Sentence] {
+            let style = FormatStyle {
+                wrap,
+                math_wrap: MathWrap::Preserve,
+                indent_width: 4,
+                ..FormatStyle::default()
+            };
+            assert_eq!(format_with_style(input, style).unwrap(), expected);
+            assert_format_invariants_with_style(input, style);
+        }
     }
 }
 

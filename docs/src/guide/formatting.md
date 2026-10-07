@@ -44,6 +44,12 @@ to one entry per line. Other classes retain ordinary argument formatting, and
 definitions in the document or a loaded local package override the class
 signature.
 
+In `align` and other math alignment grids, including nested `aligned`
+environments, a leading `\label{key}` sits on its own line. Formula rows align
+without counting the label toward column widths. Trailing comments stay attached
+to their labels, and labels within formula rows stay in place. This layout
+applies independently of `math-wrap`.
+
 Inside `algorithm` and `algorithm2e` environments (including their starred
 forms), badness normalizes text in `\KwIn`, `\KwOut`, `\KwData`, and
 `\KwResult`. It indents the braced bodies of `\For`, `\ForEach`, `\ForAll`,

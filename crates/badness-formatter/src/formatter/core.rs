@@ -14,7 +14,7 @@ use std::iter::Peekable;
 use rowan::{TextRange, TextSize};
 
 use super::colspec::{self, ColAlign};
-use crate::ast::{AstNode, Environment, Group, command_name};
+use crate::ast::{AstNode, Command, Environment, Group, command_name};
 use crate::declarations::ResolvedDeclarations;
 use crate::directives;
 use crate::parser::is_def_prefix_command;
@@ -6704,8 +6704,9 @@ struct AlignRow {
 
 /// One item in an alignment grid: either a [`AlignRow`] or a *passthrough* line —
 /// a physical line that is not a grid row (a comment-only line, or a line made up
-/// solely of horizontal-rule commands like `\hline`/`\midrule`). A passthrough is
-/// kept verbatim between rows and never counted toward column widths.
+/// solely of horizontal-rule commands like `\hline`/`\midrule`, or a leading
+/// math label). A passthrough is kept between rows and never counted toward column
+/// widths.
 enum GridItem {
     Row(AlignRow),
     Passthrough(String),
@@ -7088,6 +7089,7 @@ fn build_alignment_grid(
     let mut cell: Vec<SyntaxElement> = Vec::new();
 
     let mut idx = 0;
+    let mut leading = math;
     while idx < inline.len() {
         // A row boundary: no committed cells and the current cell holds only
         // boundary trivia. Only here can a non-row (passthrough / trailing-comment)
@@ -7121,6 +7123,20 @@ fn build_alignment_grid(
             cell.clear();
             idx = line.next;
             continue;
+        }
+
+        if leading
+            && at_boundary
+            && let Some((text, next)) = leading_grid_label(&inline, idx, &printer, cell_cx)
+        {
+            // Equation bookkeeping must not widen the first formula column.
+            items.push(GridItem::Passthrough(text));
+            cell.clear();
+            idx = next;
+            continue;
+        }
+        if !is_collapsible_trivia_element(&inline[idx]) {
+            leading = false;
         }
 
         match &inline[idx] {
@@ -7186,6 +7202,57 @@ fn build_alignment_grid(
     }
 
     Some(items)
+}
+
+/// Give a leading math label its own line without moving formula content that
+/// the greedy parser attached as extra arguments. A trailing comment stays with
+/// the label, while a bound own-line comment stays above it.
+fn leading_grid_label(
+    inline: &[SyntaxElement],
+    start: usize,
+    printer: &Printer,
+    cx: LowerCtx<'_>,
+) -> Option<(String, usize)> {
+    let (label, rest) = split_leading_label(&inline[start..])?;
+    let command = Command::cast(label.as_node()?.clone())?;
+    let node = command.syntax();
+    if command.groups().count() != 1
+        || command.optionals().next().is_some()
+        || cx.suppressed(node.text_range())
+    {
+        return None;
+    }
+    let comment = node
+        .children()
+        .find(|child| child.kind() == SyntaxKind::DOC_COMMENT);
+    let label_cx = LowerCtx {
+        omitted_leading_comment: comment.as_ref().map(SyntaxNode::text_range),
+        ..cx
+    };
+    let ir = lower_math_element(label, label_cx, MathSpacing::Normal);
+    printer.flat_width(&ir)?;
+    let mut text = comment
+        .map(|comment| printer.print_flat(&lower_node(&comment, cx)))
+        .unwrap_or_default();
+    text.push_str(printer.print_flat(&ir).trim());
+
+    let mut next = inline.len() - rest.len();
+    let mut comment_idx = next;
+    while inline.get(comment_idx).is_some_and(|element| {
+        element
+            .as_token()
+            .is_some_and(|token| token.kind() == SyntaxKind::WHITESPACE)
+    }) {
+        comment_idx += 1;
+    }
+    if let Some(token) = inline.get(comment_idx).and_then(SyntaxElement::as_token)
+        && token.kind() == SyntaxKind::COMMENT
+    {
+        text.push(' ');
+        text.push_str(token.text().trim_end());
+        next = comment_idx + 1;
+    }
+    Some((text, next))
 }
 
 /// A non-row line recognized at a grid boundary: its rendered text and the index
@@ -9595,9 +9662,9 @@ fn lower_math_body(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
 fn lower_display_formula_elements(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     // A leading `\label{…}` is equation bookkeeping, not part of the formula: give
     // it its own line so the math starts fresh below it, under every wrap policy.
-    // Grids (`align`, `\\`) never reach here. The split recurses so the remaining
-    // formula lowers under its normal `MathWrap` policy (and a `\label\label` run
-    // peels one label per level).
+    // Grids handle leading labels in `build_alignment_grid`. The split recurses
+    // so the remaining formula lowers under its normal `MathWrap` policy (and a
+    // `\label\label` run peels one label per level).
     if let Some((label, rest)) = split_leading_label(elements) {
         return Ir::concat([
             lower_math_element(label, cx, MathSpacing::Normal),

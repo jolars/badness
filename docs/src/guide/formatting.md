@@ -50,6 +50,13 @@ without counting the label toward column widths. Trailing comments stay attached
 to their labels, and labels within formula rows stay in place. This layout
 applies independently of `math-wrap`.
 
+Under `math-wrap = "break"` (the default unless `wrap = "preserve"`), multiline
+sibling environments in display math form separate blocks, even when a joined
+line would fit. Intervening expressions sit on their own lines, and punctuation
+stays attached to the preceding block. A prefix such as `A =` can still
+introduce the first environment on the same line. Explicit `preserve` and
+`single-line` math modes retain their existing line-break policies.
+
 Inside `algorithm` and `algorithm2e` environments (including their starred
 forms), badness normalizes text in `\KwIn`, `\KwOut`, `\KwData`, and
 `\KwResult`. It indents the braced bodies of `\For`, `\ForEach`, `\ForAll`,

@@ -2636,6 +2636,168 @@ fn math_wrap_fixtures_match_expected() {
 }
 
 #[test]
+fn math_multiline_siblings_have_separate_blocks() {
+    let input = r"\[
+\begin{bmatrix}a&b\\c&d\end{bmatrix},
+\qquad \text{and} \qquad
+\begin{bmatrix}e&f\\g&h\end{bmatrix},
+\qquad \text{and} \qquad
+\begin{bmatrix}i&j\\k&l\end{bmatrix}
+\]";
+    let expected = r"\[
+    \begin{bmatrix}
+        a & b \\
+        c & d
+    \end{bmatrix},
+    \qquad \text{and} \qquad
+    \begin{bmatrix}
+        e & f \\
+        g & h
+    \end{bmatrix},
+    \qquad \text{and} \qquad
+    \begin{bmatrix}
+        i & j \\
+        k & l
+    \end{bmatrix}
+\]
+";
+    for line_width in [0, 40, 80, 200] {
+        let style = FormatStyle {
+            line_width,
+            indent_width: 4,
+            ..FormatStyle::default()
+        };
+        for source in [input.to_string(), input.replace('\n', " ")] {
+            assert_eq!(format_with_style(&source, style).unwrap(), expected);
+            assert_format_invariants_with_style(&source, style);
+        }
+    }
+}
+
+#[test]
+fn math_multiline_siblings_keep_comments_and_suffixes() {
+    for (input, expected) in [
+        (
+            r"\[
+\begin{aligned}a&=b\\c&=d\end{aligned}, % first block
+% between blocks
+\qquad \text{or} \qquad % connector
+\begin{cases}e&f\\g&h\end{cases}.
+\]",
+            r"\[
+  \begin{aligned}
+    a & = b \\
+    c & = d
+  \end{aligned}, % first block
+  % between blocks
+  \qquad \text{or} \qquad % connector
+  \begin{cases}
+    e & f \\
+    g & h
+  \end{cases}.
+\]
+",
+        ),
+        (
+            r"\[
+\left(\begin{bmatrix}a&b\end{bmatrix}\right)^2,
+\quad
+\left(\begin{bmatrix}c&d\end{bmatrix}\right)^2.
+\]",
+            r"\[
+  \left( \begin{bmatrix}
+           a & b
+         \end{bmatrix} \right)^2,
+  \quad
+  \left( \begin{bmatrix}
+           c & d
+         \end{bmatrix} \right)^2.
+\]
+",
+        ),
+        (
+            r"\[
+\begin{bmatrix}a&b\end{bmatrix},\\[2pt]
+\begin{bmatrix}c&d\end{bmatrix}
+\]",
+            r"\[
+  \begin{bmatrix}
+    a & b
+  \end{bmatrix},\\[2pt]
+  \begin{bmatrix}
+    c & d
+  \end{bmatrix}
+\]
+",
+        ),
+        (
+            r"\[
+\begin{bmatrix}a&b\end{bmatrix}\\[2pt]
+A=\begin{bmatrix}c&d\end{bmatrix}
+\]",
+            r"\[
+  \begin{bmatrix}
+    a & b
+  \end{bmatrix}\\[2pt]
+  A = \begin{bmatrix}
+        c & d
+      \end{bmatrix}
+\]
+",
+        ),
+    ] {
+        assert_eq!(format(input).unwrap(), expected);
+        assert_format_invariants(input);
+    }
+}
+
+#[test]
+fn math_multiline_siblings_retain_the_first_prefix() {
+    let input = r"\begin{equation}
+A=\begin{bmatrix}a&b\end{bmatrix}, \quad
+\begin{bmatrix}c&d\end{bmatrix}.
+\end{equation}";
+    let expected = r"\begin{equation}
+  A = \begin{bmatrix}
+        a & b
+      \end{bmatrix},
+  \quad
+  \begin{bmatrix}
+    c & d
+  \end{bmatrix}.
+\end{equation}
+";
+    assert_eq!(format(input).unwrap(), expected);
+    assert_format_invariants(input);
+}
+
+#[test]
+fn math_multiline_siblings_respect_explicit_wrap_modes_and_inline_math() {
+    let body = r"\begin{bmatrix}a&b\end{bmatrix}, \qquad \begin{bmatrix}c&d\end{bmatrix}";
+    for (input, math_wrap) in [
+        (format!("\\[{body}\\]"), MathWrap::Preserve),
+        (format!("\\[{body}\\]"), MathWrap::SingleLine),
+        (format!("${body}$"), MathWrap::Break),
+    ] {
+        let style = FormatStyle {
+            math_wrap,
+            ..FormatStyle::default()
+        };
+        let formatted = format_with_style(&input, style).unwrap();
+        assert!(formatted.contains(r"\end{bmatrix}, \qquad \begin{bmatrix}"));
+        assert_format_invariants_with_style(&input, style);
+    }
+}
+
+#[test]
+fn math_comments_in_groups_do_not_create_environment_boundaries() {
+    let input = "\\[{a % inside group\n b} c\\]";
+    let expected = "\\[\n  {a % inside group\n   b} c\n\\]\n";
+    assert_eq!(format(input).unwrap(), expected);
+    assert_format_invariants(input);
+}
+
+#[test]
 fn math_grid_leading_label_has_its_own_line() {
     let authored = include_str!("fixtures/formatter/issue_201_align_leading_label/input.tex");
     let expected = include_str!("fixtures/formatter/issue_201_align_leading_label/expected.tex")

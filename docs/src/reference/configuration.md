@@ -352,6 +352,11 @@ affected.
   | `single-line` | Never insert breaks: the body stays on one line, overflowing `line-width` if too long (like inline math).             |
   | `break`       | Break a too-long body before its top-level relations and binary operators, aligning a relation chain (amsmath style). |
 
+In `break` mode, multiline sibling environments also form separate blocks at the
+display body's indentation. This structural layout applies regardless of
+`line-width`; punctuation remains attached, and intervening expressions get
+their own lines.
+
 **Default value**: `"auto"`
 
 **Type**: `"auto" | "preserve" | "single-line" | "break"`

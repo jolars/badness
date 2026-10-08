@@ -9845,6 +9845,7 @@ enum MathSpacing {
 struct MathPiece {
     ir: Ir,
     role: MathRole,
+    block_break_before: bool,
     /// Whether this operator may start a continuation line. Multiplicative
     /// operators stay attached to the factor on their left, so a short
     /// additive term is not stranded between two breaks.
@@ -9865,6 +9866,8 @@ struct MathPiece {
 
 struct MathSurfaceAtom {
     ir: Ir,
+    multiline_block: bool,
+    block_suffix: bool,
     class: MathClass,
     break_kind: MathBreakKind,
     delimiter: Option<DelimiterRole>,
@@ -9876,6 +9879,34 @@ struct MathSurfaceAtom {
     starts_control_word_letter: bool,
     ends_control_word: bool,
     postfix_left_limit: bool,
+}
+
+/// Keep sibling math blocks at the body indent without detaching punctuation
+/// or an operator prefix such as `=`, which can still introduce the next block.
+#[derive(Default)]
+struct MathBlockBoundaries {
+    seen_block: bool,
+    after_block: bool,
+    line_has_expression: bool,
+}
+
+impl MathBlockBoundaries {
+    fn before(&mut self, atom: &MathSurfaceAtom) -> bool {
+        let should_break = self.after_block && !atom.block_suffix
+            || atom.multiline_block && self.seen_block && self.line_has_expression;
+        if should_break {
+            self.line_has_expression = false;
+        }
+        if atom.multiline_block {
+            self.seen_block = true;
+            self.after_block = true;
+            self.line_has_expression = false;
+        } else if !atom.block_suffix {
+            self.after_block = false;
+            self.line_has_expression |= !matches!(atom.class, MathClass::Bin | MathClass::Rel);
+        }
+        should_break
+    }
 }
 
 /// Formatter-owned precedence for the few math operators whose TeX atom class
@@ -9948,8 +9979,25 @@ fn lower_math_atoms(
             .expect("a structural math element has one semantic atom");
         let control_word_operator =
             ends_control_word && matches!(atom.class, MathClass::Bin | MathClass::Rel);
+        let block_suffix = atom.class == MathClass::Punct
+            || atom.delimiter == Some(DelimiterRole::Close)
+            || el.kind() == SyntaxKind::LINE_BREAK;
+        // Comments can also make groups multiline, but only environment
+        // wrappers establish sibling block boundaries.
+        let block_shape = el.kind() == SyntaxKind::ENVIRONMENT
+            || matches!(
+                el.kind(),
+                SyntaxKind::LEFT_RIGHT | SyntaxKind::GROUP | SyntaxKind::SCRIPTED
+            ) && el.as_node().is_some_and(|node| {
+                node.descendants()
+                    .any(|child| child.kind() == SyntaxKind::ENVIRONMENT)
+            });
+        let ir = lower_math_element(el, cx, spacing);
+        let multiline_block = block_shape && ir.contains_forced_break();
         return vec![MathSurfaceAtom {
-            ir: lower_math_element(el, cx, spacing),
+            ir,
+            multiline_block,
+            block_suffix,
             class: atom.class,
             break_kind,
             delimiter: atom.delimiter,
@@ -9978,6 +10026,9 @@ fn lower_math_atoms(
             ends_control_word && matches!(atom.class, MathClass::Bin | MathClass::Rel);
         return vec![MathSurfaceAtom {
             ir: lower_math_element(el, cx, spacing),
+            multiline_block: false,
+            block_suffix: atom.class == MathClass::Punct
+                || atom.delimiter == Some(DelimiterRole::Close),
             class: atom.class,
             break_kind,
             delimiter: atom.delimiter,
@@ -10017,6 +10068,10 @@ fn lower_math_atoms(
         }
         surface.push(MathSurfaceAtom {
             ir: Ir::verbatim(text),
+            multiline_block: false,
+            block_suffix: atom.class == MathClass::Punct
+                || atom.delimiter == Some(DelimiterRole::Close)
+                || text == ".",
             class: atom.class,
             break_kind: match text {
                 "+" | "-" => MathBreakKind::Additive,
@@ -10167,6 +10222,7 @@ fn math_atom_role(
 /// (nothing to break).
 fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<Vec<MathPiece>> {
     let mut pieces: Vec<MathPiece> = Vec::new();
+    let mut blocks = MathBlockBoundaries::default();
     // Start as a non-operand so a leading `+`/`-` (no left operand) reads as unary
     // and glues to its operand rather than becoming a break point — e.g. `-x`.
     let mut prev_class = MathClass::Rel;
@@ -10221,9 +10277,11 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
                         Some(DelimiterRole::Close) => -1,
                         Some(DelimiterRole::Fence) | None => 0,
                     };
+                    let block_break_before = blocks.before(&atom);
                     pieces.push(MathPiece {
                         ir: atom.ir,
                         role,
+                        block_break_before,
                         break_before: !matches!(
                             atom.break_kind,
                             MathBreakKind::Multiplicative | MathBreakKind::Conditional
@@ -10267,8 +10325,9 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
 /// operator hangs under that expression column. Multiplicative and
 /// conditional operators use the narrower policy in [`math_break_kind`]. The
 /// left-hand side and the first relation stay flat on the opening line. The whole
-/// body is one [`Ir::group`], so it stays on a single line whenever it fits —
-/// degrading to [`lower_math_body`] otherwise. Each segment's right-hand side is
+/// run between multiline environment boundaries is one [`Ir::group`], so an
+/// ordinary expression stays on a single line whenever it fits. A comment or
+/// explicit line break falls back to the shared math sequencer. Each segment's right-hand side is
 /// its own nested group: breaking the body at its relations does not also break a
 /// segment at its binary operators unless that segment overflows its own line. If
 /// the LHS-derived relation column would make a continuation overflow, or padding
@@ -10277,9 +10336,37 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
 /// display body's base indent instead.
 fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     let Some(pieces) = collect_math_pieces(elements, cx) else {
-        return lower_math_seq(elements.iter().cloned(), cx, MathSpacing::Normal, false);
+        return lower_math_seq_with_blocks(
+            elements.iter().cloned(),
+            cx,
+            MathSpacing::Normal,
+            false,
+            true,
+        );
     };
 
+    // Each structural block boundary restarts relation alignment at the display
+    // body's indent, so a preceding expression cannot push its siblings right.
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut depth = 0;
+    for end in 1..=pieces.len() {
+        if end == pieces.len() || pieces[end].block_break_before {
+            if start > 0 {
+                parts.push(Ir::hard_line());
+            }
+            parts.push(lower_math_piece_chain(&pieces[start..end], depth));
+            depth += pieces[start..end]
+                .iter()
+                .map(|piece| piece.bracket_delta)
+                .sum::<i32>();
+            start = end;
+        }
+    }
+    Ir::concat(parts)
+}
+
+fn lower_math_piece_chain(pieces: &[MathPiece], initial_depth: i32) -> Ir {
     let flat_width = |ir: &Ir| {
         Printer::new(FormatStyle::default())
             .print_flat(ir)
@@ -10291,9 +10378,9 @@ fn lower_display_math_body(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Ir {
     // deltas). A top-level break/relation is one seen at depth 0; operators
     // inside a parenthesized subexpression are structurally interior.
     let depth_before: Vec<i32> = {
-        let mut acc = 0;
+        let mut acc = initial_depth;
         let mut v = Vec::with_capacity(pieces.len());
-        for p in &pieces {
+        for p in pieces {
             v.push(acc);
             acc += p.bracket_delta;
         }
@@ -10483,7 +10570,18 @@ fn lower_math_seq(
     spacing: MathSpacing,
     preserve_newlines: bool,
 ) -> Ir {
+    lower_math_seq_with_blocks(elements, cx, spacing, preserve_newlines, false)
+}
+
+fn lower_math_seq_with_blocks(
+    elements: impl Iterator<Item = SyntaxElement>,
+    cx: LowerCtx<'_>,
+    spacing: MathSpacing,
+    preserve_newlines: bool,
+    break_blocks: bool,
+) -> Ir {
     let mut out: Vec<Ir> = Vec::new();
+    let mut blocks = MathBlockBoundaries::default();
     let mut started = false;
     // Start as a non-operand so a leading `+`/`-` reads as unary (see
     // [`collect_math_pieces`]).
@@ -10541,6 +10639,7 @@ fn lower_math_seq(
                     SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK
                 );
                 for atom in lower_math_atoms(other, cx, spacing) {
+                    let block_break = break_blocks && blocks.before(&atom);
                     let completes_colon_relation = prev_colon_relation_prefix
                         && atom.starts_equals_relation
                         && !pending_space
@@ -10581,7 +10680,7 @@ fn lower_math_seq(
                     let separator_start = out.len();
                     if !started {
                         // no separator before the first atom
-                    } else if pending_break || pending_newline {
+                    } else if pending_break || pending_newline || block_break {
                         out.push(Ir::hard_line());
                     } else if completes_colon_relation {
                         // The preceding colon and this scripted equals form one
@@ -10619,6 +10718,9 @@ fn lower_math_seq(
                     pending_break = is_line_break;
                     prev_role = role;
                     prev_class = atom.class;
+                }
+                if is_line_break {
+                    blocks = MathBlockBoundaries::default();
                 }
             }
         }

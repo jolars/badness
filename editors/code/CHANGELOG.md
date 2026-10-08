@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.27.0](https://github.com/jolars/badness/compare/badness-code-v0.26.0...badness-code-v0.27.0) (2026-10-08)
+
+### Bug Fixes
+
+- update vulnerable shell-quote dependency ([`270c58b`](https://github.com/jolars/badness/commit/270c58b452a639e1132081ae834884559703ebf4))
+
+### Dependencies
+
+- updated badness to v0.27.0
+
 ## [0.26.0](https://github.com/jolars/badness/compare/badness-code-v0.25.0...badness-code-v0.26.0) (2026-10-06)
 
 ### Dependencies

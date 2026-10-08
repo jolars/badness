@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.2](https://github.com/jolars/badness/compare/badness-formatter-v0.10.1...badness-formatter-v0.10.2) (2026-10-08)
+
+### Bug Fixes
+
+- **formatter:** separate multiline math siblings ([`d8d4531`](https://github.com/jolars/badness/commit/d8d4531175eb718474be51dfbe5a8bcc8fee676b)), fixes [#204](https://github.com/jolars/badness/issues/204)
+- **formatter:** put intertext on separate lines ([`7da63df`](https://github.com/jolars/badness/commit/7da63df45871ee29e2d7bde04d1c595f9fccaa8c)), fixes [#202](https://github.com/jolars/badness/issues/202)
+- **formatter:** split leading labels in math grids ([`561dff9`](https://github.com/jolars/badness/commit/561dff953e06e0eb8e9ea5659b492adff11b3652)), fixes [#201](https://github.com/jolars/badness/issues/201)
+- **formatter:** format CAS affiliations as keyvals ([`9b550a9`](https://github.com/jolars/badness/commit/9b550a966fe89fae8d798c2f2446fca9ad4dc4d0))
+
+### Dependencies
+
+- updated crates/badness-parser to v0.11.1
+
 ## [0.10.1](https://github.com/jolars/badness/compare/badness-formatter-v0.10.0...badness-formatter-v0.10.1) (2026-10-06)
 
 ### Bug Fixes

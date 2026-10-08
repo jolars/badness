@@ -9,7 +9,7 @@
 - [Formatting](guide/formatting.md)
 - [Linting](guide/linting.md)
 - [Editor Setup](guide/editor-setup.md)
-- [Pre-commit](guide/pre-commit.md)
+- [Integrations](guide/integrations.md)
 
 # Reference
 

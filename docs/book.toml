@@ -19,6 +19,7 @@ additional-js = [
 additional-css = ["theme/bench-charts.css", "theme/brand.css", "theme/playground-nav.css", "theme/accessibility.css"]
 
 [output.html.redirect]
+"/guide/pre-commit.html" = "integrations.html#pre-commit"
 "/reference/wrap-modes.html" = "configuration.html#wrap"
 "/playground.html" = "playground/index.html"
 # The four per-subsystem development pages were merged into Architecture.

@@ -364,6 +364,59 @@ duplicate suggestions for commands, environments, or citations. This is
 harmless, but if it bothers you, the `latex-workshop.intellisense.*` settings
 let you turn off the overlapping parts on the LaTeX Workshop side.
 
+## Zed
+
+Install **LaTeX** and **Badness** from Zed's extensions view (`zed: extensions`
+in the command palette). The LaTeX extension supplies the LaTeX and BibTeX
+languages; Badness supplies the language server for both.
+
+Badness uses a `badness` binary on your `PATH` when available and otherwise
+downloads a release for your platform. On NixOS, install the Nixpkgs package so
+the extension can use the native binary.
+
+To use Badness for both languages and enable formatting on save, add this to
+Zed's `settings.json`:
+
+```json
+{
+  "languages": {
+    "LaTeX": {
+      "language_servers": ["badness-language-server"],
+      "formatter": "language_server",
+      "format_on_save": "on"
+    },
+    "BibTeX": {
+      "language_servers": ["badness-language-server"],
+      "formatter": "language_server",
+      "format_on_save": "on"
+    }
+  }
+}
+```
+
+To retain Texlab alongside Badness for LaTeX files, list `"texlab"` after
+`"badness-language-server"` in the `LaTeX` settings.
+
+Editor settings go under the server ID. For example, these formatting settings
+apply when the project has no `badness.toml`:
+
+```json
+{
+  "lsp": {
+    "badness-language-server": {
+      "settings": {
+        "lineWidth": 100,
+        "indentWidth": 2
+      }
+    }
+  }
+}
+```
+
+For a custom binary, set `binary.path` under `lsp.badness-language-server`. If
+you also set `binary.arguments`, use `["lsp"]`: the arguments replace the
+default command line.
+
 ## Other Editors
 
 Any LSP-capable editor can run badness: configure a server whose command is

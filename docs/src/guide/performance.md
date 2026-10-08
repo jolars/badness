@@ -1,4 +1,6 @@
-# Benchmarks
+# Performance
+
+<a id="benchmarks"></a>
 
 These benchmarks compare the speed of Badness's formatter, linter, and language
 server with other LaTeX tools, along with the language server's memory use. The

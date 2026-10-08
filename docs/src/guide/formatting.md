@@ -23,10 +23,11 @@ and `--wrap`---mirror the `[format]` section of `badness.toml` and override it
 for a single run. Each option's default and meaning is listed in the
 [Configuration reference](../reference/configuration.md#format).
 
-For persistent settings, badness reads a `badness.toml` discovered from the
-working directory upward; pass `--config <PATH>` to point at a specific file or
+For persistent settings, Badness discovers `badness.toml` from each input file's
+directory upward; pass `--config <PATH>` to point at a specific file or
 `--no-config` to ignore any discovered one. Run `badness init` to write a
-starter `badness.toml`.
+starter `badness.toml`. See [Configuration](configuration.md) to share settings
+and exclude files from formatting and linting.
 
 Under reflow, textual optional arguments wrap at existing top-level comma-space
 boundaries and fill each line to the configured width. Continuation lines are

@@ -10,7 +10,7 @@
 #   BADNESS_BENCH_INPUT=path/to/file.tex ./benches/compare_format.sh
 #                                           # benchmark one real file
 #
-# The JSON artifact feeds the docs benchmark page (docs/src/reference/benchmarks.md),
+# The JSON artifact feeds the docs benchmark page (docs/src/guide/performance.md),
 # rendered at mdbook-build time by the doc-utils preprocessor. Regenerate it
 # manually with `task bench`; it is never rebuilt at site-generation time or in CI.
 #

@@ -74,7 +74,7 @@ before touching the reparse path.
 task bench:download
 
 # Wall-clock CLI comparison → benches/benchmark_results.json (feeds the docs
-# benchmark page, docs/src/reference/benchmarks.md)
+# benchmark page, docs/src/guide/performance.md)
 task bench
 
 # LSP speed and whole-process-tree memory vs TexLab → benches/memory_results.json

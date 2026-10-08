@@ -1,5 +1,8 @@
 # Getting Started
 
+Start with [Installation](installation.md) if Badness is not yet available on
+your `PATH`.
+
 Badness's main subcommands are `format`, `lint`, and `lsp` (with `parse` and
 `init` as helpers). This page walks through formatting and linting from the
 command line. For editor integration, see [Editor Setup](editor-setup.md).
@@ -92,3 +95,7 @@ badness format --line-width 100 --indent-width 4 --wrap preserve paper.tex
 See the [CLI Reference](../reference/cli.md) for every flag and the
 [Configuration reference](../reference/configuration.md#wrap) for what `--wrap`
 controls.
+
+Continue with [Formatting](formatting.md), [Linting](linting.md), or
+[Configuration](configuration.md) for day-to-day use. See
+[Integrations](integrations.md) to automate the checks.

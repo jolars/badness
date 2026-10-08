@@ -1,4 +1,7 @@
-# Configuration
+# Configuration Reference
+
+For a walkthrough of creating and sharing a project config, see the
+[configuration guide](../guide/configuration.md).
 
 Badness is configured through a `badness.toml` file. All keys are optional and
 spelled in kebab-case; an unknown key or section is a hard error, not a silent

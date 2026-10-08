@@ -68,7 +68,7 @@ fn publish_markdown(book: &Book, dir: &std::path::Path) -> Result<()> {
             };
             let path = dir.join(source_path);
             std::fs::create_dir_all(path.parent().unwrap())?;
-            let content = if source_path == std::path::Path::new("reference/benchmarks.md") {
+            let content = if source_path == std::path::Path::new("guide/performance.md") {
                 chapter
                     .content
                     .lines()
@@ -112,9 +112,9 @@ mod markdown_tests {
         let book = Book::new_with_items(vec![
             Chapter::new("Home", "# Home\n<img src=\"./images/logo.svg\" alt=\"\" />\n\nVersion 1.2.3\n".into(), "index.md", vec![]).into(),
             Chapter::new(
-                "Benchmarks",
-                "# Benchmarks\n<script type=\"application/json\" class=\"bench-data\">lots of data</script>\n\nResults.\n".into(),
-                "reference/benchmarks.md",
+                "Performance",
+                "# Performance\n<script type=\"application/json\" class=\"bench-data\">lots of data</script>\n\nResults.\n".into(),
+                "guide/performance.md",
                 vec![],
             ).into(),
         ]);
@@ -123,7 +123,7 @@ mod markdown_tests {
             std::fs::read_to_string(dir.join("index.md")).unwrap(),
             "# Home\n\nVersion 1.2.3"
         );
-        let benchmarks = std::fs::read_to_string(dir.join("reference/benchmarks.md")).unwrap();
+        let benchmarks = std::fs::read_to_string(dir.join("guide/performance.md")).unwrap();
         assert!(benchmarks.contains("Results."));
         assert!(!benchmarks.contains("lots of data"));
         assert!(dir.join("playground/index.md").exists());

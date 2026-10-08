@@ -2,22 +2,23 @@
 
 [Introduction](index.md)
 
-# User Guide
+# Guide
 
-- [Installation](guide/installation.md)
 - [Getting Started](guide/getting-started.md)
+  - [Installation](guide/installation.md)
 - [Formatting](guide/formatting.md)
 - [Linting](guide/linting.md)
+- [Configuration](guide/configuration.md)
 - [Editor Setup](guide/editor-setup.md)
 - [Integrations](guide/integrations.md)
+- [Performance](guide/performance.md)
 
 # Reference
 
-- [Configuration](reference/configuration.md)
 - [CLI Reference](reference/cli.md)
-- [Linter Rules](reference/linter-rules.md)
-- [BibTeX Linter Rules](reference/bib-linter-rules.md)
-- [Benchmarks](reference/benchmarks.md)
+- [Configuration Reference](reference/configuration.md)
+- [Lint Rules](reference/linter-rules.md)
+- [BibTeX Lint Rules](reference/bib-linter-rules.md)
 
 # Development
 

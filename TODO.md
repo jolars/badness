@@ -631,3 +631,15 @@ a file and a line, never a coordinate.
   removal issue) once the formatter/linter call sites migrate — two parallel
   APIs for the same reads with no forcing function is a standing invitation
   for new code to pick the wrong one.
+
+## Documentation site
+
+- [ ] Split `docs/src/guide/editor-setup.md` into focused editor recipes and a
+  short overview, separating capability lookup from setup instructions.
+  Preserve published URLs and anchors.
+- [ ] Shorten `docs/src/guide/getting-started.md` by moving detailed usage and
+  output explanations to Formatting and Linting, then linking to those guides.
+  Update the current Formatting links back to Getting Started at the same time.
+- [ ] Consolidate configuration setup between `docs/src/guide/configuration.md`
+  and `docs/src/reference/configuration.md`. Keep recipes in the guide and
+  exhaustive settings, defaults, and resolution rules in the reference.

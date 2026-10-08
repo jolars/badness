@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.11.1](https://github.com/jolars/badness/compare/badness-parser-v0.11.0...badness-parser-v0.11.1) (2026-10-08)
+
+### Bug Fixes
+
+- **formatter:** format CAS affiliations as keyvals ([`9b550a9`](https://github.com/jolars/badness/commit/9b550a966fe89fae8d798c2f2446fca9ad4dc4d0))
+
 ## [0.11.0](https://github.com/jolars/badness/compare/badness-parser-v0.10.0...badness-parser-v0.11.0) (2026-10-06)
 
 ### Features

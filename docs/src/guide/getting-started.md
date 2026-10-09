@@ -3,9 +3,8 @@
 Start with [Installation](installation.md) if Badness is not yet available on
 your `PATH`.
 
-Badness's main subcommands are `format`, `lint`, and `lsp` (with `parse` and
-`init` as helpers). This page walks through formatting and linting from the
-command line. For editor integration, see [Editor Setup](editor-setup.md).
+This page walks through formatting and linting your first file from the command
+line. For editor integration, see [Editor Setup](editor-setup.md).
 
 ## Formatting a File
 
@@ -15,87 +14,33 @@ Format a file in place:
 badness format paper.tex
 ```
 
-Pass several paths to format them all:
-
-```sh
-badness format intro.tex methods.tex results.tex
-```
-
-Pass `-` to read from standard input and write the formatted result to standard
-output—handy for piping or editor integrations:
-
-```sh
-cat paper.tex | badness format -
-```
-
-A piped standard input is also read when you pass no paths at all, so the
-shorter `cat paper.tex | badness format` works too. At an interactive prompt,
-though, where there is nothing to pipe, `badness format` with no paths reports a
-usage error rather than silently waiting on the terminal.
+See [Formatting](formatting.md) for multiple files and standard input.
 
 ## Checking Without Writing
 
-In CI you usually want to *verify* that files are already formatted rather than
-rewrite them. The `--check` flag prints a diff of what would change and exits
-non-zero if any file is not already formatted:
+Verify formatting without writing, for example in CI:
 
 ```sh
 badness format --check paper.tex
 ```
 
-```diff
-Diff in paper.tex:12:
- \section{Introduction}
--Some    text with   odd spacing.
-+Some text with odd spacing.
-1 of 1 file(s) would be reformatted
-```
-
-Since `--check` writes nothing, that report is the only account of what would
-change, which is why it is shown by default. Pass `--quiet` for just the file
-list and the summary---useful when a first run over an unformatted project would
-otherwise flood a CI log:
-
-```sh
-badness format --check --quiet .
-```
-
-The report goes to stdout (only errors use stderr) and is colorized when writing
-to a terminal; `--color always|never` overrides that, and `NO_COLOR` is honored.
+The command prints a diff and exits non-zero if any file needs formatting. See
+[Checking Without Writing](formatting.md#checking-without-writing) for reporting
+options.
 
 ## Linting
 
-`lint` parses each file and reports any diagnostics found, rendered with source
-snippets. It exits non-zero when there is at least one diagnostic:
+Report problems in your source:
 
 ```sh
 badness lint paper.tex
 ```
 
-Like `format`, it reads standard input when given `-` (or when piped with no
-paths):
-
-```sh
-cat paper.tex | badness lint -
-```
-
-The snippets go to stderr and are colorized when it is a terminal, under the
-same `--color always|never` and `NO_COLOR` rules as the `--check` diff. The
-`--output concise` and `--output json` forms are meant for other programs to
-read, so they stay plain whatever `--color` says.
+The command exits non-zero when it finds a diagnostic. See [Linting](linting.md)
+for rules, fixes, and output formats.
 
 ## Adjusting Layout
 
-The formatter takes a few style options on the command line:
-
-```sh
-badness format --line-width 100 --indent-width 4 --wrap preserve paper.tex
-```
-
-See the [CLI Reference](../reference/cli.md) for every flag and the
-[Configuration reference](../reference/configuration.md#wrap) for what `--wrap`
-controls.
-
-Continue with [Formatting](formatting.md), [Linting](linting.md), or
-[Configuration](configuration.md) for day-to-day use. See
+See [Style Options](formatting.md#style-options) for command-line overrides and
+[Configuration](configuration.md) for shared project settings. Continue with
 [Integrations](integrations.md) to automate the checks.

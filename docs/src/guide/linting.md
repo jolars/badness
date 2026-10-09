@@ -6,8 +6,12 @@ least one diagnostic, which makes it usable as a CI gate.
 
 ```sh
 badness lint paper.tex
-cat paper.tex | badness lint   # stdin
+cat paper.tex | badness lint -   # stdin
 ```
+
+Pass `-` to read standard input, or omit paths when piping:
+`cat paper.tex | badness lint` works too. At an interactive prompt with no
+paths, the command reports a usage error.
 
 ## Parse diagnostics
 
@@ -78,6 +82,16 @@ change output, such as `missing-nonbreaking-space` (inserting a tie changes line
 breaking), `abbreviation-spacing` (inserting `\` or `\@` changes sentence
 spacing), or `space-before-command` (deleting a space before `\footnote` changes
 spacing).
+
+## Human-readable output
+
+The default `pretty` output renders diagnostics with source snippets on stderr.
+The snippets are colorized when stderr is a terminal; `--color always|never`
+overrides that, and `NO_COLOR` is honored.
+
+Use `--output concise` for plain, compact diagnostics on stderr or
+`--output json` for structured output on stdout. Both stay plain regardless of
+`--color`.
 
 ## Machine-readable output
 

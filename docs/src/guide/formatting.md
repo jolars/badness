@@ -12,9 +12,54 @@ cat paper.tex | badness format    # stdin → stdout
 badness format --check paper.tex  # diff, don't write; non-zero if unformatted
 ```
 
-`--check` prints a diff of the pending change for each file, then a summary; add
-`--quiet` to reduce that to the file list and the summary. See [Checking without
-writing](getting-started.md#checking-without-writing).
+Pass several paths to format them all:
+
+```sh
+badness format intro.tex methods.tex results.tex
+```
+
+Pass `-` to read from standard input and write the formatted result to standard
+output—handy for piping or editor integrations:
+
+```sh
+cat paper.tex | badness format -
+```
+
+A piped standard input is also read when you pass no paths at all, so the
+shorter `cat paper.tex | badness format` works too. At an interactive prompt,
+though, where there is nothing to pipe, `badness format` with no paths reports a
+usage error rather than silently waiting on the terminal. See [Checking Without
+Writing](#checking-without-writing) for `--check` reporting.
+
+## Checking Without Writing
+
+In CI you usually want to *verify* that files are already formatted rather than
+rewrite them. The `--check` flag prints a diff of what would change and exits
+non-zero if any file is not already formatted:
+
+```sh
+badness format --check paper.tex
+```
+
+```diff
+Diff in paper.tex:12:
+ \section{Introduction}
+-Some    text with   odd spacing.
++Some text with odd spacing.
+1 of 1 file(s) would be reformatted
+```
+
+Since `--check` writes nothing, that report is the only account of what would
+change, which is why it is shown by default. Pass `--quiet` for just the file
+list and the summary—useful when a first run over an unformatted project would
+otherwise flood a CI log:
+
+```sh
+badness format --check --quiet .
+```
+
+The report goes to stdout (only errors use stderr) and is colorized when writing
+to a terminal; `--color always|never` overrides that, and `NO_COLOR` is honored.
 
 ## Style Options
 
@@ -22,6 +67,16 @@ The style flags---including `--line-width`, `--indent-width`, `--item-indent`,
 and `--wrap`---mirror the `[format]` section of `badness.toml` and override it
 for a single run. Each option's default and meaning is listed in the
 [Configuration reference](../reference/configuration.md#format).
+
+For example, set the line width, indentation, and wrapping mode for one run:
+
+```sh
+badness format --line-width 100 --indent-width 4 --wrap preserve paper.tex
+```
+
+See the [CLI Reference](../reference/cli.md) for every flag and the
+[Configuration reference](../reference/configuration.md#wrap) for what `--wrap`
+controls.
 
 For persistent settings, Badness discovers `badness.toml` from each input file's
 directory upward; pass `--config <PATH>` to point at a specific file or

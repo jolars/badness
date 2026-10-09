@@ -23,7 +23,7 @@ use crate::linter::diagnostic::{Diagnostic, Severity};
 use super::{BibRule, BibRuleContext, Example};
 
 const EXAMPLES: &[Example] = &[Example {
-    caption: "A typo'd field name (`pubisher` for `publisher`):",
+    caption: "A misspelled field name (`pubisher` for `publisher`):",
     source: "@book{turing50,\n  author   = {Turing, Alan},\n  title    = {A book},\n  \
              pubisher = {Elsevier},\n  year     = 1950\n}\n",
 }];
@@ -40,12 +40,12 @@ impl BibRule for UnknownField {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a field that is neither required nor optional for its entry type \
-         and carries no global field metadata -- usually a typo, or data \
-         misplaced from another entry type. BibLaTeX silently ignores fields \
-         it does not know, so the mistake otherwise vanishes without a trace. \
-         Only entry types the built-in database knows are checked. Report-only \
-         -- deleting the field would discard data."
+        "Flag a field that is neither required nor optional for its entry type and has \
+         no global field metadata. Such a field is usually a typo or data intended for \
+         another entry type. BibLaTeX silently ignores unknown fields, so the mistake \
+         can otherwise go unnoticed. The rule checks only entry types known to the \
+         built-in database. No autofix is offered because deleting the field would \
+         discard data."
     }
 
     fn examples(&self) -> &'static [Example] {

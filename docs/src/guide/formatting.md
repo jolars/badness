@@ -1,8 +1,8 @@
 # Formatting
 
-`badness format` lays out LaTeX source deterministically. Output is decided
-solely by the formatter's rules and its layout engine---there are no
-per-construct special cases to memorize.
+`badness format` lays out LaTeX source deterministically. The formatter's rules
+and layout engine determine the output, so there are no special cases for
+individual constructs to memorize.
 
 ## In Place, `stdin`, or check
 
@@ -25,17 +25,16 @@ output—handy for piping or editor integrations:
 cat paper.tex | badness format -
 ```
 
-A piped standard input is also read when you pass no paths at all, so the
-shorter `cat paper.tex | badness format` works too. At an interactive prompt,
-though, where there is nothing to pipe, `badness format` with no paths reports a
-usage error rather than silently waiting on the terminal. See [Checking Without
+Badness also reads piped input when you omit paths, so the shorter
+`cat paper.tex | badness format` works too. At an interactive prompt,
+`badness format` with no paths reports a usage error. See [Checking Without
 Writing](#checking-without-writing) for `--check` reporting.
 
 ## Checking Without Writing
 
 In CI you usually want to *verify* that files are already formatted rather than
 rewrite them. The `--check` flag prints a diff of what would change and exits
-non-zero if any file is not already formatted:
+with a nonzero status if any file needs formatting:
 
 ```sh
 badness format --check paper.tex
@@ -49,24 +48,24 @@ Diff in paper.tex:12:
 1 of 1 file(s) would be reformatted
 ```
 
-Since `--check` writes nothing, that report is the only account of what would
-change, which is why it is shown by default. Pass `--quiet` for just the file
-list and the summary—useful when a first run over an unformatted project would
-otherwise flood a CI log:
+The report shows what would change and appears by default. Pass `--quiet` for
+just the file list and summary—useful when a first run over an unformatted
+project would otherwise flood a CI log:
 
 ```sh
 badness format --check --quiet .
 ```
 
-The report goes to stdout (only errors use stderr) and is colorized when writing
-to a terminal; `--color always|never` overrides that, and `NO_COLOR` is honored.
+The report goes to stdout and uses color when writing to a terminal. Only errors
+use stderr. Override the color setting with `--color always|never`; Badness also
+honors `NO_COLOR`.
 
 ## Style Options
 
-The style flags---including `--line-width`, `--indent-width`, `--item-indent`,
-and `--wrap`---mirror the `[format]` section of `badness.toml` and override it
-for a single run. Each option's default and meaning is listed in the
-[Configuration reference](../reference/configuration.md#format).
+Style flags such as `--line-width`, `--indent-width`, `--item-indent`, and
+`--wrap` mirror the `[format]` section of `badness.toml` and override it for a
+single run. The [Configuration reference](../reference/configuration.md#format)
+lists each option's default and meaning.
 
 For example, set the line width, indentation, and wrapping mode for one run:
 
@@ -94,7 +93,7 @@ comments retain their binding; the formatter does not insert `%` markers to
 create new break opportunities.
 
 For a literal top-level `\documentclass{cas-sc}` or `\documentclass{cas-dc}`,
-badness treats the braced affiliation fields and the trailing address options of
+Badness treats the braced affiliation fields and the trailing address options of
 `\affiliation` as key-value lists. Short lists stay inline; longer lists expand
 to one entry per line. Other classes retain ordinary argument formatting, and
 definitions in the document or a loaded local package override the class
@@ -114,7 +113,7 @@ introduce the first environment on the same line. Explicit `preserve` and
 `single-line` math modes retain their existing line-break policies.
 
 Inside `algorithm` and `algorithm2e` environments (including their starred
-forms), badness normalizes text in `\KwIn`, `\KwOut`, `\KwData`, and
+forms), Badness normalizes text in `\KwIn`, `\KwOut`, `\KwData`, and
 `\KwResult`. It indents the braced bodies of `\For`, `\ForEach`, `\ForAll`,
 `\While`, `\If`, `\ElseIf`, `\Else`, `\eIf`, and `\Repeat`, placing each
 statement ending in `\;` on its own source line. Math spacing commands remain
@@ -127,10 +126,10 @@ uses the same float name and can use `\;` for ordinary spacing.
 
 ## Turning the formatter off
 
-Sometimes a block is laid out by hand and should stay that way---a `tikzpicture`
-aligned by eye, a table whose columns line up in the source. Comment directives
-turn the formatter off over exactly as much as you point at, and content inside
-is reproduced byte for byte.
+Sometimes you want to preserve a block laid out by hand, such as a `tikzpicture`
+aligned by eye or a table whose columns line up in the source. Comment
+directives turn the formatter off for the selected construct, region, or file.
+Content inside is reproduced byte for byte.
 
 Skip the next construct:
 
@@ -159,9 +158,9 @@ Skip a whole file, wherever in it the directive sits:
 % badness-format skip-file: generated, do not edit
 ```
 
-An `off` with no matching `on` runs to the end of the file. The `: <reason>` is
-optional everywhere and is never interpreted---it is there for the next person
-to read.
+An `off` with no matching `on` runs to the end of the file. The optional
+`: <reason>` explains the directive to the next reader; Badness does not
+interpret it.
 
 Each directive has a bare counterpart that turns off **both** the formatter and
 every lint rule over the same span: `% badness skip`, `% badness off` /
@@ -173,13 +172,12 @@ To exclude whole files by path instead, use `exclude`/`extend-exclude` in
 reference](../reference/configuration.md). That is the better tool when you
 control the config, since it keeps the directive out of the document.
 
-The mirror of these is `% badness-lint`, which suppresses diagnostics without
-touching layout and takes an optional rule name; see [Linting](linting.md).
+`% badness-lint` suppresses diagnostics without changing layout and takes an
+optional rule name; see [Linting](linting.md).
 
-One note on where directives are read: a directive must be its own `%` comment.
-In a `.dtx` documentation line the leading `%` is a documentation margin rather
-than a comment, so a directive written there is inert (inside a `macrocode`
-chunk it works normally).
+A directive must be its own `%` comment. On a `.dtx` documentation line, the
+leading `%` is a documentation margin rather than a comment, so a directive
+written there has no effect. Inside a `macrocode` chunk, it works normally.
 
 ## Guarantees
 
@@ -190,13 +188,14 @@ oracles:
 - **Losslessness**: the parsed tree reconstructs the input byte-for-byte, so the
   formatter never loses or corrupts content.
 - **Protected regions**: verbatim-like content (`verbatim`, `lstlisting`,
-  `\verb`, comments) is never altered. An environment badness cannot tell is
-  verbatim---one built by machinery no scan follows---can be named in
-  [`[environments]`](../reference/configuration.md#environments), which is also
-  how you teach it a `\bea`/`\eea` pair defined in a sibling `.sty`.
+  `\verb`, comments) is never altered. An environment Badness cannot recognize
+  as verbatim, such as one defined through macros the scanner cannot follow, can
+  be named in [`[environments]`](../reference/configuration.md#environments),
+  which also lets you declare a `\bea` and `\eea` pair defined in a sibling
+  `.sty`.
 - **Whitespace-only**: formatting changes whitespace, line breaks, and comment
   placement, and nothing else. It never inserts, deletes, or rewrites a token of
   real content.
 
-Content normalizations---rewriting `x^{2}` to `x^2`, or `$$…$$` to `\[…\]`---are
-therefore *lint fixes*, not formatting. Run `badness lint --fix` for those.
+Content rewrites, such as changing `x^{2}` to `x^2` or `$$…$$` to `\[…\]`, are
+therefore *lint fixes*. Run `badness lint --fix` for those.

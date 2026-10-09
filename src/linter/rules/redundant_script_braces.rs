@@ -61,14 +61,14 @@ impl Rule for RedundantScriptBraces {
     }
 
     fn description(&self) -> &'static str {
-        "Flag braces around a single-token sub/superscript argument, which `^`/`_` \
-         bind without them (`x^{2}` is `x^2`). The autofix deletes the two braces \
-         and leaves the inner token untouched. It is withheld when dropping the \
-         braces would let the following character glue onto the argument and change \
-         meaning (`x^{2}-3` stays braced — unspaced `x^2-3` would re-lex `2-3` as one \
-         token; `y_{\\alpha}b` stays braced — `\\alphab` is one control word). It \
-         also leaves standard named math operators braced because commands such as \
-         `\\max` are not valid unbraced script fields."
+        "Flag braces around a single-token subscript or superscript argument, which `_` \
+         and `^` can bind without braces (`x^{2}` is `x^2`). The autofix deletes the \
+         two braces and leaves the inner token untouched.\n\nThe fix is withheld when \
+         removing the braces would let a following character merge with the argument \
+         and change meaning. For example, `x^{2}-3` stays braced because `x^2-3` would \
+         re-lex `2-3` as one token, and `y_{\\alpha}b` stays braced because `\\alphab` \
+         is one control word. Standard named math operators also remain braced because \
+         commands such as `\\max` are not valid unbraced script fields."
     }
 
     fn examples(&self) -> &'static [Example] {

@@ -35,13 +35,13 @@ impl BibRule for EncodingHints {
     }
 
     fn description(&self) -> &'static str {
-        "Surface non-ASCII text in a field value as a hint (accented text is \
-         perfectly valid in a UTF-8 setup, hence not a warning). Raw non-ASCII \
-         renders correctly only when the file is UTF-8 and the document loads \
-         a matching input encoding (`inputenc` with pdfLaTeX, `fontspec` with \
-         Xe/LuaLaTeX); legacy toolchains may mangle it. Either confirm the \
-         encoding or use a LaTeX escape (`\\'e` for `\u{e9}`). Report-only -- the \
-         right fix depends on the project's toolchain."
+        "Report non-ASCII text in a field value as a hint. Accented text is valid in a \
+         UTF-8 setup, so this is not a warning. Raw non-ASCII text renders correctly \
+         only when the file is UTF-8 and the document loads a matching input encoding \
+         (`inputenc` with pdfLaTeX, `fontspec` with XeLaTeX or LuaLaTeX). Legacy \
+         toolchains may corrupt it. Confirm the encoding or use a LaTeX escape (`\\'e` \
+         for `é`). No autofix is offered because the right change depends on the \
+         project's toolchain."
     }
 
     fn examples(&self) -> &'static [Example] {

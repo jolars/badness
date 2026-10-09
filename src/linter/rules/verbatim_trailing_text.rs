@@ -51,16 +51,15 @@ impl Rule for VerbatimTrailingText {
     }
 
     fn description(&self) -> &'static str {
-        "Flag non-whitespace text after a verbatim-like environment's `\\end{…}` \
-         on the same line (ChkTeX warning 31). LaTeX closes a verbatim environment \
-         by scanning line by line to `\\end{verbatim}` and then gobbling the rest \
-         of that line, so `\\end{verbatim} foo` silently drops `foo`. Scoped to \
-         verbatim-like environments — read off the parse tree (an opaque \
-         `VERBATIM_BODY`, or a curated built-in verbatim name for the empty-body \
-         case) — because ordinary environments do not gobble their `\\end` line. A \
-         trailing `%` comment is treated as trivia, not flagged. Report-only: \
-         whether to move or delete the swallowed text is the author's call, so no \
-         fix is correct by construction."
+        "Flag non-whitespace text after a verbatim-like environment's `\\end{…}` on the \
+         same line (ChkTeX warning 31). LaTeX scans line by line to `\\end{verbatim}`, \
+         then discards the rest of that line, so `\\end{verbatim} foo` silently drops \
+         `foo`.\n\nThe rule identifies verbatim-like environments from an opaque \
+         `VERBATIM_BODY` in the parse tree or a curated built-in verbatim name when the \
+         body is empty. Ordinary environments do not discard the rest of their closing \
+         line and are not checked. A trailing `%` comment is treated as trivia and is \
+         not flagged. No autofix is offered because the author must choose whether to \
+         move or delete the text."
     }
 
     fn examples(&self) -> &'static [Example] {

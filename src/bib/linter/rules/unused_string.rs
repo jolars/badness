@@ -35,12 +35,11 @@ impl BibRule for UnusedString {
     }
 
     fn description(&self) -> &'static str {
-        "Flag an `@string` macro defined in the file but never referenced by \
-         any field value. For the common self-contained `.bib` an unused macro \
-         is dead weight; in a multi-file bibliography it may be referenced \
-         from another `.bib`, so treat cross-file setups with care -- \
-         cross-file `@string` resolution is not modeled yet. Report-only: \
-         deleting a definition is a meaning-level edit left to the author."
+        "Flag an `@string` macro defined in the file but never referenced by a field \
+         value. In a self-contained `.bib` file, an unused macro serves no purpose. In \
+         a multi-file bibliography, another `.bib` file may reference it, and \
+         cross-file `@string` resolution is not yet modeled. No autofix is offered \
+         because deleting a definition is a choice for the author."
     }
 
     fn examples(&self) -> &'static [Example] {

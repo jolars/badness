@@ -124,22 +124,21 @@ impl Rule for PrimitiveCommand {
     }
 
     fn description(&self) -> &'static str {
-        "Flag raw plain-TeX primitives discouraged in LaTeX source, naming the \
-         LaTeX construct that supersedes each one (ChkTeX 41, lacheck, l2tabu). A \
-         sibling of `deprecated-command`, which covers the obsolete font \
-         switches. Most primitives are reported only: their LaTeX replacement \
-         restructures arguments (`a \\over b` becomes `\\frac{a}{b}`, \
-         `\\centerline{x}` becomes a `\\centering` declaration or a `center` \
-         environment), so no single textual edit can rewrite them correctly by \
-         construction. A few carry a `Safe` autofix — a 1:1 control-word swap for \
-         a primitive whose LaTeX form is a single meaning-identical token \
-         (`\\sb`/`\\sp` become `_`/`^`); the swap replaces just the control word, \
-         so it stays lossless and meaning-preserving, and is withheld where the \
-         primitive is merely referenced (`\\let\\x\\sp`, `\\ifx\\sp\\y`). A name the \
-         file redefines (`\\renewcommand\\sp{…}`) is the user's macro, not the \
-         primitive, so it is not flagged anywhere. The implicit braces \
-         `\\bgroup` and `\\egroup` are not flagged: replacing them with literal \
-         braces can change macro argument and definition boundaries."
+        "Flag raw plain-TeX primitives discouraged in LaTeX source and name the LaTeX \
+         construct that supersedes each one (ChkTeX 41, lacheck, l2tabu). The related \
+         `deprecated-command` rule covers obsolete font switches. Most primitives are \
+         reported without a fix because their replacements restructure arguments: `a \
+         \\over b` becomes `\\frac{a}{b}`, and `\\centerline{x}` becomes a \
+         `\\centering` declaration or a `center` environment. No single textual edit \
+         can perform those rewrites correctly by construction.\n\nA few primitives \
+         carry a `Safe` autofix that replaces one control word with a single token of \
+         identical meaning (`\\sb` and `\\sp` become `_` and `^`). The edit replaces \
+         only the control word, preserving losslessness and meaning. It is withheld \
+         where the primitive is merely referenced (`\\let\\x\\sp`, `\\ifx\\sp\\y`). If \
+         the file redefines a name (`\\renewcommand\\sp{…}`), the rule treats it as the \
+         user's macro and does not flag it anywhere. The rule also leaves `\\bgroup` \
+         and `\\egroup` alone because replacing implicit braces with literal braces can \
+         change macro argument and definition boundaries."
     }
 
     fn examples(&self) -> &'static [Example] {

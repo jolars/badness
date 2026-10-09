@@ -24,13 +24,14 @@ A formatter, linter, and language server for LaTeX
     - `never`: Never colorize
 
 `-q`, `--quiet`
-:   Suppress non-essential output (errors are still shown). Under `format --check` this drops the per-file diff, leaving the list of files that would be reformatted and the summary
+:   Suppress nonessential output (errors are still shown). Under `format --check`, omits each file's diff and shows only the list of files needing formatting and the summary
 
 ## `badness format`
 
 Format LaTeX source.
 
-With paths, formats each file in place. Reads stdin (to stdout) when given `-`, or when paths are omitted and stdin is not a terminal.
+With paths, formats each file in place. Reads from stdin and writes to stdout
+when given `-`, or when paths are omitted and stdin is not a terminal.
 
 **Usage:** `badness format [OPTIONS] [PATHS]...`
 
@@ -42,10 +43,10 @@ With paths, formats each file in place. Reads stdin (to stdout) when given `-`, 
 ### Options
 
 `--check`
-:   Report which files would change without writing them. Exits non-zero if any file is not already formatted. Requires path arguments: there is no file on disk to report on when reading stdin
+:   Report which files would change without writing them. Exits with a nonzero status if any file is not already formatted. Requires path arguments: there is no file on disk to report on when reading stdin
 
 `--stdin-filepath <PATH>`
-:   Name the stdin buffer so its language is dispatched by extension (`.bib` → BibTeX, anything else → LaTeX). No file is read or written; only the extension is used. Ignored when paths are given
+:   Name the stdin buffer to select its language by extension (`.bib` → BibTeX, anything else → LaTeX). Uses only the extension and does not read or write the named file. Ignored when paths are given
 
 `--line-width <LINE_WIDTH>`
 :   Maximum line width before the formatter breaks a line; 0 disables width-based wrapping
@@ -97,13 +98,13 @@ With paths, formats each file in place. Reads stdin (to stdout) when given `-`, 
 :   Gitignore-style pattern to skip during directory discovery (repeatable). Added on top of any `exclude`/`extend-exclude` from `badness.toml`
 
 `--force-exclude`
-:   Apply exclude patterns to files named explicitly on the command line too (they are normally always processed). For runners like pre-commit that pass staged files as arguments
+:   Apply exclude patterns to files named explicitly on the command line, which are normally always processed. Use with runners such as pre-commit that pass staged files as arguments
 
 ## `badness lint`
 
 Lint LaTeX source, reporting parse diagnostics.
 
-With paths, lints each file. Reads stdin when given `-`, or when paths are omitted and stdin is not a terminal. Exits non-zero if any diagnostics are reported.
+With paths, lints each file. Reads stdin when given `-`, or when paths are omitted and stdin is not a terminal. Exits with a nonzero status if any diagnostics are reported.
 
 **Usage:** `badness lint [OPTIONS] [PATHS]...`
 
@@ -121,13 +122,13 @@ With paths, lints each file. Reads stdin when given `-`, or when paths are omitt
 :   Also apply fixes that may change typeset output (requires `--fix`)
 
 `--stdin-filepath <PATH>`
-:   Name the stdin buffer so its language is dispatched by extension (`.bib` → BibTeX, anything else → LaTeX). No file is read or written; only the extension is used. Ignored when paths are given
+:   Name the stdin buffer to select its language by extension (`.bib` → BibTeX, anything else → LaTeX). Uses only the extension and does not read or write the named file. Ignored when paths are given
 
 `--exclude <PATTERN>`
 :   Gitignore-style pattern to skip during directory discovery (repeatable). Added on top of any `exclude`/`extend-exclude` from `badness.toml`
 
 `--force-exclude`
-:   Apply exclude patterns to files named explicitly on the command line too (they are normally always processed). For runners like pre-commit that pass staged files as arguments
+:   Apply exclude patterns to files named explicitly on the command line, which are normally always processed. Use with runners such as pre-commit that pass staged files as arguments
 
 `--select <RULE>`
 :   Run only these rules (repeatable). Overrides `[lint] select` from `badness.toml` when given
@@ -139,7 +140,7 @@ With paths, lints each file. Reads stdin when given `-`, or when paths are omitt
 :   Print the description and examples for a rule id, then exit. Ignores paths, config, and fixes
 
 `--output <OUTPUT>`
-:   Output format for findings. The human modes write to stderr; `json` writes to stdout
+:   Output format for findings. The human-readable modes write to stderr; `json` writes to stdout
 
     Default value: `pretty`
 
@@ -172,7 +173,7 @@ Run the language server over stdio
 
 Answer a PDF viewer's inverse (backward) search.
 
-Point your viewer's inverse-search command here — for zathura, `--synctex-editor-command "badness inverse-search --input %{input} --line %{line}"`. The position is handed to a running badness language server, which reveals it in your editor via `window/showDocument`, so the file must belong to a workspace some editor currently has open.
+Configure your viewer to run this command for inverse search. For zathura, use `--synctex-editor-command "badness inverse-search --input %{input} --line %{line}"`. The command passes the position to a running Badness language server, which reveals it in your editor through `window/showDocument`. The file must belong to a workspace currently open in an editor.
 
 **Usage:** `badness inverse-search [OPTIONS] --input <PATH>`
 
@@ -182,9 +183,9 @@ Point your viewer's inverse-search command here — for zathura, `--synctex-edit
 :   The `.tex` file the viewer resolved
 
 `-l`, `--line <LINE>`
-:   Line number, counting from 1 — what SyncTeX-aware viewers emit.
+:   Line number counting from 1, as reported by SyncTeX-aware viewers.
 
-    Required unless `--line0` is given. Deliberately not enforced by clap, whose message for that would name only `--line` and so send a `--line0` user the wrong way.
+    Required unless `--line0` is given. This requirement is checked outside clap because clap's error would mention only `--line` and misdirect users of `--line0`.
 
 `--line0 <LINE>`
 :   Line number counting from 0, for a viewer that reports it that way

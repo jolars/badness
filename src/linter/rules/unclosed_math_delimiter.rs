@@ -68,16 +68,16 @@ impl Rule for UnclosedMathDelimiter {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a math opener the parser silently demoted to a plain token because no \
-         closer was reachable -- a `$` with no matching `$`, a `\\[`/`\\(` with no \
-         `\\]`/`\\)`, or a `\\left` with no `\\right`. Such a shape is routine data \
-         in macro code (`>{$}` array columns, `\\expandafter\\@tempa\\[\\@nil`), so \
-         the parser tolerates it without a diagnostic; in prose it is almost always \
-         a dropped closer. To stay clear of the macro-code cases the rule is \
-         conservative: it reports only an opener in document prose, staying silent \
-         when it sits inside a brace group or optional argument (`\\newcommand{...}{$}`, \
-         the `>{$}` column spec), an expl3 region, or a `macrocode` body. No autofix: \
-         the correction (insert a closer, or delete a stray opener) is ambiguous."
+        "Flag a math opener the parser demoted to a plain token because no closer was \
+         reachable: a `$` without a matching `$`, a `\\[` or `\\(` without a matching \
+         `\\]` or `\\)`, or a `\\left` without a matching `\\right`. These shapes can \
+         be data in macro code (`>{$}` array columns, \
+         `\\expandafter\\@tempa\\[\\@nil`), so the parser accepts them without a \
+         diagnostic. In prose, they almost always indicate a missing closer.\n\nThe \
+         rule reports only openers in document prose. It stays silent inside brace \
+         groups or optional arguments (`\\newcommand{...}{$}`, the `>{$}` column \
+         specification), expl3 regions, and `macrocode` bodies. No autofix is offered \
+         because the author may need to insert a closer or delete a stray opener."
     }
 
     fn examples(&self) -> &'static [Example] {

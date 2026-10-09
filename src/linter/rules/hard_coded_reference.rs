@@ -86,21 +86,19 @@ impl Rule for HardCodedReference {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a literal cross-reference written in prose -- `Figure 3`, `Table~1`, \
-         `Section 2` -- instead of `\\ref`/`\\cref` to a `\\label` (textidote \
+        "Flag a literal cross-reference in prose, such as `Figure 3`, `Table~1`, or \
+         `Section 2`, in place of a `\\ref` or `\\cref` to a `\\label` (textidote \
          sh:hcfig/hctab/hcsec). Hard-coding the number defeats LaTeX's automatic \
          numbering: renumbering a float or reordering sections silently breaks the \
-         reference and drops the hyperlink. The rule is **report-only** -- the \
-         correct rewrite needs the label the number refers to, which is not in the \
-         text, so no autofix is offered. To stay conservative it fires only for a \
-         capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) \
-         matched as a whole word and directly followed, across one space or a tie \
-         `~`, by an arabic number; plurals, lowercase, `Figure~\\ref{x}`, and \
-         `Figure three` are left alone. It also skips a citation locator \
-         (`\\cite[Section~8.1]{...}`, a reference into external work), an \
-         environment title (`\\begin{thm}[Conway's Theorem 0]`, a proper name), and \
-         an `\\item[label]` description-list caption (`\\item[Part 3.]`). It never \
-         touches math, comments, or verbatim."
+         reference and drops the hyperlink. No autofix is offered because the correct \
+         rewrite needs a label that the text does not supply.\n\nThe rule flags only a \
+         capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) matched \
+         as a whole word and followed by an Arabic number across one space or a tie \
+         (`~`). It leaves plurals, lowercase words, `Figure~\\ref{x}`, and `Figure \
+         three` alone. It also skips citation locators (`\\cite[Section~8.1]{...}`, \
+         which refers to external work), environment titles (`\\begin{thm}[Conway's \
+         Theorem 0]`, a proper name), and description-list captions (`\\item[Part \
+         3.]`). It never touches math, comments, or verbatim content."
     }
 
     fn examples(&self) -> &'static [Example] {

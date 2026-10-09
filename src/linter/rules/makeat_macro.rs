@@ -76,18 +76,18 @@ impl Rule for MakeatMacro {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a macro whose name contains `@` (`\\foo@bar`, `\\p@`, \
-         `\\@ifnextchar`) used outside a `\\makeatletter`/`\\makeatother` region. \
-         There `@` has its ordinary catcode, so it cannot be part of a control \
-         word: `\\foo@bar` is read as `\\foo` followed by the text `@bar`, not as a \
-         call to the internal macro `\\foo@bar`. Usually the enclosing \
-         `\\makeatletter`/`\\makeatother` was forgotten. Because the formatter's \
-         lexer already tracks `\\makeatletter` state, this is decided exactly -- an \
-         in-region name lexes as one token and is never flagged; only the split \
-         out-of-region form (control word abutting an `@`-word, or `\\@` abutting a \
-         letter-word) is. Report-only: a correct fix would mean wrapping the use in \
-         `\\makeatletter`/`\\makeatother`, not a tight local edit, so no autofix is \
-         offered. The end-of-sentence `\\@` (as in `NASA\\@.`) is not flagged."
+        "Flag a macro name containing `@` (`\\foo@bar`, `\\p@`, `\\@ifnextchar`) used \
+         outside a `\\makeatletter` and `\\makeatother` region. There, `@` has its \
+         ordinary catcode and cannot be part of a control word. TeX reads `\\foo@bar` \
+         as `\\foo` followed by the text `@bar`, rather than as the internal macro \
+         `\\foo@bar`. This usually means the enclosing `\\makeatletter` and \
+         `\\makeatother` were forgotten.\n\nThe formatter's lexer tracks \
+         `\\makeatletter` state, so the rule distinguishes these cases exactly. A name \
+         inside the region lexes as one token and is never flagged. Only the split form \
+         outside the region is flagged: a control word abutting an `@`-word, or `\\@` \
+         abutting a letter-word. No autofix is offered because wrapping the use in \
+         `\\makeatletter` and `\\makeatother` requires more than a local edit. The \
+         end-of-sentence `\\@` in `NASA\\@.` is left alone."
     }
 
     fn examples(&self) -> &'static [Example] {

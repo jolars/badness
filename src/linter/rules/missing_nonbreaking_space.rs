@@ -119,19 +119,18 @@ impl Rule for MissingNonbreakingSpace {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a plain space where a TeX tie (`~`) belongs, before a command whose \
-         output a line break would orphan: a bare-number reference (`Figure \
-         \\ref{x}`, `\\eqref`, `\\pageref`) or a bracketed citation (`see \
-         \\cite{a}`, `\\parencite`, `\\autocite`). A tie keeps the reference on \
-         the same line. Self-describing references (`\\autoref`, `\\cref`) and \
-         textual citations (`\\textcite`, `\\citet`) are not flagged -- they emit \
-         their own noun, so a break orphans nothing. Both a same-line space and a \
-         single source line break before the command are flagged (a blank line is \
-         not -- that starts a new paragraph). For a same-line space the fix is \
-         **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves \
-         it alone; `--unsafe-fixes` and the editor code action apply it. A line \
-         break is report-only: rewriting the newline to `~` would join the two \
-         lines, a reflow the formatter owns."
+        "Flag a plain space before a command whose output a line break would orphan: a \
+         bare-number reference (`Figure \\ref{x}`, `\\eqref`, `\\pageref`) or a \
+         bracketed citation (`see \\cite{a}`, `\\parencite`, `\\autocite`). A TeX tie \
+         (`~`) keeps the reference on the same line. Self-describing references \
+         (`\\autoref`, `\\cref`) and textual citations (`\\textcite`, `\\citet`) are \
+         not flagged because they supply their own noun.\n\nThe rule flags both a \
+         same-line space and a single source line break before the command. A blank \
+         line starts a new paragraph and is not flagged. For a same-line space, the fix \
+         is **unsafe** because inserting a tie changes line breaking. `--fix` leaves it \
+         alone; `--unsafe-fixes` and editor code actions apply it. A line break is \
+         reported without a fix: replacing it with `~` would join the lines, a reflow \
+         the formatter owns."
     }
 
     fn examples(&self) -> &'static [Example] {

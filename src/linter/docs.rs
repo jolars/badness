@@ -300,26 +300,28 @@ rule's `description()`/`examples()` in `src/linter/rules/` and regenerate. -->
 # Linter Rules
 
 `badness lint` runs a set of built-in rules over each file's parse tree and
-reports a diagnostic for every finding. This page is the catalogue: one section
-per rule, keyed by its stable **rule id**. That id is what appears in a
-diagnostic, what `[lint]` `select`/`ignore` (and `--select`/`--ignore`) target,
-and what a `% badness-lint skip <id>` comment suppresses.
+reports a diagnostic for every finding. Each section describes one rule,
+identified by its stable **rule id**. The id appears in diagnostics and selects
+the rule in `[lint]` settings, `--select` and `--ignore` flags, and
+`% badness-lint skip <id>` comments.
 
-Most rules are **on by default**. Each rule's section states its default; enable
-an opt-in rule with `select`, or narrow the default set with `select`/`ignore`
-in the `[lint]` table (see the
-[Configuration reference](configuration.md#lint)). Where a rewrite is unambiguous a rule
-carries an **auto-fix**: a *safe* fix (shown below as \"After applying the fix\")
-is applied by `badness lint --fix`; an *unsafe* fix, one that may change output
-such as inserting a line-breaking tie, is applied only with `--unsafe-fixes` or
-as an editor code action, so it has no \"after\" block here.
+Most rules are **on by default**. Each rule's section states whether it is
+enabled by default. Use `select` to enable an opt-in rule, or use `select` and
+`ignore` in the `[lint]` table to narrow the default set. See the
+[Configuration reference](configuration.md#lint).
+
+Some rules offer an **autofix** when a rewrite is unambiguous.
+`badness lint --fix` applies *safe* fixes, shown below under \"After applying the
+fix\". An *unsafe* fix may change output, such as by inserting a tie that
+prevents a line break. It applies only with `--unsafe-fixes` or an editor code
+action, so it has no \"after\" block here.
 
 Each example below is linted live to produce its diagnostic and fixed output, so
 this page never drifts from the rules' actual behavior.
 
 This page covers the **LaTeX** linter. BibTeX files have a parallel set of rules
 (a separate `BibRule` registry under `src/bib/linter/`), selectable through the
-same `[lint]` config and catalogued in
+same `[lint]` config and cataloged in
 [BibTeX Linter Rules](bib-linter-rules.md).
 ";
 
@@ -333,8 +335,9 @@ To suppress a rule at a single site, use a comment directive:
 {\\bf here}
 ```
 
-The verb carries the scope. `skip` covers the next construct, `off` and `on`
-delimit a region, and `skip-file` covers the whole file wherever it sits:
+The verb determines the scope. `skip` covers the next construct, `off` and `on`
+delimit a region, and `skip-file` covers the whole file wherever the directive
+appears:
 
 ```tex
 % badness-lint off deprecated-command: legacy chapter
@@ -343,8 +346,8 @@ delimit a region, and `skip-file` covers the whole file wherever it sits:
 % badness-lint on deprecated-command
 ```
 
-Naming the `<id>` is optional; leaving it out suppresses every rule over that
-same span. The `: <reason>` tail is optional everywhere.
+The `<id>` is optional. Omitting it suppresses every rule over the same span.
+The `: <reason>` is optional everywhere.
 
 `% badness skip` / `off` / `on` / `skip-file` do the same and turn off the
 **formatter** at the same time; see [Formatting](../guide/formatting.md#turning-the-formatter-off)

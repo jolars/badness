@@ -6,9 +6,10 @@ Badness ships a language server. Start it with:
 badness lsp
 ```
 
-The server speaks the Language Server Protocol over **stdio**. Point your
-editor's LSP client at the `badness` binary with the `lsp` argument and
-associate it with LaTeX (`.tex`) and BibTeX (`.bib`) files.
+The server uses the Language Server Protocol (LSP) over standard input and
+output (**stdio**). Point your editor's LSP client at the `badness` binary with
+the `lsp` argument and associate it with LaTeX (`.tex`) and BibTeX (`.bib`)
+files.
 
 <span id="command-completion"></span> <span id="latex3-completion"></span>
 <span id="renaming-source-files"></span>
@@ -51,25 +52,25 @@ extension](https://open-vsx.org/extension/jolars/badness). It bundles a
 platform-specific `badness` binary and starts the language server automatically
 when you open a `.tex` file, so no separate CLI install is required.
 
-The extension is configured through `badness.*` settings. By default it uses the
-bundled binary (`badness.executableStrategy: "bundled"`); set the strategy to
-`environment` to use a `badness` on your `PATH`, or `path` with
-`badness.executablePath` to point at a specific binary. See the extension's
-README for the full list of settings.
+Configure the extension through `badness.*` settings. By default, it uses the
+bundled binary (`badness.executableStrategy: "bundled"`). Set the strategy to
+`environment` to use `badness` from your `PATH`, or to `path` with
+`badness.executablePath` to select a specific binary. See the extension's README
+for the full list of settings.
 
 ### Using only some features
 
 The formatter, linter, and language features share one server but can be turned
 off independently, so you can adopt just the parts you want:
 
-- `badness.formatting.enable` — use Badness as a formatter.
-- `badness.diagnostics.enable` — show Badness diagnostics (the linter).
-- `badness.languageFeatures.enable` — hover, completion, navigation, symbols,
+- `badness.formatting.enable`—use Badness as a formatter.
+- `badness.diagnostics.enable`—show Badness diagnostics (the linter).
+- `badness.languageFeatures.enable`—hover, completion, navigation, symbols,
   rename, code actions, and the rest.
 
-All three default to `true`. They are client-side gates, so the server keeps
-running and the toggles take effect without a reinstall. For a formatter-only
-setup, turn off the other two:
+All three default to `true`. The extension controls these features on the client
+side, so the server keeps running and the changes take effect without a
+reinstall. For a formatter-only setup, turn off the other two:
 
 ```json
 {
@@ -78,25 +79,23 @@ setup, turn off the other two:
 }
 ```
 
-Turning off `badness.diagnostics.enable` this way suppresses **every**
-diagnostic, including the syntax/parse errors that a `badness.toml` `[lint]`
-selection [cannot silence](../reference/configuration.md#lint). The
-`badness.toml` route stays the right tool when you want to keep parse errors but
-mute specific lint rules across every editor and the CLI.
+Turning off `badness.diagnostics.enable` suppresses **every** diagnostic,
+including the parse errors that a `[lint]` selection in `badness.toml` [cannot
+silence](../reference/configuration.md#lint). Use `badness.toml` when you want
+to keep parse errors but disable specific lint rules across every editor and the CLI.
 
 ### Using with LaTeX Workshop
 
 Badness works alongside [LaTeX
-Workshop](https://marketplace.visualstudio.com/items?itemName=James-Yu.latex-workshop)
-rather than replacing it. The two divide cleanly: LaTeX Workshop handles
-building, PDF preview, and SyncTeX, while badness handles formatting, linting,
-and navigation. Run both, and let each own its half.
+Workshop](https://marketplace.visualstudio.com/items?itemName=James-Yu.latex-workshop).
+LaTeX Workshop handles building, PDF preview, and SyncTeX, while Badness handles
+formatting, linting, and navigation.
 
-**Formatting.** The badness extension registers itself as the default formatter
-for LaTeX files. LaTeX Workshop's own formatter integration is disabled by
-default (`latex-workshop.formatting.latex` is `"none"`); leave it that way so
-there is a single formatting authority. For BibTeX files, LaTeX Workshop ships a
-built-in formatter, so pick badness explicitly:
+**Formatting.** The Badness extension registers itself as the default formatter
+for LaTeX files. LaTeX Workshop's formatter integration is disabled by default
+(`latex-workshop.formatting.latex` is `"none"`). Leave it disabled so only one
+extension formats your LaTeX files. LaTeX Workshop ships a built-in BibTeX
+formatter, so select Badness explicitly for BibTeX files:
 
 ```json
 {
@@ -108,8 +107,8 @@ built-in formatter, so pick badness explicitly:
 
 **Linting.** LaTeX Workshop's ChkTeX and lacheck integrations are disabled by
 default (`latex-workshop.linting.chktex.enabled` and
-`latex-workshop.linting.lacheck.enabled`). Leave them off; enabling them
-alongside badness produces overlapping diagnostics for many common issues.
+`latex-workshop.linting.lacheck.enabled`). Leave them off to avoid overlapping
+diagnostics from those tools and Badness.
 
 **Completion.** Both extensions contribute completion items, so you may see
 duplicate suggestions for commands, environments, or citations. This is
@@ -173,6 +172,6 @@ default command line.
 
 ## Other Editors
 
-Any LSP-capable editor can run badness: configure a server whose command is
-`badness lsp`, communicating over stdio, for LaTeX documents. Consult your
-editor's LSP client documentation for the exact configuration shape.
+Any editor with an LSP client can run Badness. Configure it to use `badness lsp`
+over stdio for LaTeX documents. Consult your editor's LSP client documentation
+for the exact configuration syntax.

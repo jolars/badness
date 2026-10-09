@@ -114,21 +114,20 @@ impl Rule for LabelBeforeCaption {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a `\\label` placed before the statement that establishes its \
-         intended counter: the outer `\\caption` in a curated float (`figure`, \
-         `table`, and their starred forms), an explicit `\\captionof` in a curated \
-         caption container (`minipage`), or the first `\\item` in the standard \
-         numbered `enumerate` list. In either position, `\\label` captures the \
-         previous `\\@currentlabel`—usually an enclosing section number—so \
-         `\\ref` silently prints an unrelated number. LaTeX gives no warning. \
-         The list case is limited to statement-level labels before the first item; \
-         labels after an item may belong to it, while `itemize` and `description` \
-         items do not step a reference counter. Attached custom item labels and \
-         complete Beamer overlay markers remain intact. The float case likewise \
-         skips labels nested in command arguments, and classifies nested counter \
-         steps conservatively. The fix moves the label just after the proven \
-         caption or item marker, and is Unsafe because it intentionally changes \
-         what `\\ref` prints from an inferred intent."
+        "Flag a `\\label` before the statement that establishes its intended counter: \
+         the outer `\\caption` in a curated float (`figure`, `table`, and their starred \
+         forms), an explicit `\\captionof` in a curated caption container (`minipage`), \
+         or the first `\\item` in a standard numbered `enumerate` list. In these \
+         positions, `\\label` captures the previous `\\@currentlabel`, usually an \
+         enclosing section number, so `\\ref` silently prints an unrelated number. \
+         LaTeX gives no warning.\n\nThe list check covers only statement-level labels \
+         before the first item. Labels after an item may belong to it, while `itemize` \
+         and `description` items do not step a reference counter. Attached custom item \
+         labels and complete Beamer overlay markers remain intact. The float check \
+         skips labels nested in command arguments and classifies nested counter steps \
+         conservatively. The fix moves the label just after the proven caption or item \
+         marker. It is Unsafe because it infers the author's intent and deliberately \
+         changes what `\\ref` prints."
     }
 
     fn examples(&self) -> &'static [Example] {

@@ -38,10 +38,10 @@ check. It uses the CLI's [configuration
 discovery](../reference/configuration.md); directory walks honor `.gitignore`
 and the exclusions in `badness.toml`.
 
-The `@v1` tag selects the action version; `version` selects the Badness CLI
-release. Keep the latter aligned with your local installation and pre-commit
-revision. Omitting `version` selects the latest release with a binary for the
-runner.
+The `@v1` tag selects the action version, and `version` selects the Badness CLI
+release. Keep the CLI release aligned with your local installation and
+pre-commit revision. Omitting `version` selects the latest release with a binary
+for the runner.
 
 For a formatting-only check under `chapters/`:
 
@@ -144,7 +144,7 @@ Add settings under `badness`, keeping the `plugins` array created above:
 ```
 
 The plugin reads `dprint.json` and does not load `badness.toml`. Its keys use
-camelCase; see the [plugin's configuration
+camelCase. See the [plugin's configuration
 reference](https://github.com/jolars/dprint-plugin-badness#configuration) for
 the supported settings. Leaving `wrap` unset preserves the default for each file
 kind: prose in `.tex` files reflows, while code files such as `.sty` and `.cls`
@@ -180,8 +180,9 @@ latex = "badness"
 tex = "badness"
 ```
 
-The formatter covers `latex`/`tex` and `bib`/`bibtex` blocks. The linter preset
-covers `latex`/`tex` blocks; it does not lint BibTeX blocks.
+The formatter covers blocks labeled `latex`, `tex`, `bib`, or `bibtex`. The
+linter preset covers blocks labeled `latex` or `tex`; it does not lint BibTeX
+blocks.
 
 Run `panache format document.qmd` to format the document and its code blocks, or
 `panache lint document.qmd` to report findings without changing files. The

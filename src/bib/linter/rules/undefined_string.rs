@@ -19,7 +19,7 @@ use crate::linter::diagnostic::{Diagnostic, Severity};
 use super::{BibRule, BibRuleContext, Example};
 
 const EXAMPLES: &[Example] = &[Example {
-    caption: "A typo'd macro name (`cpu` for `cup`):",
+    caption: "A misspelled macro name (`cpu` for `cup`):",
     source: "@string{cup = {Cambridge University Press}}\n\
              @book{turing50, title = {Draft}, publisher = cpu}\n",
 }];
@@ -36,14 +36,14 @@ impl BibRule for UndefinedString {
     }
 
     fn description(&self) -> &'static str {
-        "Flag an `@string` macro used in a field value but defined nowhere in \
-         the file (the twelve month macros `jan`..`dec` are predefined). \
-         Usually a typo'd macro name or a missing `@string` definition; BibTeX \
-         errors on it at build time. In a multi-file bibliography the \
-         definition may live in another `.bib`, so a use resolved there is a \
-         false positive -- cross-file `@string` resolution is not modeled yet. \
-         Report-only: the fix (define the macro or correct the name) is a \
-         meaning-level edit left to the author."
+        "Flag an `@string` macro used in a field value but defined nowhere in the file. \
+         The twelve month macros from `jan` through `dec` are predefined. An undefined \
+         macro usually means a misspelled name or a missing `@string` definition, and \
+         BibTeX reports an error at build time.\n\nIn a multi-file bibliography, \
+         another `.bib` file may supply the definition. Cross-file `@string` resolution \
+         is not yet modeled, so those uses produce false positives. No autofix is \
+         offered because the author must choose whether to define the macro or correct \
+         its name."
     }
 
     fn examples(&self) -> &'static [Example] {

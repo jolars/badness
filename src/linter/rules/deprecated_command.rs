@@ -52,15 +52,14 @@ impl Rule for DeprecatedCommand {
     }
 
     fn description(&self) -> &'static str {
-        "Flag the obsolete two-letter font *switches* (`\\bf`, `\\it`, `\\rm`, \
-         `\\sf`, `\\tt`, `\\sc`, `\\sl`) that LaTeX 2e superseded with the \
-         `\\...series`/`\\...shape`/`\\...family` declarations. `\\em` is not \
-         flagged; it is still the supported emphasis switch. A name the file \
-         redefines (`\\renewcommand{\\sl}{…}`, `\\def\\rm{…}`) is the user's macro, \
-         not the switch, so it is not flagged anywhere. The autofix swaps just the \
-         control word (`\\bf` -> `\\bfseries`), leaving any following text \
-         untouched, so it is correct by construction; it is withheld where the \
-         switch is merely referenced (`\\let\\x\\rm`, `\\ifx\\rm\\y`)."
+        "Flag the obsolete two-letter font *switches* (`\\bf`, `\\it`, `\\rm`, `\\sf`, \
+         `\\tt`, `\\sc`, `\\sl`) that LaTeX 2e superseded with `\\...series`, \
+         `\\...shape`, and `\\...family` declarations. The rule leaves `\\em` alone \
+         because it remains the supported emphasis switch. If the file redefines a name \
+         (`\\renewcommand{\\sl}{…}`, `\\def\\rm{…}`), the rule treats it as the user's \
+         macro and does not flag it anywhere.\n\nThe autofix replaces only the control \
+         word (`\\bf` → `\\bfseries`), leaving following text untouched. It is withheld \
+         where the switch is merely referenced (`\\let\\x\\rm`, `\\ifx\\rm\\y`)."
     }
 
     fn examples(&self) -> &'static [Example] {

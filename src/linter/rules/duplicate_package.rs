@@ -54,20 +54,18 @@ impl Rule for DuplicatePackage {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a package loaded more than once in the same file with \
-         `\\usepackage`/`\\RequirePackage` (which share one package namespace). \
-         LaTeX loads a given package only once; a second load is redundant and, \
-         when the options disagree, an option-clash error. A warning requires \
-         a prior load in the same conditional branch or an enclosing context \
-         (including an unconditional prior). Separate conditional tests are \
-         treated as uncertain and do not trigger a warning. Recognizes \
-         `\\if...\\else...\\fi` and common macros with complete braced arguments, \
-         including `\\ifthenelse`, `\\iftoggle`, and `\\IfFileExists`. Predicates \
-         are not evaluated, and coverage across branches is not combined. \
-         No autofix: removing a \
-         load can drop options the survivor lacks, and which load to keep is the \
-         author's call. Class loads (`\\documentclass`/`\\LoadClass`) are a \
-         separate concern and are not flagged."
+        "Flag a package loaded more than once in the same file with `\\usepackage` or \
+         `\\RequirePackage`, which share one package namespace. LaTeX loads a package \
+         only once. A second load is redundant and produces an option-clash error when \
+         its options disagree.\n\nA warning requires a prior load in the same \
+         conditional branch or an enclosing context, including an unconditional prior \
+         load. Separate conditional tests are treated as uncertain and do not trigger a \
+         warning. The rule recognizes `\\if...\\else...\\fi` and common macros with \
+         complete braced arguments, including `\\ifthenelse`, `\\iftoggle`, and \
+         `\\IfFileExists`. It does not evaluate predicates or combine coverage across \
+         branches. No autofix is offered because removing a load can discard options \
+         the remaining load lacks. Class loads (`\\documentclass` and `\\LoadClass`) \
+         are not flagged."
     }
 
     fn examples(&self) -> &'static [Example] {

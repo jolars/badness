@@ -7,10 +7,10 @@ typo fixes to new lint rules and parser features.
 
 ## Getting set up
 
-Badness is a Rust workspace (edition 2024): the root package is the `badness`
-CLI/LSP/linter crate, and the publishable `badness-parser` and
-`badness-formatter` library crates live under `crates/`. The toolchain is pinned
-by `rust-toolchain.toml`, so a stable `rustup` install picks up the right
+Badness is a Rust workspace (edition 2024). The root package, `badness`,
+contains the CLI, language server, and linter. The publishable `badness-parser`
+and `badness-formatter` library crates live under `crates/`. The toolchain is
+pinned by `rust-toolchain.toml`, so a stable `rustup` install picks up the right
 version automatically. The published crates support Rust 1.89 and newer; CI
 checks that compatibility floor separately from the pinned development
 toolchain.
@@ -21,14 +21,15 @@ cd badness
 cargo build
 ```
 
-If you use [Nix](https://nixos.org/) with [devenv](https://devenv.sh/), the dev
-shell provides the full toolchain plus the profiling and benchmarking tools
-(`perf`, `cargo-flamegraph`, `hyperfine`, `cargo-show-asm`, `cargo-llvm-cov`)
-and the `go-task` runner. It loads automatically with `direnv`.
+If you use [Nix](https://nixos.org/) with [devenv](https://devenv.sh/), the
+development shell provides the full toolchain plus the profiling and
+benchmarking tools (`perf`, `cargo-flamegraph`, `hyperfine`, `cargo-show-asm`,
+`cargo-llvm-cov`) and the `go-task` runner. It loads automatically with
+`direnv`.
 
-The task runner is [go-task](https://taskfile.dev/); `task --list` shows every
-available task. The most common ones are below, but every task maps to a plain
-`cargo` invocation if you'd rather not install it.
+The task runner is [go-task](https://taskfile.dev/). Run `task --list` to see
+every available task. The most common ones are below, but every task maps to a
+plain `cargo` invocation if you'd rather not install it.
 
 ## Building and testing
 
@@ -53,8 +54,8 @@ nightly job. When proptest finds a counterexample, reduce it and preserve it as
 a readable regression test; the suite deliberately does not persist opaque seed
 files.
 
-Performance is first-class. Benchmark before optimizing, and never regress
-losslessness for speed.
+Benchmark before optimizing, and preserve losslessness when improving
+performance.
 
 ### Checks that don't run in CI
 
@@ -62,38 +63,39 @@ Two oracles need more than a Rust toolchain, so run them by hand when your
 change touches what they cover.
 
 `task typeset:check` compiles `tests/typeset/*.tex` before and after formatting
-and diffs the typeset output. The CST oracles cannot see the one risk the
-key-value argument flag takes, where a space token is trivia to the CST and
-content to TeX, so run this when touching keyval signature data or the
-optional-argument lowering. It needs a TeX install.
+and diffs the typeset output. CST comparisons cannot detect every risk
+introduced by the key-value argument flag: a space token can be trivia to the
+CST but content to TeX. Run this check when changing keyval signature data or
+optional-argument lowering. It needs a TeX installation.
 
 `task parse-compat` runs [texlab](https://github.com/latex-lsp/texlab)'s parser
-as a differential oracle over a corpus, skeletonizing both trees and comparing.
-It is a reference we measure against, not one we match, so a divergence is
-something to explain rather than automatically fix.
+as a differential oracle over a corpus. It simplifies both parsers' trees and
+compares their structures. Texlab provides a reference for comparison, so a
+divergence needs an explanation rather than an automatic fix.
 
 ## Project layout
 
 Badness parses LaTeX into a lossless concrete syntax tree (CST) and builds three
 tools on top of it: a formatter (`badness format`), a linter (`badness lint`),
 and a language server (`badness lsp`). The architecture follows
-[rust-analyzer](https://rust-analyzer.github.io/): a hand-written,
-error-tolerant lexer and parser turn LaTeX into a flat token stream, then an
-event stream that a tree builder feeds into
-[rowan](https://github.com/rust-analyzer/rowan); a **semantic layer** assigns
-meaning on top of the generic tree; and incremental recomputation is
-[salsa](https://github.com/salsa-rs/salsa)-first.
+[rust-analyzer](https://rust-analyzer.github.io/). A hand-written lexer turns
+LaTeX into a flat token stream. An error-tolerant parser produces an event
+stream that a tree builder feeds into
+[rowan](https://github.com/rust-analyzer/rowan). A separate **semantic layer**
+assigns meaning to the generic tree, and
+[salsa](https://github.com/salsa-rs/salsa) provides incremental recomputation.
 
-The [Architecture](https://badness.dev/development/architecture.html) page in
-the book is the full tour, and it is worth reading before a non-trivial change.
+Read the book's
+[Architecture](https://badness.dev/development/architecture.html) page for a
+full tour before making a substantial change.
 
 Where things live:
 
-- `crates/badness-parser` — syntax layer, parser, semantic layer, the BibTeX
+- `crates/badness-parser`—syntax layer, parser, semantic layer, the BibTeX
   pipeline, and the `data/` signature artifacts.
-- `crates/badness-formatter` — the layout engine and the `.bib` formatter.
-- `crates/badness-wasm` — the wasm shim powering the docs playground.
-- `src/` — the CLI, LSP, linter, and project layers, plus shim modules
+- `crates/badness-formatter`—the layout engine and the `.bib` formatter.
+- `crates/badness-wasm`—the wasm shim powering the docs playground.
+- `src/`—the CLI, LSP, linter, and project layers, plus shim modules
   re-exporting the member crates at their old paths.
 
 Both library crates must keep building for `wasm32-unknown-unknown`, so nothing
@@ -102,8 +104,8 @@ Anything that needs the outside world belongs in the root crate.
 
 ## Invariants
 
-These properties are held by construction and enforced as test oracles. A change
-that breaks one is a bug, not a trade-off.
+The design preserves these properties, and tests enforce them. A change that
+breaks one is a bug, not a trade-off.
 
 - Losslessness: `reconstruct(text) == text`, byte for byte.
 - Idempotence: `format(format(x)) == format(x)`.
@@ -139,12 +141,13 @@ A couple of ground rules keep the design coherent:
   `cargo fmt` first. Clippy warnings are treated as errors.
 
 Each workspace crate is its own versionary package with its own changelog and
-version. The root CLI tags bare `v*`; the members tag `badness-parser-v*` and
-`badness-formatter-v*`. Only the bare `v*` stream carries release assets.
+version. The root CLI uses bare `v*` tags; the library crates use
+`badness-parser-v*` and `badness-formatter-v*`. Only releases with bare `v*`
+tags carry release assets.
 
 ### Adding a lint rule
 
-The `add-lint-rule` workflow automates this, but the shape is fixed:
+The `add-lint-rule` workflow automates these steps:
 
 1. Implement `Rule` in a new `src/linter/rules/<name>.rs`, choosing node-shape,
    whole-file, or streaming dispatch, with an `id`, a `default_severity`, a
@@ -164,9 +167,10 @@ The `add-lint-rule` workflow automates this, but the shape is fixed:
 Several files in `crates/badness-parser/data/` are generated from pinned
 upstream sources by `scripts/gen_*.py` and guarded by paired `task …:check` and
 `:sync` targets: `cwl_signatures.json`, the package and class name lists with
-`package_metadata.json`, and `bib_fields.json`. Re-sync them through their task
-rather than hand-editing the mechanical facts. `signatures.json`, `colors.json`,
-and `tikz_libraries.json` are curated by hand and may be edited directly.
+`package_metadata.json`, and `bib_fields.json`. Regenerate them through their
+tasks rather than editing the generated data by hand. `signatures.json`,
+`colors.json`, and `tikz_libraries.json` are curated by hand and may be edited
+directly.
 
 Command entries in `signatures.json` may set `completionKind` to `symbol` for
 argument-free math and text symbols or logos, or `keyword` for argument-free

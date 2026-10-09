@@ -4,9 +4,8 @@ For a walkthrough of creating and sharing a project config, see the
 [configuration guide](../guide/configuration.md).
 
 Badness is configured through a `badness.toml` file. All keys are optional and
-spelled in kebab-case; an unknown key or section is a hard error, not a silent
-no-op. Run `badness init` to write a commented starter file with defaults and
-examples.
+spelled in kebab-case. Badness reports an error for an unknown key or section.
+Run `badness init` to write a commented starter file with defaults and examples.
 
 ```toml
 # extend = "../shared/badness.toml"
@@ -40,7 +39,7 @@ instead of the global user config below—handy for keeping one config on a sync
 drive and pointing every machine at it. A set `BADNESS_CONFIG` shadows the
 global config entirely.
 
-If `BADNESS_CONFIG` is unset, badness falls back to a global user config: the
+If `BADNESS_CONFIG` is unset, Badness falls back to a global user config: the
 first existing file among
 
 1. `$XDG_CONFIG_HOME/badness/config.toml`
@@ -95,7 +94,7 @@ extension installed, add this association to your user or workspace
 
 ### Inline `#:schema` directive
 
-TOML tooling that supports inline schema directives can select it from the
+TOML tools that support inline schema directives can select the schema from the
 configuration file itself:
 
 ```toml
@@ -229,8 +228,8 @@ command.
   | `indent` | Add one `indent-width` step from the `\item` column.          |
   | `none`   | Align with the `\item` command.                               |
 
-Labels and Beamer overlays do not widen the `hang` offset, so items retain one
-continuation edge regardless of marker width.
+Labels and Beamer overlays do not widen the `hang` offset, so continuation lines
+align at the same column regardless of marker width.
 
 **Default value**: `"hang"`
 
@@ -256,12 +255,12 @@ structure, only where soft line breaks fall.
   | `sentence` | One sentence per line. Line width is ignored—a long sentence stays on one line.                                                |
   | `semantic` | [Semantic line breaks](https://sembr.org): keep authored breaks, add sentence breaks, and wrap overlong lines to `line-width`. |
 
-Both `sentence` and `semantic` split a paragraph at sentence boundaries.
-Boundary detection is a small per-language rule engine over the words: a `.`,
-`!`, or `?` ends a sentence *unless* the word is a known abbreviation (`e.g.`,
-`Fig.`, `Dr.`, etc.) an ellipsis (`...`, `…`), or a contextual abbreviation
-whose following word signals that the sentence continues (`U.S. Government`
-stays together, `U.S. However` splits). The abbreviation profile is chosen by
+Both `sentence` and `semantic` split a paragraph at sentence boundaries. A small
+set of language-specific rules detects sentence boundaries. A `.`, `!`, or `?`
+ends a sentence *unless* the word is a known abbreviation (`e.g.`, `Fig.`,
+`Dr.`, etc.), an ellipsis (`...`, `…`), or a contextual abbreviation whose
+following word signals that the sentence continues (`U.S. Government` stays
+together, `U.S. However` splits). The abbreviation profile is chosen by
 [`lang`](#lang) and extended by
 [`no-break-abbreviations`](#no-break-abbreviations).
 
@@ -273,8 +272,8 @@ has stranded one on the next line. Textual forms, such as `\textcite` and
 style-dependent, so the formatter follows the source: it attaches on the same
 line but preserves an authored line break.
 
-`semantic` additionally *preserves the author's own line breaks* on top of the
-sentence breaks (the [sembr](https://sembr.org) convention). It does not detect
+`semantic` also *preserves the author's own line breaks* alongside sentence
+breaks, following the [sembr](https://sembr.org) convention. It does not detect
 clause boundaries itself—a break after a comma or `and` survives only where the
 author placed a newline. Long sentences wrap at `line-width`, so one sentence
 can span several lines. Each sentence starts on a new line even if it would fit
@@ -295,9 +294,9 @@ the width does not automatically join them.
 
 `stable` also preserves authored line breaks, but treats them as preferred
 anchors rather than hard boundaries. It is aimed at keeping revision diffs
-small: a small prose edit perturbs the smallest possible region. Each prose run
-is solved as one global layout problem. Candidate layouts are compared
-lexicographically by total overflow, underflow below a soft target
+small: a small prose edit perturbs the smallest possible region. The formatter
+solves each prose run as one global layout problem. It compares candidate
+layouts lexicographically by total overflow, underflow below a soft target
 (`line-width - 15`), changed authored breaks, displacement from the nearest
 authored break, raggedness around that target, and line count. This makes the
 hard width non-negotiable before minimizing source churn, while a short final
@@ -310,25 +309,24 @@ lengths.
 When omitted, every file kind reflows—`.tex`, `.bib`, `.sty`, `.cls`, `.dtx`,
 and `.ins` alike. A file's extension is not a layout input.
 
-That is safe because reflow is never the thing that decides whether content may
-move. The formatter declines to reflow anything it cannot lay out without
-changing meaning, in *every* wrap mode and regardless of what you configure:
-verbatim bodies and `\verb`, comments, `.dtx` documentation margins and docstrip
-guards (which must stay at column 0), and any documentation block whose
-rewrapping would push a `%` off column 0. Asking for `wrap = "reflow"` on a
-`.dtx` cannot corrupt it; asking for `wrap = "preserve"` on a `.tex` is a
-stylistic choice, not a safety one.
+Reflow is safe because structural checks determine whether content may move. In
+*every* wrap mode, the formatter preserves anything it cannot lay out without
+changing meaning: verbatim bodies and `\verb`, comments, `.dtx` documentation
+margins and docstrip guards (which must stay at column 0), and any documentation
+block whose rewrapping would push a `%` off column 0. Asking for
+`wrap = "reflow"` on a `.dtx` cannot corrupt it; asking for `wrap = "preserve"`
+on a `.tex` is a stylistic choice, not a safety one.
 
 Beamer overlay bodies in `\only`, `\uncover`, `\visible`, `\invisible`,
 `\onslide`, `\action`, `\alt`, and `\temporal` retain their authored line breaks
 in every wrap mode. Multiline bodies stay multiline, and inline bodies stay
 inline even when they exceed `line-width`. Indentation still normalizes.
 
-Code, in practice, has little to reflow: expl3 regions
-(`\ExplSyntaxOn`…`\ExplSyntaxOff`) are laid out by their own rules whatever
-`wrap` says, and a source line consisting only of commands keeps its own line.
-So a package or class body formats much as it did before, and `preserve` remains
-available if you want authored breaks kept verbatim.
+Code has little to reflow in practice. Expl3 regions
+(`\ExplSyntaxOn`…`\ExplSyntaxOff`) follow their own layout rules regardless of
+`wrap`, and a source line consisting only of commands keeps its own line.
+Package and class bodies therefore format much as they did before. Use
+`preserve` if you want to keep authored breaks verbatim.
 
 **Default value**: unset (`reflow`, for every file kind)
 
@@ -373,11 +371,11 @@ math-wrap = "preserve"
 
 ### `line-ending`
 
-How the line breaks in formatted output are spelled. The layout engine always
-decides *where* breaks go; this decides only the bytes they render as, and it
-applies to the whole document — including inside `verbatim`-style protected
-regions, which would otherwise keep their authored endings and leave the file
-mixed.
+The bytes used for line breaks in formatted output. The layout engine decides
+*where* breaks go. This setting controls how they are encoded throughout the
+document, including inside `verbatim`-style protected regions. Otherwise, those
+regions would keep their authored endings and could leave the file with mixed
+line endings.
 
   | Mode     | Behavior                                                                                       |
   | -------- | ---------------------------------------------------------------------------------------------- |
@@ -387,7 +385,7 @@ mixed.
   | `native` | The platform's convention: `\r\n` on Windows, `\n` elsewhere.                                  |
 
 The default is `auto`, so formatting never rewrites a repository's line endings
-on its own — set `lf` (or add a `.gitattributes` rule) if you want them
+on its own. Set `lf` (or add a `.gitattributes` rule) if you want them
 normalized.
 
 **Default value**: `"auto"`
@@ -406,9 +404,9 @@ line-ending = "lf"
 Document language as a BCP-47-style code (`en`, `de`, `pt-BR`, …), used by the
 `sentence` and `semantic` wrap modes to pick the sentence-boundary abbreviation
 profile. Built-in profiles cover English (default), Czech, German, Spanish, and
-French; the region subtag is folded away, and an unknown or unset language falls
-back to English. (Automatic detection from `babel`/`polyglossia` is not yet
-implemented.)
+French; Badness ignores the region subtag, and an unknown or unset language
+falls back to English. (Automatic detection from `babel`/`polyglossia` is not
+yet implemented.)
 
 **Default value**: unset (English)
 
@@ -423,10 +421,10 @@ lang = "de"
 
 ### `no-break-abbreviations`
 
-User-supplied no-break abbreviations for the `sentence` and `semantic` wrap
-modes, keyed by language code or the literal `default` bucket (applied to every
-document). An abbreviation listed here never ends a sentence, so no line break
-is inserted after it. Merged on top of the built-in per-language lists.
+User-supplied abbreviations that never end a sentence in the `sentence` and
+`semantic` wrap modes. Entries are keyed by language code or `default`, which
+applies to every document. Badness adds these entries to the built-in lists for
+each language.
 
 **Default value**: `{}`
 
@@ -444,8 +442,8 @@ de = ["bzw.", "Abb."]       # applied only when lang resolves to German
 
 Rule selection for `badness lint`, shared by the [LaTeX](linter-rules.md) and
 [BibTeX](bib-linter-rules.md) rule sets. Most rules are on by default; each
-rule's reference entry states whether it is default-enabled. An unknown rule id
-is reported at lint time, not rejected at config-parse time.
+rule's reference entry states whether it is enabled by default. Badness reports
+an unknown rule id when linting rather than when parsing the configuration.
 
 ### `select`
 
@@ -487,11 +485,12 @@ ignore = ["missing-nonbreaking-space"]
 
 ## `[build]`
 
-Where the TeX compiler leaves its artifacts, and which file it was run on. Read
-by the **language server** only — it pulls resolved label and section numbers
-from the `.aux` files for hover and document symbols, and locates the compiled
-PDF for [forward search](editor-configuration.md#forward-and-inverse-search).
-Never read by the formatter or linter.
+The locations of the TeX compiler's artifacts and the file it compiled. Only the
+**language server** reads these settings. It uses `.aux` files to supply
+resolved label and section numbers for hover and document symbols, and locates
+the compiled PDF for [forward
+search](editor-configuration.md#forward-and-inverse-search). The formatter and
+linter do not read this section.
 
 ### `aux-dir`
 
@@ -531,9 +530,9 @@ pdf-dir = "out"
 ### `pdf-filename`
 
 The compiled PDF's file name, when the build does not name it after the root
-document (latexmk's `-jobname`). A **bare file name**, never a path — use
-`pdf-dir` for the directory — and `.pdf` is appended when it carries no
-extension, so `"thesis"` and `"thesis.pdf"` mean the same thing.
+document (latexmk's `-jobname`). Use a **bare file name** and specify the
+directory with `pdf-dir`. Badness appends `.pdf` when the name has no extension,
+so `"thesis"` and `"thesis.pdf"` mean the same thing.
 
 **Default value**: unset (`<root document stem>.pdf`)
 
@@ -548,8 +547,8 @@ pdf-filename = "thesis.pdf"
 
 ### `root`
 
-The project's root document — the file the compiler was run on — resolved
-relative to this `badness.toml`'s directory when not absolute.
+The project's root document, which is the file the compiler ran on. A relative
+path starts at the directory containing this `badness.toml`.
 
 Normally the root is found by scanning the project for a file carrying
 `\documentclass` or `\begin{document}`, and you do not need this key. But that
@@ -592,15 +591,17 @@ the key behavior: `ref`/`eqref` accept one label, `cref` and its list-valued
 siblings split on commas, citation commands split on commas, and `nocite`
 preserves the special `*` wildcard.
 
-Command declarations affect linting, label/citation navigation, rename, and key
-completion. They do not expand the macro, declare its arity, change argument
-attachment, or lend formatter layout. Use the command whose observable key
-behavior matches the wrapper: an `eqrefs` command that accepts several labels is
-`like = "cref"`, even if its implementation calls `\eqref` once per key.
+Command declarations affect linting, navigation to labels and citations, rename,
+and key completion. They do not expand the macro, declare its arity, change
+argument attachment, or select formatter layouts. Use the command whose
+observable key behavior matches the wrapper: an `eqrefs` command that accepts
+several labels is `like = "cref"`, even if its implementation calls `\eqref`
+once per key.
 
 Anything that would silently do nothing is a configuration error: an empty
-entry, an invalid control-word name, an unknown or non-ref/cite `like` target,
-or an attempt to reclassify a curated built-in command.
+entry, an invalid control-word name, an unknown `like` target or one outside the
+reference and citation families, or an attempt to reclassify a curated built-in
+command.
 
 ### Command `like`
 
@@ -618,12 +619,11 @@ like = "cref"
 
 ## `[environments]`
 
-Declares environments Badness cannot recognize from the file alone: one that
-behaves like a built-in but has no built-in counterpart, one whose body is
-verbatim, and one reached through command spellings rather than `\begin`/`\end`.
-This is the only section that changes how your files are *parsed*, so it is read
-by `format`, `lint`, and the language server alike; editing it makes the server
-reparse the project.
+Declares environments Badness cannot recognize from the file alone. These may
+behave like built-ins, have verbatim bodies, or use command spellings in place
+of `\begin` and `\end`. This is the only section that changes how your files are
+*parsed*, so it is read by `format`, `lint`, and the language server alike;
+editing it makes the server reparse the project.
 
 Entries are keyed by the environment's own name, whether or not Badness already
 knows it:
@@ -652,35 +652,33 @@ end = ['\endmyenv']
 
 Write control words as TOML **literal** strings (single quotes) so the backslash
 needs no escaping: `'\bea'`, not `"\\bea"`. Both spellings are accepted, and so
-is a name with no backslash at all — a control word can never contain one, so
+is a name with no backslash at all—a control word can never contain one, so
 there is nothing to disambiguate.
 
 A declaration names a **spelling**, never a pairing. Every structural rule still
-applies, so a declared `\bea` whose `\eea` is unreachable — stranded inside a
-brace group, or simply missing — stays an ordinary command, exactly as it would
+applies, so a declared `\bea` whose `\eea` is unreachable—stranded inside a
+brace group, or simply missing—stays an ordinary command, exactly as it would
 without the declaration. A wrong declaration therefore does nothing to your
 document; it cannot corrupt it.
 
-What a declaration *cannot* do is invent behavior. It only ever points at an
-environment Badness already curates, so there is no way to spell out "this one
-is math, takes two arguments, and has a verbatim body" key by key. If nothing
-built in resembles yours, that is worth an issue rather than a workaround.
+A declaration copies the behavior of an environment Badness already curates. It
+cannot specify individual properties such as a math body, two arguments, or a
+verbatim body. If no built-in environment resembles yours, open an issue.
 
-Anything a declaration cannot satisfy is an error at config load, reported
-against the key you wrote, rather than a block that parses and quietly does
-nothing:
+Badness reports invalid declarations against the relevant key when loading the
+configuration:
 
 - an entry with no keys under it, which would declare nothing at all
 - `like` naming an environment Badness does not know
 - delimiter spellings for a verbatim environment (the closing command is never
-  seen — the verbatim body has already swallowed it)
+  seen—the verbatim body has already swallowed it)
 - delimiter spellings for an environment that takes arguments (a bare command
   carries none)
 - delimiter spellings for an environment with no `like` and no built-in of that
   name, so its behavior is unknown
 - one spelling claimed by two entries, or listed twice by one
 - a spelling that is the delimiter itself (`'\end{split}'`) rather than a
-  command standing in for one — the written-out delimiter already pairs with a
+  command standing in for one—the written-out delimiter already pairs with a
   declared spelling, so the key can just be removed
 - a spelling that could never be a single control word (`'\b ea'`, `'\bea2'`)
 - a spelling that is already a LaTeX command Badness knows (`'\emph'`), which
@@ -690,9 +688,9 @@ nothing:
 
 The built-in environment whose behavior this one copies: whether its body is
 math, whether it aligns on `&`, whether it is verbatim, and every such property
-at once. This is also how you name a verbatim environment defined by machinery
-no scan can follow — `like = "lstlisting"` protects its body from reflowing and
-from lint findings.
+at once. Use this to name a verbatim environment defined through macros the
+scanner cannot follow. Setting `like = "lstlisting"` protects its body from
+reflow and lint findings.
 
 The target is looked up among the environments Badness curates by hand; a
 misspelled one is an error rather than a silent no-op.
@@ -711,19 +709,19 @@ like = "lstlisting"
 ### `begin`
 
 Command spellings that stand in for this environment's `\begin{…}`. Any of them
-opens it, and any spelling in [`end`](#end) closes it — pairing is by side, not
-by position, so the two lists need not be the same length.
+opens it, and any spelling in [`end`](#end) closes it—pairing is by side, not by
+position, so the two lists need not be the same length.
 
 The written-out `\end{…}` closes it too, which is why `end` is optional. A
 command defined as `\def\bsplit{\begin{split}}` *expands to* `\begin{split}`, so
 `\bsplit … \end{split}` is a perfectly ordinary environment and there may be no
 closing command to name at all.
 
-Use this when the definition is somewhere Badness cannot see: a sibling `.sty`,
-or one built by machinery no scan follows. A definition written with a plain
-`\newcommand` or `\def` in the *same* file —
+Use this when Badness cannot see the definition, such as in a sibling `.sty`
+file or in macros the scanner cannot follow. A definition written with a plain
+`\newcommand` or `\def` in the *same* file—
 `\newcommand{\bea}{\begin{eqnarray}}`, or `\def\bsplit{\begin{split}}` on its
-own — is already recognized without any configuration.
+own—is already recognized without any configuration.
 
 A spelling must be a command of your own. Naming one Badness already knows
 (`'\emph'`, `'\section'`) is an error rather than a redefinition: the
@@ -745,7 +743,7 @@ end = ['\eea']
 ### `end`
 
 Command spellings that stand in for this environment's `\end{…}`, the mirror of
-[`begin`](#begin) in every respect — including that it stands alone. A command
+[`begin`](#begin) in every respect—including that it stands alone. A command
 defined as `\def\eeq{\end{equation}}` closes a written-out `\begin{equation}`,
 so an entry may name a closing spelling without naming an opening one.
 

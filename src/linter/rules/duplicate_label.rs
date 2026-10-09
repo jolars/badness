@@ -43,18 +43,17 @@ impl Rule for DuplicateLabel {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a label key defined more than once in the same label \
-         namespace -- within one file, or across files that share a document \
-         when a project view is available. LaTeX itself only warns and silently \
-         keeps the last definition. Within a file, a warning requires a prior \
-         definition in the same conditional branch or an enclosing context. \
-         Separate conditional tests are treated as uncertain and do not trigger \
-         a warning. Recognizes `\\if...\\else...\\fi` and common macros with \
-         complete braced arguments, including `\\ifthenelse`, `\\iftoggle`, and \
-         `\\IfFileExists`. Predicates are not evaluated, and coverage across \
-         branches is not combined. Cross-file checks use label namespaces. No \
-         autofix: resolving a collision (rename vs delete) is the author's \
-         call."
+        "Flag a label key defined more than once in the same label namespace, either \
+         within one file or across files that share a document when a project view is \
+         available. LaTeX warns but silently keeps the last definition.\n\nWithin a \
+         file, a warning requires a prior definition in the same conditional branch or \
+         an enclosing context. Separate conditional tests are treated as uncertain and \
+         do not trigger a warning. The rule recognizes `\\if...\\else...\\fi` and \
+         common macros with complete braced arguments, including `\\ifthenelse`, \
+         `\\iftoggle`, and `\\IfFileExists`. It does not evaluate predicates or combine \
+         coverage across branches. Cross-file checks use label namespaces. No autofix \
+         is offered because the author must choose whether to rename or delete a \
+         definition."
     }
 
     fn examples(&self) -> &'static [Example] {

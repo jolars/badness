@@ -19,8 +19,8 @@ Badness is distributed as a single binary, `badness`. The current version is
   works in Positron and Cursor)
 
 The editor extension bundles a platform-specific `badness` binary and starts the
-language server automatically, so no separate CLI install is required. See
-[Editor Setup](editor-setup.md) for configuration.
+language server automatically, so you do not need to install the CLI separately.
+See [Editor Setup](editor-setup.md) for configuration.
 
 ## mise and Aqua
 
@@ -46,8 +46,8 @@ entry](https://github.com/aquaproj/aqua-registry/tree/main/pkgs/jolars/badness).
 
 ## Install Script
 
-The installer selects the release for your platform and installs to a user-local
-directory. On macOS or Linux:
+The installer selects the release for your platform and installs it in a
+directory under your user account. On macOS or Linux:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://badness.dev/install | sh
@@ -70,8 +70,8 @@ cd badness
 cargo build --release
 ```
 
-The binary lands at `target/release/badness`. Copy it onto your `PATH`, or run
-it in place.
+The build places the binary at `target/release/badness`. Copy it to a directory
+on your `PATH`, or run it in place.
 
 To install it into Cargo's bin directory instead:
 

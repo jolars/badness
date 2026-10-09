@@ -29,20 +29,21 @@ builder feeds the events into rowan and attaches trivia, retaining every byte of
 the source. A specialized `SubTok` event lets math parsing split a lexer token
 when TeX binds a script to a single character.
 
-Each LaTeX node opening returns an event-layer `Marker`, which closing the node
-consumes. A `DropBomb` catches forgotten completions in debug builds without
-panicking again during unwinding. `Marker::precede` gives the same obligation to
-wrappers opened retroactively, such as paragraphs and scripted atoms. Comment
-binding instead moves a completed construct's start over its documentation
-comment with `extend_back`, keeping its existing finish. The parser also checks
-that the final event stream balances before the tree builder receives it.
+Opening a LaTeX node returns an event-layer `Marker`; closing the node consumes
+it. A `DropBomb` catches forgotten completions in debug builds without panicking
+again during unwinding. `Marker::precede` gives the same obligation to wrappers
+opened retroactively, such as paragraphs and scripted atoms. To bind a
+documentation comment, `extend_back` moves a completed construct's start
+backward to include the comment, keeping its existing finish. The parser also
+checks that the final event stream balances before the tree builder receives it.
 
 The LaTeX grammar keeps math bodies, script attachment, and paired
 `\left`/`\right` delimiters in `grammar/math.rs`. Named math environments use
 that same module's body parser, so delimiter and script recovery stays shared.
 `grammar/gates.rs` owns the shape-gate policies, shared forward scan, and
 verdict caches. Its tests count token visits to check that repeated and nested
-queries stay linear; grammar callers only ask whether a delimiter can pair.
+queries stay linear; callers in the grammar only ask whether a delimiter can
+pair.
 
 The formatter lowers the tree to a `Doc` intermediate representation and prints
 it. The linter collects diagnostics through a shared traversal. The language
@@ -151,8 +152,8 @@ path can use `openat2` with `O_PATH | O_DIRECTORY | O_CLOEXEC` and
 following a symlink, replacing a `readlink` call per component with an open and
 close. The descriptor is closed immediately. Symlinks, noncanonical spellings,
 failed probes, and platforms without this operation use ordinary
-canonicalization. No client watcher capability or time-based validity window
-substitutes for these checks. See the [Linux `openat2`
+canonicalization. Neither client support for file watchers nor a time limit on
+cache validity replaces these checks. See the [Linux `openat2`
 contract](https://man7.org/linux/man-pages/man2/openat2.2.html).
 
 ### Declarations
@@ -171,8 +172,8 @@ like = "parencite"
 
 Here, `eqrefs` takes `cref`'s comma-separated reference keys, and `mycite` takes
 `parencite`'s citation behavior. These declarations affect analysis and
-completion. They do not declare arity, change argument attachment, or select
-formatter layouts.
+completion. They do not declare the number of arguments (arity), change argument
+attachment, or select formatter layouts.
 
 Environment declarations can assign built-in behavior or introduce delimiter
 spellings:
@@ -211,11 +212,11 @@ entries.
 
 Both declaration categories share a high-durability salsa input, but reach their
 readers through separate queries: `parse_declarations` and
-`semantic_declarations`. Each query retains its previous result when its subset
-is unchanged. Renaming a citation alias therefore updates semantics without
-invalidating parses or their reparse caches. The LSP publishes declarations in
-the request dispatcher so switching between workspace roots cannot leave a
-handler using another project's configuration.
+`semantic_declarations`. Each query retains its previous result when the
+declarations it reads are unchanged. Renaming a citation alias therefore updates
+semantics without invalidating parses or their reparse caches. The LSP publishes
+declarations in the request dispatcher so switching between workspace roots
+cannot leave a handler using another project's configuration.
 
 ## Syntax and semantics
 
@@ -346,10 +347,10 @@ different question.
 Most pairing gates count nested openers and environments independently.
 `LeftRightGate` instead uses one stack of brace, environment, and `\left`
 frames, because their order determines whether a `\right` can match. A frame
-mismatch invalidates outer pairs as well. Its anchors are the delimiters that
-end the surrounding math body; `\left` and `\right` themselves remain
-recognizable in definition and macrocode bodies, where package math commonly
-uses them.
+mismatch invalidates outer pairs as well. Its recovery anchors are the
+delimiters that end the surrounding math body; `\left` and `\right` themselves
+remain recognizable in definition and macrocode bodies, where package math
+commonly uses them.
 
 Bracket gates reflect the fact that `[` and `]` are ordinary TeX characters.
 They attach an optional argument only when its closer is reachable along the
@@ -459,12 +460,12 @@ attach `{x}` to `\l_a`. A token scan in `grammar/expl3.rs` plans the attachment,
 and the walk replays that plan. Control-sequence arguments keep their own bare
 `COMMAND` nodes; groups remain ordinary `GROUP` nodes.
 
-Underivable heads, including `w` and `D` forms, colonless names, and `\::n`
-expansion drivers, retain greedy grouping. The scan also declines when math,
-lexer-mode changes, docstrip boundaries, or unreachable closers prevent it from
-matching the walk. A blank line inside a brace group allows the consumed prefix
-to be committed. Matching braces are indexed once per frame so nested calls do
-not repeatedly scan the same groups.
+Command heads whose argument structure cannot be derived, including `w` and `D`
+forms, colonless names, and `\::n` expansion drivers, retain greedy grouping.
+The scan also declines when math, lexer-mode changes, docstrip boundaries, or
+unreachable closers prevent it from matching the walk. A blank line inside a
+brace group allows the consumed prefix to be committed. Matching braces are
+indexed once per frame so nested calls do not repeatedly scan the same groups.
 
 Attachment mistakes can survive both losslessness and formatter idempotence
 checks. An independent oracle therefore compares grammar attachment with
@@ -549,8 +550,9 @@ definition scan and to any grammar decision that reads the token's text.
 A source-scanning test tracks those text reads in the grammar and lexer
 predicates. Each read must be unreachable from a spliced leaf or protected by a
 guard. This covers facts such as a statement's terminating semicolon, a starred
-command marker, and an environment name. Newline edits and definition-sensitive
-positions decline, as do oversized boundary probes.
+command marker, and an environment name. The tier declines edits involving
+newlines or positions that affect the definition scan, as well as edits
+requiring oversized boundary probes.
 
 Math leaves need an additional check because script parsing can split one lexer
 `WORD` into several CST leaves. The tier reconstructs the coalesced word and
@@ -573,8 +575,9 @@ pressing Enter in a listing can still use a leaf splice. The replacement shares
 every green node outside the path from the leaf to the root.
 
 Fragment lexing uses the base parse's `ParseCtx` and full-file `.dtx` facts,
-including implicit expl3 mode. An edit that changes a full-file signal declines.
-Reproducing the old fragment does not authorize inventing missing entry state.
+including implicit expl3 mode. The tier declines an edit that changes a
+full-file signal. Reproducing the old fragment does not authorize inventing
+missing entry state.
 
 #### Math and prose regions
 
@@ -585,12 +588,13 @@ must first reproduce the old node. The edited parse must then yield one node of
 the same kind spanning the whole fragment, and a right-boundary probe checks
 that recovery cannot consume the unchanged suffix.
 
-This tier admits state-neutral math syntax. Control sequences, comments,
-environment names, definition-sensitive positions, lexer-mode ambiguity, and
-`.dtx` source decline. Fragment diagnostics are replaced, prefix diagnostics are
-retained, and suffix diagnostics shift with the edit. A base whose diagnostics
-are out of source order declines because a local splice cannot reproduce a
-global recovery-stack reorder.
+This tier admits state-neutral math syntax. The tier declines edits involving
+control sequences, comments, environment names, positions that affect the
+definition scan, ambiguous lexer modes, or `.dtx` source. Fragment diagnostics
+are replaced, prefix diagnostics are retained, and suffix diagnostics shift with
+the edit. The tier also declines a base parse whose diagnostics are out of
+source order, because a local splice cannot reproduce a global reordering of the
+recovery stack.
 
 The region tier covers two prose shapes: an edit across several direct leaves of
 one top-level paragraph, and an edit to the blank-line seam between two
@@ -718,11 +722,11 @@ authored whitespace can remain in `flat` only because its readers reproduce it
 unchanged. Width calculations and break selection use this normalized view.
 
 Some policies intentionally preserve authored lines. They use `WideGap`, which
-also exposes newline counts, and need a fixed-point argument for every layout
-they can emit. These Tier 2 cases include preservation modes, unresolved
-statement layouts, and a few narrow rules within reflow. A preservation rule has
-a straightforward argument when it re-emits a newline in the same place: the
-next pass sees the same break and preserves it again.
+also exposes newline counts. Each policy needs an argument showing that every
+layout it can emit is a fixed point. These Tier 2 cases include preservation
+modes, unresolved statement layouts, and a few narrow rules within reflow. A
+preservation rule has a straightforward argument when it re-emits a newline in
+the same place: the next pass sees the same break and preserves it again.
 
 The command-only-line rule is one such case. Curated block commands have a
 positive signature property, but an unknown `\mymacro` may still occupy its own
@@ -748,10 +752,11 @@ them. Each emitted gap retains its line structure on the next pass, including at
 the braces, so both inline and multiline bodies are fixed points. Unmatched
 syntax and groups beyond the wrapper's body slots keep ordinary group layout.
 
-Signature-matched opaque braced environment arguments keep their top-level words
-together. A value such as `{section in head/foot}` should not split at spaces to
-keep an earlier option list flat. Lone source newlines normalize to spaces;
-comments, paragraph breaks, and nested blocks retain their structural layout.
+Opaque braced environment arguments that match a signature keep their top-level
+words together. A value such as `{section in head/foot}` should not split at
+spaces to keep an earlier option list flat. Lone source newlines normalize to
+spaces; comments, paragraph breaks, and nested blocks retain their structural
+layout.
 
 A narrow exception preserves a newline after `\\` in a structurally plain,
 command-only text group. Its block framing and row breaks recur on the next
@@ -775,10 +780,11 @@ a universal pass condition.
 authored breaks while balancing overflow, changes, displacement, and raggedness.
 `Preserve` keeps authored breaks. `Sentence` places one sentence on each line
 regardless of width. `Semantic` keeps authored breaks and sentence boundaries,
-then fills each remaining run to the configured width. The two modes share
-sentence detection and citation handling, using language-specific abbreviation
-profiles resolved from the format configuration. Width decisions stay in the
-printer so indentation and documentation margins count toward the limit.
+then fills each remaining run to the configured width. `Sentence` and `Semantic`
+share sentence detection and citation handling, using language-specific
+abbreviation profiles resolved from the format configuration. Width decisions
+stay in the printer so indentation and documentation margins count toward the
+limit.
 
 Semantic wrapping preserves the breaks it inserts on subsequent passes. Each
 width-broken run already fits at the same indentation, and sentence breaks and
@@ -904,9 +910,9 @@ catcode-10 whitespace delivered directly to a math list. That does not make all
 whitespace beneath a math node insignificant. A macro can inspect spaces in its
 arguments or replay them as text. The formatter therefore enters a command's
 arguments only at signature-proven `Math` slots, leaving text, unknown,
-unmatched, and excess arguments unchanged. A scanned redefinition shadows a
-built-in with unknown domains and restores preservation. Typeset fixtures test
-macros that preserve argument spaces or branch on them.
+unmatched, and excess arguments unchanged. A scanned redefinition shadows the
+built-in signature. Its unknown argument domains restore preservation. Typeset
+fixtures test macros that preserve argument spaces or branch on them.
 
 Within direct math content and proven math slots, lowering uses the shared
 virtual-atom view. It spaces binary and relation operators, retains compound
@@ -1097,12 +1103,13 @@ Read jobs send ordinary responses directly to the transport writer through
 and client edit requests return there for request-ID allocation. Incoming jobs
 remain ordered through the single writer, including declaration publication.
 
-Diagnostics supersession cancels only the old analysis snapshot through its
-Salsa cancellation token. The worker may already have queued a rename or another
-request against the updated text, so global cancellation at dispatch would
-discard a current response without another edit. Database writes still cancel
-all outstanding readers. A superseded diagnostics job may finish unwinding after
-its replacement starts; its completion cannot release the replacement's slot.
+When a diagnostics job supersedes another, it cancels only the old analysis
+snapshot through its Salsa cancellation token. The worker may already have
+queued a rename or another request against the updated text, so global
+cancellation at dispatch would discard a current response without another edit.
+Database writes still cancel all outstanding readers. A superseded diagnostics
+job may finish unwinding after its replacement starts; its completion cannot
+release the replacement's slot.
 
 ### The live buffer
 
@@ -1153,7 +1160,8 @@ completion symbol collector use it. The collector records functions, variables,
 constants, conditional forms, and generated variants without interpreting macros
 or asserting execution order. Separate Salsa queries cache the position-free
 symbol sets and merge the current file with transitively loaded local packages
-and classes. Name-preserving edits backdate the merged symbol query.
+and classes. When an edit leaves names unchanged, Salsa backdates the merged
+symbol query, retaining its previous result.
 
 A separate completion mode index follows the lexer's toggle names and `.dtx`
 macrocode mode transitions; it does not use the formatter's layout ownership

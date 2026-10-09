@@ -24,9 +24,9 @@ Verify formatting without writing, for example in CI:
 badness format --check paper.tex
 ```
 
-The command prints a diff and exits non-zero if any file needs formatting. See
-[Checking Without Writing](formatting.md#checking-without-writing) for reporting
-options.
+The command prints a diff and exits with a nonzero status if any file needs
+formatting. See [Checking Without
+Writing](formatting.md#checking-without-writing) for reporting options.
 
 ## Linting
 
@@ -36,8 +36,8 @@ Report problems in your source:
 badness lint paper.tex
 ```
 
-The command exits non-zero when it finds a diagnostic. See [Linting](linting.md)
-for rules, fixes, and output formats.
+The command exits with a nonzero status when it reports a diagnostic. See
+[Linting](linting.md) for rules, fixes, and output formats.
 
 ## Adjusting Layout
 

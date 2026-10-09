@@ -80,21 +80,20 @@ impl Rule for SpaceBeforeCommand {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a plain space directly before a command that should hug the \
-         preceding word -- `\\footnote`, `\\footnotemark`, `\\index`, `\\label` \
-         (ChkTeX 24/42). A space before `\\footnote` sets a spurious space before \
-         the footnote mark (`word \\footnote{x}` -> \"word ¹\"); a space before a \
-         zero-width `\\index`/`\\label` leaves a stray inter-word gap that can \
-         shift the recorded page. The fix deletes the space. It is **unsafe** -- \
-         removing the space changes the typeset spacing -- so `--fix` leaves it \
-         alone while `--unsafe-fixes` and the editor code action apply it. To stay \
-         conservative only the same-line `WORD SPACE \\cmd` shape is flagged (a \
-         space at line start or after a brace is left alone), and math is skipped \
-         (an inter-token space is insignificant there), covering both `$…$` and \
-         math environments like `equation`/`align`. For the zero-width \
-         `\\index`/`\\label` the fix is withheld unless the group is trailed by \
-         whitespace, a newline, or paragraph end, since otherwise the leading \
-         space is a real interword space to the following content."
+        "Flag a plain space directly before a command that should follow the preceding \
+         word without a gap: `\\footnote`, `\\footnotemark`, `\\index`, or `\\label` \
+         (ChkTeX 24/42). A space before `\\footnote` produces an unwanted space before \
+         the footnote mark (`word \\footnote{x}` → \"word ¹\"). A space before a \
+         zero-width `\\index` or `\\label` leaves an interword gap that can shift the \
+         recorded page. The fix deletes the space. It is **unsafe** because it changes \
+         typeset spacing, so `--fix` leaves it alone; `--unsafe-fixes` and editor code \
+         actions apply it.\n\nThe rule flags only the same-line `WORD SPACE \\cmd` \
+         shape. It leaves spaces at line starts or after braces alone and skips math, \
+         where inter-token spaces are insignificant, including `$…$` and environments \
+         such as `equation` and `align`. For zero-width `\\index` and `\\label`, the \
+         fix is withheld unless whitespace, a newline, or paragraph end follows the \
+         group. Otherwise, the leading space separates the preceding word from the \
+         following content."
     }
 
     fn examples(&self) -> &'static [Example] {

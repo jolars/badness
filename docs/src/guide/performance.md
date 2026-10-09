@@ -3,9 +3,9 @@
 <a id="benchmarks"></a>
 
 These benchmarks compare the speed of Badness's formatter, linter, and language
-server with other LaTeX tools, along with the language server's memory use. The
-tools differ in formatting style, lint coverage, and editor features, so the
-timings alone cannot tell you which tool best suits your work.
+server with other LaTeX tools. They also compare the language servers' memory
+use. The tools differ in formatting style, lint coverage, and editor features,
+so the timings alone cannot tell you which tool best suits your work.
 
 ## Formatter
 
@@ -51,7 +51,7 @@ background work, as well as how much memory it uses.
 
 ### Speed
 
-The startup measurements cover three waits:
+The startup measurements cover three stages:
 
 - **Initialize** measures the server's response to the editor's initialization
   request.
@@ -86,10 +86,10 @@ task bench          # Measure formatter and linter speed.
 task bench:lsp      # Measure language-server speed and memory.
 ```
 
-The scripts build `badness` in release mode. The formatter and linter comparison
-uses the tools available on `PATH` and skips any that are missing. Install
-[`hyperfine`][hyperfine] and `jq` for timing statistics; without them, the
-script uses a shell loop that reports only mean times. The language-server
+The scripts build `badness` in release mode. The formatter and linter
+comparisons use the tools available on `PATH` and skip any that are missing.
+Install [`hyperfine`][hyperfine] and `jq` for timing statistics; without them,
+the script uses a shell loop that reports only mean times. The language-server
 benchmark requires Linux, Python 3, and `texlab`. `task bench:memory` is an
 alias for `task bench:lsp`.
 
@@ -158,8 +158,8 @@ references, and rename use the `Aup91` citation in `Chapter1/chapter1.tex`,
 whose entry is in `References/references.bib`. References include the
 declaration. Rename computes edits without applying them. Each request target
 gets two warmup rounds and 20 measured rounds per session. The chart aggregates
-these samples across all three sessions. The recorded results also include
-response sizes and counts of symbols, locations, edits, and affected files.
+these samples across all three sessions. The results also record response sizes
+and counts of symbols, locations, edits, and affected files.
 
 The harness samples the server and all descendant processes through Linux
 `/proc` every 150 ms. Background work has settled when CPU use stays below 5% of

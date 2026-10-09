@@ -62,17 +62,17 @@ impl Rule for UnknownOption {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a `\\usepackage`/`\\RequirePackage` option that the loaded package \
-         never declares with `\\DeclareOption`, which LaTeX reports as an \
-         \"Unknown option\" error at compile time. Checked only against packages \
-         that are analyzed project files (a sibling `.sty`) — no option data \
-         ships for system packages — and only when the package's declared set is \
-         trustworthy: a `\\DeclareOption*` default handler, a key-value option \
-         processor (`kvoptions`, `\\ProcessKeyOptions`, …), option forwarding, or \
-         an `\\input` in the package silences the rule, as does a `key=value` \
-         option. Class loads (`\\documentclass`) are not checked: an unknown \
-         class option is not an error, it becomes an unused global option. No \
-         autofix: dropping or renaming the option is the author's call."
+        "Flag a `\\usepackage` or `\\RequirePackage` option that the loaded package \
+         never declares with `\\DeclareOption`. LaTeX reports this as an \"Unknown \
+         option\" error at compile time. The rule checks only analyzed project \
+         packages, such as a sibling `.sty` file; it ships no option data for system \
+         packages.\n\nThe package's declared option set must be trustworthy. A \
+         `\\DeclareOption*` default handler, a key-value option processor (`kvoptions`, \
+         `\\ProcessKeyOptions`, …), option forwarding, or an `\\input` in the package \
+         silences the rule, as does a `key=value` option. Class loads \
+         (`\\documentclass`) are not checked because an unknown class option becomes an \
+         unused global option rather than an error. No autofix is offered because the \
+         author must choose whether to remove or rename the option."
     }
 
     fn examples(&self) -> &'static [Example] {

@@ -56,14 +56,14 @@ impl Rule for MissingProvides {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a package or class source (`.sty`/`.cls`) that never identifies \
-         itself with the matching `\\ProvidesPackage`/`\\ProvidesClass`. Every \
-         well-formed package declares its identity so LaTeX can log it and honor \
-         date-based compatibility checks; a `.sty` carrying only `\\ProvidesClass` \
-         (wrong kind) still counts as missing. The rule is inert for any other \
-         extension -- a `.tex` has nothing to provide, and a `.dtx` hides its \
-         declaration inside guarded `macrocode`. No autofix: writing a correct \
-         `\\Provides…` line (placement, date, version) is the author's call."
+        "Flag a package or class source (`.sty` or `.cls`) that never identifies itself \
+         with the matching `\\ProvidesPackage` or `\\ProvidesClass`. A well-formed \
+         package declares its identity so LaTeX can log it and honor date-based \
+         compatibility checks. A `.sty` file containing only `\\ProvidesClass` still \
+         lacks the matching declaration.\n\nThe rule is inactive for other extensions: \
+         a `.tex` file has nothing to provide, and a `.dtx` file hides its declaration \
+         inside guarded `macrocode`. No autofix is offered because the author must \
+         choose the declaration's placement, date, and version."
     }
 
     fn examples(&self) -> &'static [Example] {

@@ -50,20 +50,18 @@ impl Rule for UnreferencedLabel {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a label definition unused by a `\\ref`-family command anywhere in the \
-         document. A `\\eqref{A}--\\eqref{D}` range also uses labels between A and D \
-         when they occur in consecutive, singly labeled `equation` environments \
-         or numbered `align` and `gather` rows, including through literal \
-         included files with an unambiguous source order. Manual tags, \
-         suppressed numbers, and counter changes stop inference. Referencing a \
-         `subequations` group label also uses the labels in its enclosed math \
-         environments. The mirror of `undefined-ref`, \
-         and sound only when the label \
-         namespace is complete, so it stays silent unless the project view is \
-         **closed** (every include resolves to an analyzed file) and **rooted**. \
-         Inert on stdin or wherever no cross-file label resolution is available. \
-         Report-only: removing the dead label or adding a reference are both \
-         valid, so there is no autofix."
+        "Flag a label definition unused by any `\\ref`-family command in the document. \
+         A `\\eqref{A}--\\eqref{D}` range also uses labels between A and D when they \
+         occur in consecutive, singly labeled `equation` environments or numbered \
+         `align` and `gather` rows. This includes literal included files with an \
+         unambiguous source order. Manual tags, suppressed numbers, and counter changes \
+         stop inference. A reference to a `subequations` group label also uses the \
+         labels in its enclosed math environments.\n\nLike `undefined-ref`, the check \
+         is sound only when the label namespace is complete. The rule stays silent \
+         unless the project view is **closed** (every include resolves to an analyzed \
+         file) and **rooted**. It is inactive on stdin or wherever cross-file label \
+         resolution is unavailable. No autofix is offered because removing the unused \
+         label and adding a reference are both valid choices."
     }
 
     fn examples(&self) -> &'static [Example] {

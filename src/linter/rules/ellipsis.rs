@@ -64,16 +64,16 @@ impl Rule for Ellipsis {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a literal run of three or more periods (`...`) where a real \
-         ellipsis command belongs. `...` sets three tight full stops; LaTeX's \
-         ellipsis commands set correctly spaced dots. In text the fix is a \
-         **safe** swap to `\\dots` (a space is added before a following letter so \
-         the control word cannot glue onto the next word). In math `\\ldots` \
-         (baseline, for comma lists) and `\\cdots` (centered, for operator \
-         chains) are not interchangeable, so the fix is **unsafe**: it guesses \
-         from the neighboring atoms -- an operator or relation picks `\\cdots`, \
-         otherwise `\\ldots` -- and applies only under `--unsafe-fixes` or as an \
-         editor code action. Comments and verbatim are never touched."
+        "Flag a literal run of three or more periods (`...`) where an ellipsis command \
+         belongs. Literal periods set tight full stops, while LaTeX's ellipsis commands \
+         set correctly spaced dots. In text, the fix is a **safe** replacement with \
+         `\\dots`. It adds a space before a following letter so the control word cannot \
+         merge with the next word.\n\nIn math, `\\ldots` (baseline dots for comma \
+         lists) and `\\cdots` (centered dots for operator chains) are not \
+         interchangeable. The fix is therefore **unsafe**: it chooses `\\cdots` beside \
+         an operator or relation and `\\ldots` otherwise. It applies only with \
+         `--unsafe-fixes` or an editor code action. The rule never touches comments or \
+         verbatim content."
     }
 
     fn examples(&self) -> &'static [Example] {

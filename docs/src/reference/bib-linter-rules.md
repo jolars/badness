@@ -3,24 +3,26 @@
 # BibTeX Linter Rules
 
 `badness lint` runs a parallel set of built-in rules over each `.bib` file's
-parse tree and reports a diagnostic for every finding. This page is the
-catalogue: one section per rule, keyed by its stable **rule id**. Bib rules
-share one id namespace with the [LaTeX rules](linter-rules.md), so the same
-`[lint]` `select`/`ignore` (and `--select`/`--ignore`) target both.
+parse tree and reports a diagnostic for every finding. Each section describes
+one rule, identified by its stable **rule id**. BibTeX rules share an id
+namespace with the [LaTeX rules](linter-rules.md), so the same `[lint]` settings
+and `--select` and `--ignore` flags select both sets.
 
-Most rules are **on by default**. Each rule's section states its default; enable
-an opt-in rule with `select`, or narrow the default set with `select`/`ignore`
-in the `[lint]` table (see the
-[Configuration reference](configuration.md#lint)). Where a rewrite is unambiguous a rule
-carries an **auto-fix**: a *safe* fix (shown below as "After applying the fix")
-is applied by `badness lint --fix`.
+Most rules are **on by default**. Each rule's section states whether it is
+enabled by default. Use `select` to enable an opt-in rule, or use `select` and
+`ignore` in the `[lint]` table to narrow the default set. See the
+[Configuration reference](configuration.md#lint).
+
+Some rules offer an **autofix** when a rewrite is unambiguous.
+`badness lint --fix` applies *safe* fixes, shown below under "After applying the
+fix".
 
 Each example below is linted live to produce its diagnostic and fixed output, so
 this page never drifts from the rules' actual behavior.
 
 ## `duplicate-key`
 
-Flag a cite key defined by more than one entry in the same `.bib` file. Keys are compared case-insensitively, matching BibTeX, which silently keeps only one of the colliding entries; every definition after the first is flagged. No autofix: resolving the collision (rename vs delete) is the author's call.
+Flag a citation key defined by more than one entry in the same `.bib` file. Keys are compared case-insensitively, matching BibTeX, which silently keeps only one of the colliding entries. Every definition after the first is flagged. No autofix is offered because the author must choose whether to rename or delete an entry.
 
 This rule is **enabled by default**.
 
@@ -90,7 +92,7 @@ warning: inert-suppression
 
 ## `missing-required-field`
 
-Flag a regular entry lacking a field its type requires, per the biblatex data model. An alternation like `date` *or* `year` is satisfied by either, and classic-BibTeX aliases count (`journal` satisfies `journaltitle`). An entry type the built-in database does not know carries no signature and is never flagged. Report-only -- field content cannot be invented.
+Flag an entry lacking a field its type requires under the biblatex data model. An alternative such as `date` *or* `year` is satisfied by either field, and classic BibTeX aliases count (`journal` satisfies `journaltitle`). Entry types unknown to the built-in database have no signature and are not flagged. No autofix is offered because the rule cannot supply the missing content.
 
 This rule is **enabled by default**.
 
@@ -114,11 +116,11 @@ warning: missing-required-field
 
 ## `unknown-field`
 
-Flag a field that is neither required nor optional for its entry type and carries no global field metadata -- usually a typo, or data misplaced from another entry type. BibLaTeX silently ignores fields it does not know, so the mistake otherwise vanishes without a trace. Only entry types the built-in database knows are checked. Report-only -- deleting the field would discard data.
+Flag a field that is neither required nor optional for its entry type and has no global field metadata. Such a field is usually a typo or data intended for another entry type. BibLaTeX silently ignores unknown fields, so the mistake can otherwise go unnoticed. The rule checks only entry types known to the built-in database. No autofix is offered because deleting the field would discard data.
 
 This rule is **enabled by default**.
 
-A typo'd field name (`pubisher` for `publisher`):
+A misspelled field name (`pubisher` for `publisher`):
 
 ```bib
 @book{turing50,
@@ -170,11 +172,13 @@ After applying the fix:
 
 ## `duplicate-field`
 
-Flag a field name appearing more than once on a single entry (names compared case-insensitively). BibTeX and Biber keep only one occurrence and silently discard the rest, so a duplicate is almost always a merge or copy-paste mistake; every occurrence after the first is flagged. When the repeated value is byte-identical to the kept one, a safe autofix deletes the redundant copy; when the values differ, which one wins is engine-dependent, so the finding is report-only.
+Flag a field name appearing more than once in an entry, comparing names case-insensitively. BibTeX and Biber keep only one occurrence and silently discard the rest. A duplicate is therefore almost always a merge or copy-paste mistake, and every occurrence after the first is flagged.
+
+When a repeated value is byte-identical to the retained value, a safe autofix deletes the redundant copy. When values differ, the retained value depends on the engine, so the rule reports the finding without a fix.
 
 This rule is **enabled by default**.
 
-Two `note` fields with identical values -- deleting the redundant copy is safe:
+Two `note` fields with identical values, so deleting the redundant copy is safe:
 
 ```bib
 @misc{knuth84,
@@ -218,7 +222,7 @@ warning: duplicate-field
 
 ## `unused-string`
 
-Flag an `@string` macro defined in the file but never referenced by any field value. For the common self-contained `.bib` an unused macro is dead weight; in a multi-file bibliography it may be referenced from another `.bib`, so treat cross-file setups with care -- cross-file `@string` resolution is not modeled yet. Report-only: deleting a definition is a meaning-level edit left to the author.
+Flag an `@string` macro defined in the file but never referenced by a field value. In a self-contained `.bib` file, an unused macro serves no purpose. In a multi-file bibliography, another `.bib` file may reference it, and cross-file `@string` resolution is not yet modeled. No autofix is offered because deleting a definition is a choice for the author.
 
 This rule is **enabled by default**.
 
@@ -239,11 +243,13 @@ warning: unused-string
 
 ## `undefined-string`
 
-Flag an `@string` macro used in a field value but defined nowhere in the file (the twelve month macros `jan`..`dec` are predefined). Usually a typo'd macro name or a missing `@string` definition; BibTeX errors on it at build time. In a multi-file bibliography the definition may live in another `.bib`, so a use resolved there is a false positive -- cross-file `@string` resolution is not modeled yet. Report-only: the fix (define the macro or correct the name) is a meaning-level edit left to the author.
+Flag an `@string` macro used in a field value but defined nowhere in the file. The twelve month macros from `jan` through `dec` are predefined. An undefined macro usually means a misspelled name or a missing `@string` definition, and BibTeX reports an error at build time.
+
+In a multi-file bibliography, another `.bib` file may supply the definition. Cross-file `@string` resolution is not yet modeled, so those uses produce false positives. No autofix is offered because the author must choose whether to define the macro or correct its name.
 
 This rule is **enabled by default**.
 
-A typo'd macro name (`cpu` for `cup`):
+A misspelled macro name (`cpu` for `cup`):
 
 ```bib
 @string{cup = {Cambridge University Press}}
@@ -260,7 +266,9 @@ warning: undefined-string
 
 ## `title-capitalization`
 
-Flag an unprotected acronym or mid-word capital in a title-like field (`title`, `booktitle`, `journaltitle`, ...). Many bibliography styles lowercase unprotected title text, so `DNA` renders as `dna` unless written `{DNA}`. Flagged are runs of two or more capitals and the camelCase brand pattern (a first capital mid-way through a lowercase-initial word, like `iPhone`); ordinary Title Case, name particles (`McDonald`), and mixed-case tokens (`LaTeX`) stay quiet, as does anything already inside a `{...}` group. Report-only -- choosing what to protect is the author's call.
+Flag an unprotected acronym or mid-word capital in a title-like field (`title`, `booktitle`, `journaltitle`, ...). Many bibliography styles lowercase unprotected title text, so `DNA` renders as `dna` unless written as `{DNA}`.
+
+The rule flags runs of two or more capitals and camelCase brand names whose first capital occurs within a word that begins with a lowercase letter, such as `iPhone`. It leaves ordinary Title Case, name particles (`McDonald`), mixed-case tokens (`LaTeX`), and text already inside a `{...}` group alone. No autofix is offered because the author must choose what to protect.
 
 This rule is **enabled by default**.
 
@@ -280,7 +288,7 @@ warning: title-capitalization
 
 ## `encoding-hints`
 
-Surface non-ASCII text in a field value as a hint (accented text is perfectly valid in a UTF-8 setup, hence not a warning). Raw non-ASCII renders correctly only when the file is UTF-8 and the document loads a matching input encoding (`inputenc` with pdfLaTeX, `fontspec` with Xe/LuaLaTeX); legacy toolchains may mangle it. Either confirm the encoding or use a LaTeX escape (`\'e` for `é`). Report-only -- the right fix depends on the project's toolchain.
+Report non-ASCII text in a field value as a hint. Accented text is valid in a UTF-8 setup, so this is not a warning. Raw non-ASCII text renders correctly only when the file is UTF-8 and the document loads a matching input encoding (`inputenc` with pdfLaTeX, `fontspec` with XeLaTeX or LuaLaTeX). Legacy toolchains may corrupt it. Confirm the encoding or use a LaTeX escape (`\'e` for `é`). No autofix is offered because the right change depends on the project's toolchain.
 
 This rule is **enabled by default**.
 
@@ -300,17 +308,18 @@ help: encoding-hints
 
 ## Suppression
 
-BibTeX has no line-comment token, so per-site suppression rides a structured
-`@comment` entry instead of the LaTeX `%` directive. A plain directive
-suppresses one rule on the **next entry**:
+BibTeX has no line-comment token, so write suppression directives inside
+structured `@comment` entries. A `skip` directive suppresses one rule on the
+**next entry**:
 
 ```bib
 @comment{badness-lint skip missing-required-field: publisher long gone}
 @book{oldbook, title = {An Orphaned Book}}
 ```
 
-The grammar is the LaTeX one, only the carrier differs. `off` and `on` delimit a
-region of entries, and `skip-file` covers the whole file wherever it sits:
+The directive grammar is the same as in LaTeX. `off` and `on` delimit a
+region of entries, and `skip-file` covers the whole file wherever the directive
+appears:
 
 ```bib
 @comment{badness-lint off missing-required-field: imported, incomplete by design}
@@ -318,5 +327,5 @@ region of entries, and `skip-file` covers the whole file wherever it sits:
 @comment{badness-lint on missing-required-field}
 ```
 
-Naming the `<id>` is optional; leaving it out suppresses every rule over that
-same span. Parse diagnostics (rule id `parse`) are never suppressed.
+The `<id>` is optional. Omitting it suppresses every rule over the same span.
+Parse diagnostics (rule id `parse`) are never suppressed.

@@ -4,7 +4,7 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `missing-required-field`
 
-Flag a regular entry lacking a field its type requires, per the biblatex data model. An alternation like `date` *or* `year` is satisfied by either, and classic-BibTeX aliases count (`journal` satisfies `journaltitle`). An entry type the built-in database does not know carries no signature and is never flagged. Report-only -- field content cannot be invented.
+Flag an entry lacking a field its type requires under the biblatex data model. An alternative such as `date` *or* `year` is satisfied by either field, and classic BibTeX aliases count (`journal` satisfies `journaltitle`). Entry types unknown to the built-in database have no signature and are not flagged. No autofix is offered because the rule cannot supply the missing content.
 
 This rule is **enabled by default**.
 

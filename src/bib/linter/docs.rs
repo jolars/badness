@@ -86,17 +86,19 @@ rule's `description()`/`examples()` in `src/bib/linter/rules/` and regenerate. -
 # BibTeX Linter Rules
 
 `badness lint` runs a parallel set of built-in rules over each `.bib` file's
-parse tree and reports a diagnostic for every finding. This page is the
-catalogue: one section per rule, keyed by its stable **rule id**. Bib rules
-share one id namespace with the [LaTeX rules](linter-rules.md), so the same
-`[lint]` `select`/`ignore` (and `--select`/`--ignore`) target both.
+parse tree and reports a diagnostic for every finding. Each section describes
+one rule, identified by its stable **rule id**. BibTeX rules share an id
+namespace with the [LaTeX rules](linter-rules.md), so the same `[lint]` settings
+and `--select` and `--ignore` flags select both sets.
 
-Most rules are **on by default**. Each rule's section states its default; enable
-an opt-in rule with `select`, or narrow the default set with `select`/`ignore`
-in the `[lint]` table (see the
-[Configuration reference](configuration.md#lint)). Where a rewrite is unambiguous a rule
-carries an **auto-fix**: a *safe* fix (shown below as \"After applying the fix\")
-is applied by `badness lint --fix`.
+Most rules are **on by default**. Each rule's section states whether it is
+enabled by default. Use `select` to enable an opt-in rule, or use `select` and
+`ignore` in the `[lint]` table to narrow the default set. See the
+[Configuration reference](configuration.md#lint).
+
+Some rules offer an **autofix** when a rewrite is unambiguous.
+`badness lint --fix` applies *safe* fixes, shown below under \"After applying the
+fix\".
 
 Each example below is linted live to produce its diagnostic and fixed output, so
 this page never drifts from the rules' actual behavior.
@@ -105,17 +107,18 @@ this page never drifts from the rules' actual behavior.
 const FOOTER: &str = "\
 ## Suppression
 
-BibTeX has no line-comment token, so per-site suppression rides a structured
-`@comment` entry instead of the LaTeX `%` directive. A plain directive
-suppresses one rule on the **next entry**:
+BibTeX has no line-comment token, so write suppression directives inside
+structured `@comment` entries. A `skip` directive suppresses one rule on the
+**next entry**:
 
 ```bib
 @comment{badness-lint skip missing-required-field: publisher long gone}
 @book{oldbook, title = {An Orphaned Book}}
 ```
 
-The grammar is the LaTeX one, only the carrier differs. `off` and `on` delimit a
-region of entries, and `skip-file` covers the whole file wherever it sits:
+The directive grammar is the same as in LaTeX. `off` and `on` delimit a
+region of entries, and `skip-file` covers the whole file wherever the directive
+appears:
 
 ```bib
 @comment{badness-lint off missing-required-field: imported, incomplete by design}
@@ -123,6 +126,6 @@ region of entries, and `skip-file` covers the whole file wherever it sits:
 @comment{badness-lint on missing-required-field}
 ```
 
-Naming the `<id>` is optional; leaving it out suppresses every rule over that
-same span. Parse diagnostics (rule id `parse`) are never suppressed.
+The `<id>` is optional. Omitting it suppresses every rule over the same span.
+Parse diagnostics (rule id `parse`) are never suppressed.
 ";

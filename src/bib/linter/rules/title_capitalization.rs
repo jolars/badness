@@ -67,13 +67,13 @@ impl BibRule for TitleCapitalization {
     fn description(&self) -> &'static str {
         "Flag an unprotected acronym or mid-word capital in a title-like field \
          (`title`, `booktitle`, `journaltitle`, ...). Many bibliography styles \
-         lowercase unprotected title text, so `DNA` renders as `dna` unless \
-         written `{DNA}`. Flagged are runs of two or more capitals and the \
-         camelCase brand pattern (a first capital mid-way through a \
-         lowercase-initial word, like `iPhone`); ordinary Title Case, name \
-         particles (`McDonald`), and mixed-case tokens (`LaTeX`) stay quiet, \
-         as does anything already inside a `{...}` group. Report-only -- \
-         choosing what to protect is the author's call."
+         lowercase unprotected title text, so `DNA` renders as `dna` unless written as \
+         `{DNA}`.\n\nThe rule flags runs of two or more capitals and camelCase brand \
+         names whose first capital occurs within a word that begins with a lowercase \
+         letter, such as `iPhone`. It leaves ordinary Title Case, name particles \
+         (`McDonald`), mixed-case tokens (`LaTeX`), and text already inside a `{...}` \
+         group alone. No autofix is offered because the author must choose what to \
+         protect."
     }
 
     fn examples(&self) -> &'static [Example] {

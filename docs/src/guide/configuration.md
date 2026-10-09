@@ -1,8 +1,8 @@
 # Configuration
 
-Put a `badness.toml` at the root of your project to share formatting and linting
-settings between the CLI and language server. Every key is optional. This guide
-covers common setup tasks; the [configuration
+Put a `badness.toml` file at the root of your project to share formatting and
+linting settings between the CLI and language server. Every key is optional.
+This guide covers common setup tasks; the [configuration
 reference](../reference/configuration.md) lists all keys, defaults, and
 resolution rules.
 
@@ -38,8 +38,8 @@ associate the schema.
 
 For each input file, Badness uses the nearest `badness.toml`, searching upward
 to the repository root. If there is none, it uses `BADNESS_CONFIG` when set,
-then the global user config. These are whole-file fallbacks; project and user
-settings are not merged automatically.
+then the global user config. Badness uses each fallback as a complete
+configuration file. It does not automatically merge project and user settings.
 
 To choose a file explicitly or try the built-in defaults:
 
@@ -64,10 +64,10 @@ extend = "../shared/badness.toml"
 line-width = 100
 ```
 
-The path is relative to the file declaring it. Tables merge by key, and the
-project's values win. `extend-exclude` adds patterns to inherited exclusions.
-See the [inheritance reference](../reference/configuration.md#extend) for the
-other merge rules.
+The path is relative to the file that declares it. Tables merge by key, and the
+project's values override inherited values. `extend-exclude` adds patterns to
+inherited exclusions. See the [inheritance
+reference](../reference/configuration.md#extend) for the other merge rules.
 
 ## Exclude Files
 
@@ -78,9 +78,9 @@ built-in exclusions:
 extend-exclude = ["vendor/", "generated/"]
 ```
 
-These patterns apply to directory walks by both the formatter and linter. A file
-named explicitly is still processed; add `--force-exclude` when a runner passes
-filenames that should respect the exclusions:
+Both the formatter and linter apply these patterns when walking directories.
+They still process files named explicitly. Add `--force-exclude` when a runner
+passes filenames that should respect the exclusions:
 
 ```sh
 badness format --force-exclude generated/tables.tex

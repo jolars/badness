@@ -3,31 +3,35 @@
 # Linter Rules
 
 `badness lint` runs a set of built-in rules over each file's parse tree and
-reports a diagnostic for every finding. This page is the catalogue: one section
-per rule, keyed by its stable **rule id**. That id is what appears in a
-diagnostic, what `[lint]` `select`/`ignore` (and `--select`/`--ignore`) target,
-and what a `% badness-lint skip <id>` comment suppresses.
+reports a diagnostic for every finding. Each section describes one rule,
+identified by its stable **rule id**. The id appears in diagnostics and selects
+the rule in `[lint]` settings, `--select` and `--ignore` flags, and
+`% badness-lint skip <id>` comments.
 
-Most rules are **on by default**. Each rule's section states its default; enable
-an opt-in rule with `select`, or narrow the default set with `select`/`ignore`
-in the `[lint]` table (see the
-[Configuration reference](configuration.md#lint)). Where a rewrite is unambiguous a rule
-carries an **auto-fix**: a *safe* fix (shown below as "After applying the fix")
-is applied by `badness lint --fix`; an *unsafe* fix, one that may change output
-such as inserting a line-breaking tie, is applied only with `--unsafe-fixes` or
-as an editor code action, so it has no "after" block here.
+Most rules are **on by default**. Each rule's section states whether it is
+enabled by default. Use `select` to enable an opt-in rule, or use `select` and
+`ignore` in the `[lint]` table to narrow the default set. See the
+[Configuration reference](configuration.md#lint).
+
+Some rules offer an **autofix** when a rewrite is unambiguous.
+`badness lint --fix` applies *safe* fixes, shown below under "After applying the
+fix". An *unsafe* fix may change output, such as by inserting a tie that
+prevents a line break. It applies only with `--unsafe-fixes` or an editor code
+action, so it has no "after" block here.
 
 Each example below is linted live to produce its diagnostic and fixed output, so
 this page never drifts from the rules' actual behavior.
 
 This page covers the **LaTeX** linter. BibTeX files have a parallel set of rules
 (a separate `BibRule` registry under `src/bib/linter/`), selectable through the
-same `[lint]` config and catalogued in
+same `[lint]` config and cataloged in
 [BibTeX Linter Rules](bib-linter-rules.md).
 
 ## `abbreviation-spacing`
 
-Flag TeX's sentence-vs-interword spacing going wrong around abbreviations and acronyms (ChkTeX 12/13). Outside `\frenchspacing`, TeX widens the space after `.`/`?`/`!` unless the punctuation follows an uppercase letter. Two shapes defeat that: a lowercase abbreviation (`e.g.`, `i.e.`, `etc.`, `et al.`) gets a too-wide space, fixed with `\ ` (`e.g.\ foo`); and an uppercase acronym ending a sentence (`USA.`) gets a too-narrow space, fixed with `\@` (`USA\@.`). To stay conservative the first fires only before a lowercase word (the sentence clearly continues) and the second only for a run of two or more capitals before the period and before an uppercase word (a new sentence), so initials (`J.`), dotted forms (`U.S.A.`), and mid-sentence acronyms are left alone. Both fixes are **unsafe** -- they change the typeset spacing -- so `--fix` leaves them alone while `--unsafe-fixes` and the editor code action apply them. The rule is silent under `\frenchspacing`, and never touches comments, verbatim, or math.
+Flag incorrect sentence and interword spacing around abbreviations and acronyms (ChkTeX 12/13). Outside `\frenchspacing`, TeX widens the space after `.`, `?`, or `!` unless the punctuation follows an uppercase letter. A lowercase abbreviation (`e.g.`, `i.e.`, `etc.`, `et al.`) therefore gets too much space, which `\ ` corrects (`e.g.\ foo`). An uppercase acronym ending a sentence (`USA.`) gets too little space, which `\@` corrects (`USA\@.`).
+
+The rule flags a lowercase abbreviation only before a lowercase word, where the sentence clearly continues. It flags an acronym only when two or more capitals precede the period and an uppercase word follows it, indicating a new sentence. Initials (`J.`), dotted forms (`U.S.A.`), and mid-sentence acronyms are left alone. Both fixes are **unsafe** because they change typeset spacing, so `--fix` leaves them alone; `--unsafe-fixes` and editor code actions apply them. The rule is silent under `\frenchspacing` and never touches comments, verbatim content, or math.
 
 This rule is **enabled by default**.
 
@@ -61,7 +65,9 @@ warning: abbreviation-spacing
 
 ## `blank-line-in-keyval`
 
-Flag a blank line at the top level of a `key=value` argument. A blank line is a `\par` token and a keyval processor walks its entries with macros that are not `\long`, so the call aborts -- and the error TeX reports names the processor rather than the command the author wrote (`\hypersetup` yields "Paragraph ended before `\kv@processor@default` was complete"), which is what makes the finding worth more than the compiler's own message. Scoped by measurement: a blank line *nested* inside a value's brace group (`\tikzset{aa/.style={draw,\n\nthick}}`) compiles clean and is not flagged, an unclosed `{` is left to the parse error it already draws, and only the hand-curated signature tier is consulted. The autofix drops the blank line and keeps the following indentation; it is safe by construction, since it edits only whitespace and `ContentKind::Keyval` is exactly the claim that the processor strips spaces around entries.
+Flag a blank line at the top level of a `key=value` argument. A blank line produces a `\par` token, and a keyval processor reads its entries with macros that are not `\long`, so the call aborts. TeX's error names the processor rather than the command the author wrote: `\hypersetup` yields "Paragraph ended before `\kv@processor@default` was complete". This rule points to the source of that error.
+
+The scope follows compilation checks: a blank line *nested* inside a value's brace group (`\tikzset{aa/.style={draw,\n\nthick}}`) compiles cleanly and is not flagged. An unclosed `{` is left to the parser's diagnostic. The rule consults only hand-curated signatures. The safe autofix removes the blank line and preserves the following indentation. It changes only whitespace, and `ContentKind::Keyval` establishes that the processor strips spaces around entries.
 
 This rule is **enabled by default**.
 
@@ -93,7 +99,9 @@ linkcolor=blue}
 
 ## `duplicate-label`
 
-Flag a label key defined more than once in the same label namespace -- within one file, or across files that share a document when a project view is available. LaTeX itself only warns and silently keeps the last definition. Within a file, a warning requires a prior definition in the same conditional branch or an enclosing context. Separate conditional tests are treated as uncertain and do not trigger a warning. Recognizes `\if...\else...\fi` and common macros with complete braced arguments, including `\ifthenelse`, `\iftoggle`, and `\IfFileExists`. Predicates are not evaluated, and coverage across branches is not combined. Cross-file checks use label namespaces. No autofix: resolving a collision (rename vs delete) is the author's call.
+Flag a label key defined more than once in the same label namespace, either within one file or across files that share a document when a project view is available. LaTeX warns but silently keeps the last definition.
+
+Within a file, a warning requires a prior definition in the same conditional branch or an enclosing context. Separate conditional tests are treated as uncertain and do not trigger a warning. The rule recognizes `\if...\else...\fi` and common macros with complete braced arguments, including `\ifthenelse`, `\iftoggle`, and `\IfFileExists`. It does not evaluate predicates or combine coverage across branches. Cross-file checks use label namespaces. No autofix is offered because the author must choose whether to rename or delete a definition.
 
 This rule is **enabled by default**.
 
@@ -116,7 +124,9 @@ warning: duplicate-label
 
 ## `deprecated-command`
 
-Flag the obsolete two-letter font *switches* (`\bf`, `\it`, `\rm`, `\sf`, `\tt`, `\sc`, `\sl`) that LaTeX 2e superseded with the `\...series`/`\...shape`/`\...family` declarations. `\em` is not flagged; it is still the supported emphasis switch. A name the file redefines (`\renewcommand{\sl}{…}`, `\def\rm{…}`) is the user's macro, not the switch, so it is not flagged anywhere. The autofix swaps just the control word (`\bf` -> `\bfseries`), leaving any following text untouched, so it is correct by construction; it is withheld where the switch is merely referenced (`\let\x\rm`, `\ifx\rm\y`).
+Flag the obsolete two-letter font *switches* (`\bf`, `\it`, `\rm`, `\sf`, `\tt`, `\sc`, `\sl`) that LaTeX 2e superseded with `\...series`, `\...shape`, and `\...family` declarations. The rule leaves `\em` alone because it remains the supported emphasis switch. If the file redefines a name (`\renewcommand{\sl}{…}`, `\def\rm{…}`), the rule treats it as the user's macro and does not flag it anywhere.
+
+The autofix replaces only the control word (`\bf` → `\bfseries`), leaving following text untouched. It is withheld where the switch is merely referenced (`\let\x\rm`, `\ifx\rm\y`).
 
 This rule is **enabled by default**.
 
@@ -170,7 +180,9 @@ After applying the fix:
 
 ## `missing-nonbreaking-space`
 
-Flag a plain space where a TeX tie (`~`) belongs, before a command whose output a line break would orphan: a bare-number reference (`Figure \ref{x}`, `\eqref`, `\pageref`) or a bracketed citation (`see \cite{a}`, `\parencite`, `\autocite`). A tie keeps the reference on the same line. Self-describing references (`\autoref`, `\cref`) and textual citations (`\textcite`, `\citet`) are not flagged -- they emit their own noun, so a break orphans nothing. Both a same-line space and a single source line break before the command are flagged (a blank line is not -- that starts a new paragraph). For a same-line space the fix is **unsafe** -- inserting a tie changes line breaking -- so `--fix` leaves it alone; `--unsafe-fixes` and the editor code action apply it. A line break is report-only: rewriting the newline to `~` would join the two lines, a reflow the formatter owns.
+Flag a plain space before a command whose output a line break would orphan: a bare-number reference (`Figure \ref{x}`, `\eqref`, `\pageref`) or a bracketed citation (`see \cite{a}`, `\parencite`, `\autocite`). A TeX tie (`~`) keeps the reference on the same line. Self-describing references (`\autoref`, `\cref`) and textual citations (`\textcite`, `\citet`) are not flagged because they supply their own noun.
+
+The rule flags both a same-line space and a single source line break before the command. A blank line starts a new paragraph and is not flagged. For a same-line space, the fix is **unsafe** because inserting a tie changes line breaking. `--fix` leaves it alone; `--unsafe-fixes` and editor code actions apply it. A line break is reported without a fix: replacing it with `~` would join the lines, a reflow the formatter owns.
 
 This rule is **enabled by default**.
 
@@ -190,7 +202,7 @@ warning: missing-nonbreaking-space
 
 ## `obsolete-environment`
 
-Flag math environments the community has superseded, naming the modern replacement in the message. The canonical case is `eqnarray`, which `amsmath` replaced with `align` decades ago (it mis-spaces relations and is a perennial l2tabu warning). The autofix renames the `\begin`/`\end` pair in place, leaving the body untouched, so it is correct by construction.
+Flag superseded math environments and name the modern replacement in the diagnostic. The canonical case is `eqnarray`, which `amsmath` replaced with `align` decades ago because it spaces relations incorrectly. It is also a recurring l2tabu warning. The autofix renames the `\begin` and `\end` pair in place and leaves the body untouched, so it is correct by construction.
 
 This rule is **enabled by default**.
 
@@ -220,7 +232,9 @@ After applying the fix:
 
 ## `primitive-command`
 
-Flag raw plain-TeX primitives discouraged in LaTeX source, naming the LaTeX construct that supersedes each one (ChkTeX 41, lacheck, l2tabu). A sibling of `deprecated-command`, which covers the obsolete font switches. Most primitives are reported only: their LaTeX replacement restructures arguments (`a \over b` becomes `\frac{a}{b}`, `\centerline{x}` becomes a `\centering` declaration or a `center` environment), so no single textual edit can rewrite them correctly by construction. A few carry a `Safe` autofix — a 1:1 control-word swap for a primitive whose LaTeX form is a single meaning-identical token (`\sb`/`\sp` become `_`/`^`); the swap replaces just the control word, so it stays lossless and meaning-preserving, and is withheld where the primitive is merely referenced (`\let\x\sp`, `\ifx\sp\y`). A name the file redefines (`\renewcommand\sp{…}`) is the user's macro, not the primitive, so it is not flagged anywhere. The implicit braces `\bgroup` and `\egroup` are not flagged: replacing them with literal braces can change macro argument and definition boundaries.
+Flag raw plain-TeX primitives discouraged in LaTeX source and name the LaTeX construct that supersedes each one (ChkTeX 41, lacheck, l2tabu). The related `deprecated-command` rule covers obsolete font switches. Most primitives are reported without a fix because their replacements restructure arguments: `a \over b` becomes `\frac{a}{b}`, and `\centerline{x}` becomes a `\centering` declaration or a `center` environment. No single textual edit can perform those rewrites correctly by construction.
+
+A few primitives carry a `Safe` autofix that replaces one control word with a single token of identical meaning (`\sb` and `\sp` become `_` and `^`). The edit replaces only the control word, preserving losslessness and meaning. It is withheld where the primitive is merely referenced (`\let\x\sp`, `\ifx\sp\y`). If the file redefines a name (`\renewcommand\sp{…}`), the rule treats it as the user's macro and does not flag it anywhere. The rule also leaves `\bgroup` and `\egroup` alone because replacing implicit braces with literal braces can change macro argument and definition boundaries.
 
 This rule is **enabled by default**.
 
@@ -286,7 +300,9 @@ After applying the fix:
 
 ## `ellipsis`
 
-Flag a literal run of three or more periods (`...`) where a real ellipsis command belongs. `...` sets three tight full stops; LaTeX's ellipsis commands set correctly spaced dots. In text the fix is a **safe** swap to `\dots` (a space is added before a following letter so the control word cannot glue onto the next word). In math `\ldots` (baseline, for comma lists) and `\cdots` (centered, for operator chains) are not interchangeable, so the fix is **unsafe**: it guesses from the neighboring atoms -- an operator or relation picks `\cdots`, otherwise `\ldots` -- and applies only under `--unsafe-fixes` or as an editor code action. Comments and verbatim are never touched.
+Flag a literal run of three or more periods (`...`) where an ellipsis command belongs. Literal periods set tight full stops, while LaTeX's ellipsis commands set correctly spaced dots. In text, the fix is a **safe** replacement with `\dots`. It adds a space before a following letter so the control word cannot merge with the next word.
+
+In math, `\ldots` (baseline dots for comma lists) and `\cdots` (centered dots for operator chains) are not interchangeable. The fix is therefore **unsafe**: it chooses `\cdots` beside an operator or relation and `\ldots` otherwise. It applies only with `--unsafe-fixes` or an editor code action. The rule never touches comments or verbatim content.
 
 This rule is **enabled by default**.
 
@@ -473,7 +489,9 @@ warning: extra-math-linebreak
 
 ## `hard-coded-reference`
 
-Flag a literal cross-reference written in prose -- `Figure 3`, `Table~1`, `Section 2` -- instead of `\ref`/`\cref` to a `\label` (textidote sh:hcfig/hctab/hcsec). Hard-coding the number defeats LaTeX's automatic numbering: renumbering a float or reordering sections silently breaks the reference and drops the hyperlink. The rule is **report-only** -- the correct rewrite needs the label the number refers to, which is not in the text, so no autofix is offered. To stay conservative it fires only for a capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) matched as a whole word and directly followed, across one space or a tie `~`, by an arabic number; plurals, lowercase, `Figure~\ref{x}`, and `Figure three` are left alone. It also skips a citation locator (`\cite[Section~8.1]{...}`, a reference into external work), an environment title (`\begin{thm}[Conway's Theorem 0]`, a proper name), and an `\item[label]` description-list caption (`\item[Part 3.]`). It never touches math, comments, or verbatim.
+Flag a literal cross-reference in prose, such as `Figure 3`, `Table~1`, or `Section 2`, in place of a `\ref` or `\cref` to a `\label` (textidote sh:hcfig/hctab/hcsec). Hard-coding the number defeats LaTeX's automatic numbering: renumbering a float or reordering sections silently breaks the reference and drops the hyperlink. No autofix is offered because the correct rewrite needs a label that the text does not supply.
+
+The rule flags only a capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) matched as a whole word and followed by an Arabic number across one space or a tie (`~`). It leaves plurals, lowercase words, `Figure~\ref{x}`, and `Figure three` alone. It also skips citation locators (`\cite[Section~8.1]{...}`, which refers to external work), environment titles (`\begin{thm}[Conway's Theorem 0]`, a proper name), and description-list captions (`\item[Part 3.]`). It never touches math, comments, or verbatim content.
 
 This rule is **enabled by default**.
 
@@ -585,7 +603,9 @@ After applying the fix:
 
 ## `straight-quotes`
 
-Flag a literal ASCII double quote (`"`) used for quotation. In LaTeX a straight `"` always sets a *closing* double quote, so an opening one comes out backwards; the correct forms are `` `` `` (two backticks) to open and `''` (two apostrophes) to close. A quotation is reported **once**, spanning both quotes, and its fix rewrites the pair in one atomic edit -- so a single editor code action repairs it from either end. A quote left unpaired (no closer before the paragraph ends) reports on its own. The fix is **unsafe**: it infers direction from context -- a quote preceded by whitespace, a line break, an opening delimiter (`(`, `[`, `{`), a backtick, or the start of the document opens, anything else closes -- and applies only under `--unsafe-fixes` or as an editor code action, since the guess can flip the typeset glyph. Single straight quotes (`'`) are left alone (they are legitimately apostrophes), and comments, verbatim, math, TeX hex constants (`"2D`), and `\pdfmapline` font maps are never touched.
+Flag a literal ASCII double quote (`"`) used for quotation. In LaTeX, a straight `"` sets a *closing* double quote, so an opening one comes out backward. The correct forms are `` `` `` (two backticks) to open and `''` (two apostrophes) to close. The rule reports a quotation **once**, spanning both quotes, and rewrites the pair in one atomic edit so an editor code action can repair it from either end. A quote with no closer before the paragraph ends is reported on its own.
+
+The fix is **unsafe** because it infers direction from context. A quote opens when preceded by whitespace, a line break, an opening delimiter (`(`, `[`, `{`), a backtick, or the start of the document; otherwise, it closes. This guess can change the typeset glyph, so the fix applies only with `--unsafe-fixes` or an editor code action. Single straight quotes (`'`) are left alone because they can be apostrophes. The rule never touches comments, verbatim content, math, TeX hex constants (`"2D`), or `\pdfmapline` font maps.
 
 This rule is **enabled by default**.
 
@@ -619,7 +639,9 @@ warning: straight-quotes
 
 ## `swallowed-space`
 
-Flag a text-producing control word directly followed by a space that TeX eats, gluing the macro's output to the next word (`\LaTeX is` renders "LaTeXis") (ChkTeX 1). When TeX tokenizes a control word it discards following spaces, so the space never reaches the output. To stay conservative the rule fires only for a curated set of argument-less TeX-family logos (`\LaTeX`, `\TeX`, `\BibTeX`, ...), only in text mode, and only when the next token is a word beginning with an alphanumeric character -- a following period (`\LaTeX .` -> "LaTeX.") is what the author wanted. The fix inserts `{}` after the control word (`\LaTeX{} is`), ending the macro name so the space survives; it is **unsafe** because it changes the typeset output, so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it.
+Flag a text-producing control word followed directly by a space that TeX discards, joining the macro's output to the next word (`\LaTeX is` renders as "LaTeXis") (ChkTeX 1). TeX discards spaces after a control word during tokenization, so they never reach the output.
+
+The rule checks only a curated set of TeX-family logos that take no arguments (`\LaTeX`, `\TeX`, `\BibTeX`, ...), only in text mode, and only when the next token is a word beginning with an alphanumeric character. A following period (`\LaTeX .` → "LaTeX.") is left alone. The fix inserts `{}` after the control word (`\LaTeX{} is`), ending the macro name so the space survives. It is **unsafe** because it changes typeset output. `--fix` leaves it alone; `--unsafe-fixes` and editor code actions apply it.
 
 This rule is **enabled by default**.
 
@@ -639,7 +661,9 @@ warning: swallowed-space
 
 ## `space-before-command`
 
-Flag a plain space directly before a command that should hug the preceding word -- `\footnote`, `\footnotemark`, `\index`, `\label` (ChkTeX 24/42). A space before `\footnote` sets a spurious space before the footnote mark (`word \footnote{x}` -> "word ¹"); a space before a zero-width `\index`/`\label` leaves a stray inter-word gap that can shift the recorded page. The fix deletes the space. It is **unsafe** -- removing the space changes the typeset spacing -- so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it. To stay conservative only the same-line `WORD SPACE \cmd` shape is flagged (a space at line start or after a brace is left alone), and math is skipped (an inter-token space is insignificant there), covering both `$…$` and math environments like `equation`/`align`. For the zero-width `\index`/`\label` the fix is withheld unless the group is trailed by whitespace, a newline, or paragraph end, since otherwise the leading space is a real interword space to the following content.
+Flag a plain space directly before a command that should follow the preceding word without a gap: `\footnote`, `\footnotemark`, `\index`, or `\label` (ChkTeX 24/42). A space before `\footnote` produces an unwanted space before the footnote mark (`word \footnote{x}` → "word ¹"). A space before a zero-width `\index` or `\label` leaves an interword gap that can shift the recorded page. The fix deletes the space. It is **unsafe** because it changes typeset spacing, so `--fix` leaves it alone; `--unsafe-fixes` and editor code actions apply it.
+
+The rule flags only the same-line `WORD SPACE \cmd` shape. It leaves spaces at line starts or after braces alone and skips math, where inter-token spaces are insignificant, including `$…$` and environments such as `equation` and `align`. For zero-width `\index` and `\label`, the fix is withheld unless whitespace, a newline, or paragraph end follows the group. Otherwise, the leading space separates the preceding word from the following content.
 
 This rule is **enabled by default**.
 
@@ -659,7 +683,11 @@ warning: space-before-command
 
 ## `dash-length`
 
-Flag a dash of the wrong length for its context (ChkTeX 8). LaTeX sets a hyphen from `-`, an en dash from `--`, and an em dash from `---`. Between two numbers a range takes an en dash, so `5-10` or `5---10` is flagged with an **unsafe** fix to `--` (unsafe because it changes the typeset glyph and a hyphen between numbers is occasionally intentional). Between two words an en dash (`--`) is almost always a mistake, but whether a hyphen or an em dash was meant is ambiguous, so it is reported **without** a fix -- except when it joins coordinate proper names (`Barzilai--Borwein`, `Newton--Raphson`), detected by an uppercase first letter on either flank, where the en dash is correct and the finding is suppressed. To stay conservative the rule only inspects a dash run that sits inside a single word with content on both sides and is the only dash run in that word, so dates (`2020-01-15`), ISBNs, spaced dashes, and option flags (`--verbose`) are left alone. Column spans in rule commands (`\cline{1-3}`, `\cmidrule(lr){2-3}`) and key arguments (`\label{fig:1-3}`, `\cite{smith2020-1}`) are specs and opaque identifiers rather than typeset ranges, so they are skipped too. The same applies to angle-delimited command and environment specifications such as Beamer's `\item<1-2>` and `\begin{onlyenv}<2-3>`. Comments, verbatim, and math are never touched.
+Flag a dash of the wrong length for its context (ChkTeX 8). LaTeX sets a hyphen from `-`, an en dash from `--`, and an em dash from `---`. A range between two numbers takes an en dash, so the rule flags `5-10` and `5---10` with an **unsafe** fix to `--`. The fix changes the typeset glyph, and a hyphen between numbers is occasionally intentional.
+
+Between two words, an en dash (`--`) is almost always a mistake, but the choice between a hyphen and an em dash is ambiguous, so no fix is offered. Coordinate proper names (`Barzilai--Borwein`, `Newton--Raphson`) are exempt: an uppercase first letter on either side suppresses the finding.
+
+The rule checks only a word containing exactly one dash run with content on both sides. It leaves dates (`2020-01-15`), ISBNs, spaced dashes, and option flags (`--verbose`) alone. It also skips column spans (`\cline{1-3}`, `\cmidrule(lr){2-3}`) and key arguments (`\label{fig:1-3}`, `\cite{smith2020-1}`), which are specifications or opaque identifiers. The same applies to angle-delimited command and environment specifications such as Beamer's `\item<1-2>` and `\begin{onlyenv}<2-3>`. The rule never touches comments, verbatim content, or math.
 
 This rule is **disabled by default**; enable it with `select`.
 
@@ -693,7 +721,9 @@ warning: dash-length
 
 ## `times-variable`
 
-Flag a literal `x` used as a multiplication sign between two numbers, such as `640x200` or `3x3` (ChkTeX 29). TeX sets that `x` as an italic letter rather than the `\times` cross, so it reads wrong. The rule only fires when the whole word is `digits x digits` -- one lowercase `x` with ASCII digits on both sides and nothing else -- so ordinary words (`matrix`), spaced products (`n x m`), hex literals (`0xFF`, `0x12`), and key arguments such as `\label{fig:3x3}` or `\ref{fig:3x3}` (where the `x` is part of an opaque identifier) are left alone. The fix is **unsafe** (a bare `x` between numbers is usually a cross but occasionally a real variable): inside math it rewrites the `x` to `\times`, and in text it wraps it as `$\times$` so the result still compiles. So `--fix` leaves it alone; `--unsafe-fixes` and the editor code action apply it.
+Flag a literal `x` used as a multiplication sign between two numbers, such as `640x200` or `3x3` (ChkTeX 29). TeX sets it as an italic letter rather than the `\times` cross. The rule flags only a whole word of the form `digits x digits`: one lowercase `x` with ASCII digits on both sides and nothing else. It leaves ordinary words (`matrix`), spaced products (`n x m`), hex literals (`0xFF`, `0x12`), and opaque key arguments such as `\label{fig:3x3}` or `\ref{fig:3x3}` alone.
+
+The fix is **unsafe** because a bare `x` between numbers is usually a cross but occasionally a variable. In math, it replaces `x` with `\times`; in text, it uses `$\times$` so the result still compiles. `--fix` leaves it alone; `--unsafe-fixes` and editor code actions apply it.
 
 This rule is **enabled by default**.
 
@@ -727,7 +757,9 @@ warning: times-variable
 
 ## `math-operator-name`
 
-Flag a bare log-like function name (`sin`, `cos`, `log`, `lim`, and the rest of the LaTeX/amsmath set) written in math mode without its backslash, so TeX sets it as italic variables instead of the upright `\sin` operator with correct spacing (ChkTeX 35). It fires when the name starts a `WORD` and ends at a word boundary, catching both `$sin x$` and the glued `$sin(x)$`, while leaving words that merely begin with one (`since`) alone and preferring the longest match (`sinh` over `sin`). To stay conservative it only fires inside math mode, never in a subscript or superscript, where `max` in `x_{max}` is almost always a label, and never inside a text-domain or unknown argument. The fix inserts the backslash (`sin` -> `\sin`); it is **unsafe** because it changes the typeset output (upright glyph and operator spacing) and a bare `sin` is occasionally a real product, so `--fix` leaves it alone while `--unsafe-fixes` and the editor code action apply it.
+Flag a bare function name from the LaTeX and amsmath set (`sin`, `cos`, `log`, `lim`, and others) written in math mode without its backslash (ChkTeX 35). TeX sets the name as italic variables rather than an upright operator such as `\sin` with the correct spacing. The rule matches a name at the start of a `WORD` and ending at a word boundary, catching both `$sin x$` and `$sin(x)$`. It leaves words such as `since` alone and prefers the longest match (`sinh` over `sin`).
+
+The rule checks only math mode and skips subscripts and superscripts, where `max` in `x_{max}` is almost always a label. It also skips text-domain and unknown arguments. The fix inserts the backslash (`sin` → `\sin`). It is **unsafe** because it changes the glyph and operator spacing, and a bare `sin` can be a product. `--fix` leaves it alone; `--unsafe-fixes` and editor code actions apply it.
 
 This rule is **enabled by default**.
 
@@ -766,7 +798,9 @@ warning: math-operator-name
 
 ## `makeat-macro`
 
-Flag a macro whose name contains `@` (`\foo@bar`, `\p@`, `\@ifnextchar`) used outside a `\makeatletter`/`\makeatother` region. There `@` has its ordinary catcode, so it cannot be part of a control word: `\foo@bar` is read as `\foo` followed by the text `@bar`, not as a call to the internal macro `\foo@bar`. Usually the enclosing `\makeatletter`/`\makeatother` was forgotten. Because the formatter's lexer already tracks `\makeatletter` state, this is decided exactly -- an in-region name lexes as one token and is never flagged; only the split out-of-region form (control word abutting an `@`-word, or `\@` abutting a letter-word) is. Report-only: a correct fix would mean wrapping the use in `\makeatletter`/`\makeatother`, not a tight local edit, so no autofix is offered. The end-of-sentence `\@` (as in `NASA\@.`) is not flagged.
+Flag a macro name containing `@` (`\foo@bar`, `\p@`, `\@ifnextchar`) used outside a `\makeatletter` and `\makeatother` region. There, `@` has its ordinary catcode and cannot be part of a control word. TeX reads `\foo@bar` as `\foo` followed by the text `@bar`, rather than as the internal macro `\foo@bar`. This usually means the enclosing `\makeatletter` and `\makeatother` were forgotten.
+
+The formatter's lexer tracks `\makeatletter` state, so the rule distinguishes these cases exactly. A name inside the region lexes as one token and is never flagged. Only the split form outside the region is flagged: a control word abutting an `@`-word, or `\@` abutting a letter-word. No autofix is offered because wrapping the use in `\makeatletter` and `\makeatother` requires more than a local edit. The end-of-sentence `\@` in `NASA\@.` is left alone.
 
 This rule is **enabled by default**.
 
@@ -800,7 +834,9 @@ warning: makeat-macro
 
 ## `sectioning-level-jump`
 
-Flag a structural heading that descends more than one level below the preceding structural heading -- `\section` straight to `\subsubsection`, skipping `\subsection` (textidote's `sh:secskip`). The active ladder follows the document class: `\chapter` is included only for classes known to provide it or when the source uses it, while unknown classes conservatively omit it. `\paragraph` and `\subparagraph` are transparent because technical papers commonly use them as run-in labels rather than outline subdivisions. Only *downward* jumps are flagged -- climbing back up and repeated headings at one level are normal. The comparison is relative to the previous structural heading, never an absolute top level. Report-only: repairing a skip is a structural choice for the author, not a correct-by-construction edit.
+Flag a structural heading that descends more than one level below the preceding structural heading, such as `\section` followed directly by `\subsubsection`, skipping `\subsection` (textidote's `sh:secskip`). The heading hierarchy follows the document class: it includes `\chapter` only for classes known to provide it or when the source uses it. Unknown classes conservatively omit it. The rule treats `\paragraph` and `\subparagraph` as transparent because technical papers commonly use them as run-in labels.
+
+Only *downward* jumps are flagged. Returning to a higher level or repeating a heading at the same level is normal. The comparison is with the previous structural heading rather than an absolute top level. No autofix is offered because repairing a skip requires the author to choose the structure.
 
 This rule is **enabled by default**.
 
@@ -821,7 +857,9 @@ warning: sectioning-level-jump
 
 ## `missing-required-argument`
 
-Flag a command invoked with fewer `{…}` groups than the required arity in its curated built-in signature (ChkTeX warning 14, decided on the parse tree and signature database rather than line heuristics). TeX also accepts unbraced single-token arguments (`\frac12`), so the rule stays silent whenever a following token could still supply the missing argument and fires only at a hard boundary: the end of the enclosing group, math shell, or environment, an alignment `&`, a `\\` line break, a blank line, or the end of the file. Contexts where a bare command is deliberate are skipped -- macro-definition bodies (`\newcommand{\bold}{\textbf}`), arguments of unknown commands, standalone `{…}` scope groups, `\let`-style alias forms, and names the file itself redefines. Curated environment-local signatures take precedence over global signatures: inside `parts`, exam's `\part` takes only optional points. Report-only: the missing argument's content is the author's to write, so no fix is correct by construction.
+Flag a command with fewer `{…}` groups than its curated built-in signature requires (ChkTeX warning 14, checked through the parse tree and signature database rather than line heuristics). TeX also accepts unbraced single-token arguments (`\frac12`), so the rule stays silent when a following token could supply the missing argument. It flags the command only at a hard boundary: the end of the enclosing group, math shell, or environment; an alignment `&`; a `\\` line break; a blank line; or the end of the file.
+
+The rule skips contexts where a bare command may be deliberate: macro-definition bodies (`\newcommand{\bold}{\textbf}`), arguments of unknown commands, standalone `{…}` scope groups, `\let`-style aliases, and names redefined in the file. Curated environment-local signatures take precedence over global signatures: inside `parts`, exam's `\part` takes only optional points. No autofix is offered because the author must supply the missing argument's content.
 
 This rule is **enabled by default**.
 
@@ -855,7 +893,7 @@ warning: missing-required-argument
 
 ## `undefined-ref`
 
-Flag a `\ref`-family reference to a label defined nowhere in the document. Sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. No autofix.
+Flag a `\ref`-family reference to a label defined nowhere in the document. The check is sound only when the label namespace is complete, so the rule stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. It is inactive on stdin or wherever cross-file label resolution is unavailable. No autofix is offered.
 
 This rule is **enabled by default**.
 
@@ -875,7 +913,7 @@ warning: undefined-ref
 
 ## `undefined-citation`
 
-Flag a `\cite`-family key matching no entry in the document's bibliography -- the bibliographic analog of `undefined-ref`. Sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file; resource lookup honors BibTeX's `BIBINPUTS`/`TEXBIB` search path. Suppressed entirely by a `\nocite{*}` wildcard (which marks every key as used). Inert without cross-file citation resolution. No autofix.
+Flag a `\cite`-family key that matches no entry in the document's bibliography, analogous to `undefined-ref`. The check is sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file. Resource lookup honors BibTeX's `BIBINPUTS` and `TEXBIB` search paths. A `\nocite{*}` wildcard, which marks every key as used, suppresses the rule entirely. The rule is inactive without cross-file citation resolution. No autofix is offered.
 
 This rule is **enabled by default**.
 
@@ -895,7 +933,9 @@ warning: undefined-citation
 
 ## `unreferenced-label`
 
-Flag a label definition unused by a `\ref`-family command anywhere in the document. A `\eqref{A}--\eqref{D}` range also uses labels between A and D when they occur in consecutive, singly labeled `equation` environments or numbered `align` and `gather` rows, including through literal included files with an unambiguous source order. Manual tags, suppressed numbers, and counter changes stop inference. Referencing a `subequations` group label also uses the labels in its enclosed math environments. The mirror of `undefined-ref`, and sound only when the label namespace is complete, so it stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. Inert on stdin or wherever no cross-file label resolution is available. Report-only: removing the dead label or adding a reference are both valid, so there is no autofix.
+Flag a label definition unused by any `\ref`-family command in the document. A `\eqref{A}--\eqref{D}` range also uses labels between A and D when they occur in consecutive, singly labeled `equation` environments or numbered `align` and `gather` rows. This includes literal included files with an unambiguous source order. Manual tags, suppressed numbers, and counter changes stop inference. A reference to a `subequations` group label also uses the labels in its enclosed math environments.
+
+Like `undefined-ref`, the check is sound only when the label namespace is complete. The rule stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. It is inactive on stdin or wherever cross-file label resolution is unavailable. No autofix is offered because removing the unused label and adding a reference are both valid choices.
 
 This rule is **enabled by default**.
 
@@ -915,7 +955,9 @@ warning: unreferenced-label
 
 ## `verbatim-trailing-text`
 
-Flag non-whitespace text after a verbatim-like environment's `\end{…}` on the same line (ChkTeX warning 31). LaTeX closes a verbatim environment by scanning line by line to `\end{verbatim}` and then gobbling the rest of that line, so `\end{verbatim} foo` silently drops `foo`. Scoped to verbatim-like environments — read off the parse tree (an opaque `VERBATIM_BODY`, or a curated built-in verbatim name for the empty-body case) — because ordinary environments do not gobble their `\end` line. A trailing `%` comment is treated as trivia, not flagged. Report-only: whether to move or delete the swallowed text is the author's call, so no fix is correct by construction.
+Flag non-whitespace text after a verbatim-like environment's `\end{…}` on the same line (ChkTeX warning 31). LaTeX scans line by line to `\end{verbatim}`, then discards the rest of that line, so `\end{verbatim} foo` silently drops `foo`.
+
+The rule identifies verbatim-like environments from an opaque `VERBATIM_BODY` in the parse tree or a curated built-in verbatim name when the body is empty. Ordinary environments do not discard the rest of their closing line and are not checked. A trailing `%` comment is treated as trivia and is not flagged. No autofix is offered because the author must choose whether to move or delete the text.
 
 This rule is **enabled by default**.
 
@@ -937,7 +979,9 @@ warning: verbatim-trailing-text
 
 ## `duplicate-package`
 
-Flag a package loaded more than once in the same file with `\usepackage`/`\RequirePackage` (which share one package namespace). LaTeX loads a given package only once; a second load is redundant and, when the options disagree, an option-clash error. A warning requires a prior load in the same conditional branch or an enclosing context (including an unconditional prior). Separate conditional tests are treated as uncertain and do not trigger a warning. Recognizes `\if...\else...\fi` and common macros with complete braced arguments, including `\ifthenelse`, `\iftoggle`, and `\IfFileExists`. Predicates are not evaluated, and coverage across branches is not combined. No autofix: removing a load can drop options the survivor lacks, and which load to keep is the author's call. Class loads (`\documentclass`/`\LoadClass`) are a separate concern and are not flagged.
+Flag a package loaded more than once in the same file with `\usepackage` or `\RequirePackage`, which share one package namespace. LaTeX loads a package only once. A second load is redundant and produces an option-clash error when its options disagree.
+
+A warning requires a prior load in the same conditional branch or an enclosing context, including an unconditional prior load. Separate conditional tests are treated as uncertain and do not trigger a warning. The rule recognizes `\if...\else...\fi` and common macros with complete braced arguments, including `\ifthenelse`, `\iftoggle`, and `\IfFileExists`. It does not evaluate predicates or combine coverage across branches. No autofix is offered because removing a load can discard options the remaining load lacks. Class loads (`\documentclass` and `\LoadClass`) are not flagged.
 
 This rule is **enabled by default**.
 
@@ -958,7 +1002,9 @@ warning: duplicate-package
 
 ## `missing-provides`
 
-Flag a package or class source (`.sty`/`.cls`) that never identifies itself with the matching `\ProvidesPackage`/`\ProvidesClass`. Every well-formed package declares its identity so LaTeX can log it and honor date-based compatibility checks; a `.sty` carrying only `\ProvidesClass` (wrong kind) still counts as missing. The rule is inert for any other extension -- a `.tex` has nothing to provide, and a `.dtx` hides its declaration inside guarded `macrocode`. No autofix: writing a correct `\Provides…` line (placement, date, version) is the author's call.
+Flag a package or class source (`.sty` or `.cls`) that never identifies itself with the matching `\ProvidesPackage` or `\ProvidesClass`. A well-formed package declares its identity so LaTeX can log it and honor date-based compatibility checks. A `.sty` file containing only `\ProvidesClass` still lacks the matching declaration.
+
+The rule is inactive for other extensions: a `.tex` file has nothing to provide, and a `.dtx` file hides its declaration inside guarded `macrocode`. No autofix is offered because the author must choose the declaration's placement, date, and version.
 
 This rule is **enabled by default**.
 
@@ -979,7 +1025,9 @@ warning: missing-provides
 
 ## `unknown-option`
 
-Flag a `\usepackage`/`\RequirePackage` option that the loaded package never declares with `\DeclareOption`, which LaTeX reports as an "Unknown option" error at compile time. Checked only against packages that are analyzed project files (a sibling `.sty`) — no option data ships for system packages — and only when the package's declared set is trustworthy: a `\DeclareOption*` default handler, a key-value option processor (`kvoptions`, `\ProcessKeyOptions`, …), option forwarding, or an `\input` in the package silences the rule, as does a `key=value` option. Class loads (`\documentclass`) are not checked: an unknown class option is not an error, it becomes an unused global option. No autofix: dropping or renaming the option is the author's call.
+Flag a `\usepackage` or `\RequirePackage` option that the loaded package never declares with `\DeclareOption`. LaTeX reports this as an "Unknown option" error at compile time. The rule checks only analyzed project packages, such as a sibling `.sty` file; it ships no option data for system packages.
+
+The package's declared option set must be trustworthy. A `\DeclareOption*` default handler, a key-value option processor (`kvoptions`, `\ProcessKeyOptions`, …), option forwarding, or an `\input` in the package silences the rule, as does a `key=value` option. Class loads (`\documentclass`) are not checked because an unknown class option becomes an unused global option rather than an error. No autofix is offered because the author must choose whether to remove or rename the option.
 
 This rule is **enabled by default**.
 
@@ -1007,7 +1055,9 @@ warning: unknown-option
 
 ## `redundant-script-braces`
 
-Flag braces around a single-token sub/superscript argument, which `^`/`_` bind without them (`x^{2}` is `x^2`). The autofix deletes the two braces and leaves the inner token untouched. It is withheld when dropping the braces would let the following character glue onto the argument and change meaning (`x^{2}-3` stays braced — unspaced `x^2-3` would re-lex `2-3` as one token; `y_{\alpha}b` stays braced — `\alphab` is one control word). It also leaves standard named math operators braced because commands such as `\max` are not valid unbraced script fields.
+Flag braces around a single-token subscript or superscript argument, which `_` and `^` can bind without braces (`x^{2}` is `x^2`). The autofix deletes the two braces and leaves the inner token untouched.
+
+The fix is withheld when removing the braces would let a following character merge with the argument and change meaning. For example, `x^{2}-3` stays braced because `x^2-3` would re-lex `2-3` as one token, and `y_{\alpha}b` stays braced because `\alphab` is one control word. Standard named math operators also remain braced because commands such as `\max` are not valid unbraced script fields.
 
 This rule is **enabled by default**.
 
@@ -1038,7 +1088,9 @@ $x^2$ and $y_\alpha$
 
 ## `unclosed-math-delimiter`
 
-Flag a math opener the parser silently demoted to a plain token because no closer was reachable -- a `$` with no matching `$`, a `\[`/`\(` with no `\]`/`\)`, or a `\left` with no `\right`. Such a shape is routine data in macro code (`>{$}` array columns, `\expandafter\@tempa\[\@nil`), so the parser tolerates it without a diagnostic; in prose it is almost always a dropped closer. To stay clear of the macro-code cases the rule is conservative: it reports only an opener in document prose, staying silent when it sits inside a brace group or optional argument (`\newcommand{...}{$}`, the `>{$}` column spec), an expl3 region, or a `macrocode` body. No autofix: the correction (insert a closer, or delete a stray opener) is ambiguous.
+Flag a math opener the parser demoted to a plain token because no closer was reachable: a `$` without a matching `$`, a `\[` or `\(` without a matching `\]` or `\)`, or a `\left` without a matching `\right`. These shapes can be data in macro code (`>{$}` array columns, `\expandafter\@tempa\[\@nil`), so the parser accepts them without a diagnostic. In prose, they almost always indicate a missing closer.
+
+The rule reports only openers in document prose. It stays silent inside brace groups or optional arguments (`\newcommand{...}{$}`, the `>{$}` column specification), expl3 regions, and `macrocode` bodies. No autofix is offered because the author may need to insert a closer or delete a stray opener.
 
 This rule is **enabled by default**.
 
@@ -1086,7 +1138,9 @@ warning: unclosed-math-delimiter
 
 ## `label-before-caption`
 
-Flag a `\label` placed before the statement that establishes its intended counter: the outer `\caption` in a curated float (`figure`, `table`, and their starred forms), an explicit `\captionof` in a curated caption container (`minipage`), or the first `\item` in the standard numbered `enumerate` list. In either position, `\label` captures the previous `\@currentlabel`—usually an enclosing section number—so `\ref` silently prints an unrelated number. LaTeX gives no warning. The list case is limited to statement-level labels before the first item; labels after an item may belong to it, while `itemize` and `description` items do not step a reference counter. Attached custom item labels and complete Beamer overlay markers remain intact. The float case likewise skips labels nested in command arguments, and classifies nested counter steps conservatively. The fix moves the label just after the proven caption or item marker, and is Unsafe because it intentionally changes what `\ref` prints from an inferred intent.
+Flag a `\label` before the statement that establishes its intended counter: the outer `\caption` in a curated float (`figure`, `table`, and their starred forms), an explicit `\captionof` in a curated caption container (`minipage`), or the first `\item` in a standard numbered `enumerate` list. In these positions, `\label` captures the previous `\@currentlabel`, usually an enclosing section number, so `\ref` silently prints an unrelated number. LaTeX gives no warning.
+
+The list check covers only statement-level labels before the first item. Labels after an item may belong to it, while `itemize` and `description` items do not step a reference counter. Attached custom item labels and complete Beamer overlay markers remain intact. The float check skips labels nested in command arguments and classifies nested counter steps conservatively. The fix moves the label just after the proven caption or item marker. It is Unsafe because it infers the author's intent and deliberately changes what `\ref` prints.
 
 This rule is **enabled by default**.
 
@@ -1173,8 +1227,9 @@ To suppress a rule at a single site, use a comment directive:
 {\bf here}
 ```
 
-The verb carries the scope. `skip` covers the next construct, `off` and `on`
-delimit a region, and `skip-file` covers the whole file wherever it sits:
+The verb determines the scope. `skip` covers the next construct, `off` and `on`
+delimit a region, and `skip-file` covers the whole file wherever the directive
+appears:
 
 ```tex
 % badness-lint off deprecated-command: legacy chapter
@@ -1183,8 +1238,8 @@ delimit a region, and `skip-file` covers the whole file wherever it sits:
 % badness-lint on deprecated-command
 ```
 
-Naming the `<id>` is optional; leaving it out suppresses every rule over that
-same span. The `: <reason>` tail is optional everywhere.
+The `<id>` is optional. Omitting it suppresses every rule over the same span.
+The `: <reason>` is optional everywhere.
 
 `% badness skip` / `off` / `on` / `skip-file` do the same and turn off the
 **formatter** at the same time; see [Formatting](../guide/formatting.md#turning-the-formatter-off)

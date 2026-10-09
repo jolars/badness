@@ -78,20 +78,18 @@ impl Rule for MathOperatorName {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a bare log-like function name (`sin`, `cos`, `log`, `lim`, and the \
-         rest of the LaTeX/amsmath set) written in math mode without its \
-         backslash, so TeX sets it as italic variables instead of the upright \
-         `\\sin` operator with correct spacing (ChkTeX 35). It fires when the name \
-         starts a `WORD` and ends at a word boundary, catching both `$sin x$` and \
-         the glued `$sin(x)$`, while leaving words that merely begin with one \
-         (`since`) alone and preferring the longest match (`sinh` over `sin`). To \
-         stay conservative it only fires inside math mode, never in a subscript \
-         or superscript, where `max` in `x_{max}` is almost always a label, and \
-         never inside a text-domain or unknown argument. The fix inserts the backslash \
-         (`sin` -> `\\sin`); it is **unsafe** because it changes the typeset output \
-         (upright glyph and operator spacing) and a bare `sin` is occasionally a \
-         real product, so `--fix` leaves it alone while `--unsafe-fixes` and the \
-         editor code action apply it."
+        "Flag a bare function name from the LaTeX and amsmath set (`sin`, `cos`, `log`, \
+         `lim`, and others) written in math mode without its backslash (ChkTeX 35). TeX \
+         sets the name as italic variables rather than an upright operator such as \
+         `\\sin` with the correct spacing. The rule matches a name at the start of a \
+         `WORD` and ending at a word boundary, catching both `$sin x$` and `$sin(x)$`. \
+         It leaves words such as `since` alone and prefers the longest match (`sinh` \
+         over `sin`).\n\nThe rule checks only math mode and skips subscripts and \
+         superscripts, where `max` in `x_{max}` is almost always a label. It also skips \
+         text-domain and unknown arguments. The fix inserts the backslash (`sin` → \
+         `\\sin`). It is **unsafe** because it changes the glyph and operator spacing, \
+         and a bare `sin` can be a product. `--fix` leaves it alone; `--unsafe-fixes` \
+         and editor code actions apply it."
     }
 
     fn examples(&self) -> &'static [Example] {

@@ -43,11 +43,11 @@ impl Rule for UndefinedRef {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a `\\ref`-family reference to a label defined nowhere in the \
-         document. Sound only when the label namespace is complete, so it stays \
-         silent unless the project view is **closed** (every include resolves to \
-         an analyzed file) and **rooted**. Inert on stdin or wherever no \
-         cross-file label resolution is available. No autofix."
+        "Flag a `\\ref`-family reference to a label defined nowhere in the document. \
+         The check is sound only when the label namespace is complete, so the rule \
+         stays silent unless the project view is **closed** (every include resolves to \
+         an analyzed file) and **rooted**. It is inactive on stdin or wherever \
+         cross-file label resolution is unavailable. No autofix is offered."
     }
 
     fn examples(&self) -> &'static [Example] {

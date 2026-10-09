@@ -47,12 +47,11 @@ impl Rule for ObsoleteEnvironment {
     }
 
     fn description(&self) -> &'static str {
-        "Flag math environments the community has superseded, naming the modern \
-         replacement in the message. The canonical case is `eqnarray`, which \
-         `amsmath` replaced with `align` decades ago (it mis-spaces relations and \
-         is a perennial l2tabu warning). The autofix renames the \
-         `\\begin`/`\\end` pair in place, leaving the body untouched, so it is \
-         correct by construction."
+        "Flag superseded math environments and name the modern replacement in the \
+         diagnostic. The canonical case is `eqnarray`, which `amsmath` replaced with \
+         `align` decades ago because it spaces relations incorrectly. It is also a \
+         recurring l2tabu warning. The autofix renames the `\\begin` and `\\end` pair \
+         in place and leaves the body untouched, so it is correct by construction."
     }
 
     fn examples(&self) -> &'static [Example] {

@@ -69,17 +69,16 @@ impl Rule for SectioningLevelJump {
 
     fn description(&self) -> &'static str {
         "Flag a structural heading that descends more than one level below the \
-         preceding structural heading -- `\\section` straight to \
-         `\\subsubsection`, skipping `\\subsection` (textidote's `sh:secskip`). \
-         The active ladder follows the document class: `\\chapter` is included \
-         only for classes known to provide it or when the source uses it, while \
-         unknown classes conservatively omit it. `\\paragraph` and \
-         `\\subparagraph` are transparent because technical papers commonly use \
-         them as run-in labels rather than outline subdivisions. Only *downward* \
-         jumps are flagged -- climbing back up and repeated headings at one level \
-         are normal. The comparison is relative to the previous structural \
-         heading, never an absolute top level. Report-only: repairing a skip is a \
-         structural choice for the author, not a correct-by-construction edit."
+         preceding structural heading, such as `\\section` followed directly by \
+         `\\subsubsection`, skipping `\\subsection` (textidote's `sh:secskip`). The \
+         heading hierarchy follows the document class: it includes `\\chapter` only for \
+         classes known to provide it or when the source uses it. Unknown classes \
+         conservatively omit it. The rule treats `\\paragraph` and `\\subparagraph` as \
+         transparent because technical papers commonly use them as run-in \
+         labels.\n\nOnly *downward* jumps are flagged. Returning to a higher level or \
+         repeating a heading at the same level is normal. The comparison is with the \
+         previous structural heading rather than an absolute top level. No autofix is \
+         offered because repairing a skip requires the author to choose the structure."
     }
 
     fn examples(&self) -> &'static [Example] {

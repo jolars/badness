@@ -29,7 +29,7 @@ use super::{BibRule, BibRuleContext, Example};
 
 const EXAMPLES: &[Example] = &[
     Example {
-        caption: "Two `note` fields with identical values -- deleting the redundant copy is safe:",
+        caption: "Two `note` fields with identical values, so deleting the redundant copy is safe:",
         source: "@misc{knuth84,\n  note = {Draft},\n  note = {Draft}\n}\n",
     },
     Example {
@@ -51,14 +51,13 @@ impl BibRule for DuplicateField {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a field name appearing more than once on a single entry (names \
-         compared case-insensitively). BibTeX and Biber keep only one \
-         occurrence and silently discard the rest, so a duplicate is almost \
-         always a merge or copy-paste mistake; every occurrence after the \
-         first is flagged. When the repeated value is byte-identical to the \
-         kept one, a safe autofix deletes the redundant copy; when the values \
-         differ, which one wins is engine-dependent, so the finding is \
-         report-only."
+        "Flag a field name appearing more than once in an entry, comparing names \
+         case-insensitively. BibTeX and Biber keep only one occurrence and silently \
+         discard the rest. A duplicate is therefore almost always a merge or copy-paste \
+         mistake, and every occurrence after the first is flagged.\n\nWhen a repeated \
+         value is byte-identical to the retained value, a safe autofix deletes the \
+         redundant copy. When values differ, the retained value depends on the engine, \
+         so the rule reports the finding without a fix."
     }
 
     fn examples(&self) -> &'static [Example] {

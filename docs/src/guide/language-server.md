@@ -27,9 +27,9 @@ receive the full signature in the completion item's `detail` field. Full
 documentation loads when the client resolves the selected item.
 
 Signatures use the document's definitions, loaded local packages, and Badness's
-built-in data. They display the known brace and bracket argument slots; they do
-not describe every TeX argument protocol. The signature display does not insert
-arguments.
+built-in data. They show the known argument slots delimited by braces or
+brackets. They do not describe every TeX argument protocol. The signature
+display does not insert arguments.
 
 Known math and text symbols and logos, such as `\omega`, `\hbar`, `\copyright`,
 and `\LaTeX`, have the completion kind `Constant`. Known argument-free control,
@@ -38,8 +38,8 @@ spacing, and declaration commands, such as `\newpage`, `\par`, `\quad`, and
 retain `Function`. Editors can use these distinctions for icons and automatic
 brackets; for example, blink.cmp can insert braces after `\vspace` while leaving
 `\omega` and `\newpage` bare. Recognized definitions in the document or loaded
-local packages, and explicit project declarations, override the built-in
-classification. Commands without a curated classification keep their existing
+local packages override the built-in classification, as do explicit project
+declarations. Commands without a curated classification keep their existing
 completion kinds; an empty signature alone does not establish zero arguments.
 
 ## LaTeX3 completion
@@ -84,10 +84,10 @@ File explorers can also rename source files and folders through
 `workspace/willRenameFiles` and `workspace/didRenameFiles`. Your explorer must
 send these requests and notifications. When files move, Badness adjusts their
 recognized references, including references to assets inside moved folders.
-Cursor rename includes its reference edits even when explorer hooks are enabled.
-Unsaved editor buffers take precedence over disk contents. Each referring file
-uses its own project's declarations and exclusions, including nested projects
-and other workspace folders.
+Renaming from the cursor includes edits to references even when explorer hooks
+are enabled. Unsaved editor buffers take precedence over disk contents. Each
+referring file uses its own project's declarations and exclusions, including
+nested projects and other workspace folders.
 
 Badness declines moves across directories when a moved source contains relative
 file arguments. Their resolution can depend on the compilation directory or an
@@ -120,7 +120,7 @@ referenced file stays in place.
 The action requires a complete, literal brace argument. It is withheld for
 missing files, self-inputs, comments between the command and its argument, and
 locally redefined or project-declared `\input` commands. It expands only the
-selected input; nested inputs remain as written.
+selected input. Nested inputs remain as written.
 
 ## Table refactoring
 

@@ -4,7 +4,9 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `blank-line-in-keyval`
 
-Flag a blank line at the top level of a `key=value` argument. A blank line is a `\par` token and a keyval processor walks its entries with macros that are not `\long`, so the call aborts -- and the error TeX reports names the processor rather than the command the author wrote (`\hypersetup` yields "Paragraph ended before `\kv@processor@default` was complete"), which is what makes the finding worth more than the compiler's own message. Scoped by measurement: a blank line *nested* inside a value's brace group (`\tikzset{aa/.style={draw,\n\nthick}}`) compiles clean and is not flagged, an unclosed `{` is left to the parse error it already draws, and only the hand-curated signature tier is consulted. The autofix drops the blank line and keeps the following indentation; it is safe by construction, since it edits only whitespace and `ContentKind::Keyval` is exactly the claim that the processor strips spaces around entries.
+Flag a blank line at the top level of a `key=value` argument. A blank line produces a `\par` token, and a keyval processor reads its entries with macros that are not `\long`, so the call aborts. TeX's error names the processor rather than the command the author wrote: `\hypersetup` yields "Paragraph ended before `\kv@processor@default` was complete". This rule points to the source of that error.
+
+The scope follows compilation checks: a blank line *nested* inside a value's brace group (`\tikzset{aa/.style={draw,\n\nthick}}`) compiles cleanly and is not flagged. An unclosed `{` is left to the parser's diagnostic. The rule consults only hand-curated signatures. The safe autofix removes the blank line and preserves the following indentation. It changes only whitespace, and `ContentKind::Keyval` establishes that the processor strips spaces around entries.
 
 This rule is **enabled by default**.
 

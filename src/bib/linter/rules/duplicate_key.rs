@@ -32,11 +32,11 @@ impl BibRule for DuplicateKey {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a cite key defined by more than one entry in the same `.bib` \
-         file. Keys are compared case-insensitively, matching BibTeX, which \
-         silently keeps only one of the colliding entries; every definition \
-         after the first is flagged. No autofix: resolving the collision \
-         (rename vs delete) is the author's call."
+        "Flag a citation key defined by more than one entry in the same `.bib` file. \
+         Keys are compared case-insensitively, matching BibTeX, which silently keeps \
+         only one of the colliding entries. Every definition after the first is \
+         flagged. No autofix is offered because the author must choose whether to \
+         rename or delete an entry."
     }
 
     fn examples(&self) -> &'static [Example] {

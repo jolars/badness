@@ -1,13 +1,16 @@
-//! `hard-coded-reference`: a literal cross-reference like `Figure 3`, `Table~1`,
-//! or `Section 2` written in prose instead of `\ref`/`\cref` to a `\label`
-//! (textidote sh:hcfig/hctab/hcsec).
+//! `hard-coded-reference`: a possible literal cross-reference like `Figure 3`,
+//! `Table~1`, or `Section 2` written in prose instead of `\ref`/`\cref` to a
+//! `\label` (textidote sh:hcfig/hctab/hcsec).
 //!
 //! Hard-coding the number defeats LaTeX's automatic numbering: renumbering a
 //! float or reordering sections silently breaks the reference, and the reader
 //! loses the hyperlink. The convention is `\cref{fig:x}` (or `Figure~\ref{fig:x}`)
 //! so the number tracks the target.
 //!
-//! **Report-only, heuristic.** The rule ships no autofix: the correct rewrite
+//! **Opt-in, report-only, heuristic.** Prose alone cannot establish whether a
+//! numbered reference points into this document or external work, such as
+//! `Bob's Lemma~1`. The rule is disabled by default because that ambiguity is
+//! common in valid prose. The rule ships no autofix: the correct rewrite
 //! needs the *label* the number refers to, which is nowhere in the text, so
 //! there is nothing to synthesize (tenet 1 -- a fix owes correctness by
 //! construction, and we cannot meet that here). It only reports the finding.
@@ -85,13 +88,19 @@ impl Rule for HardCodedReference {
         Severity::Warning
     }
 
+    fn default_enabled(&self) -> bool {
+        false
+    }
+
     fn description(&self) -> &'static str {
-        "Flag a literal cross-reference in prose, such as `Figure 3`, `Table~1`, or \
-         `Section 2`, in place of a `\\ref` or `\\cref` to a `\\label` (textidote \
-         sh:hcfig/hctab/hcsec). Hard-coding the number defeats LaTeX's automatic \
-         numbering: renumbering a float or reordering sections silently breaks the \
-         reference and drops the hyperlink. No autofix is offered because the correct \
-         rewrite needs a label that the text does not supply.\n\nThe rule flags only a \
+        "Flag a possible hard-coded cross-reference in prose, such as `Figure 3`, \
+         `Table~1`, or `Section 2` (textidote sh:hcfig/hctab/hcsec). If the reference \
+         points into this document, use `\\ref` or `\\cref` to a `\\label` so the \
+         number tracks its target and the reference can carry a hyperlink.\n\nThe \
+         rule is opt-in because prose alone cannot distinguish local references \
+         from valid references to external work, such as `Bob's Lemma~1` or \
+         `Lemma~1 in Bob's paper`. No autofix is offered because the correct rewrite \
+         needs a label that the text does not supply.\n\nThe rule flags only a \
          capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) matched \
          as a whole word and followed by an Arabic number across one space or a tie \
          (`~`). It leaves plurals, lowercase words, `Figure~\\ref{x}`, and `Figure \
@@ -180,7 +189,7 @@ impl Rule for HardCodedReference {
             start,
             end,
             message: format!(
-                "hard-coded reference `{phrase}`; use `\\ref`/`\\cref` to a `\\label` so the number stays in sync"
+                "possible hard-coded reference `{phrase}`; if this refers to this document, use `\\ref` or `\\cref`"
             ),
             fix: None,
             related: Vec::new(),

@@ -4,11 +4,13 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `hard-coded-reference`
 
-Flag a literal cross-reference in prose, such as `Figure 3`, `Table~1`, or `Section 2`, in place of a `\ref` or `\cref` to a `\label` (textidote sh:hcfig/hctab/hcsec). Hard-coding the number defeats LaTeX's automatic numbering: renumbering a float or reordering sections silently breaks the reference and drops the hyperlink. No autofix is offered because the correct rewrite needs a label that the text does not supply.
+Flag a possible hard-coded cross-reference in prose, such as `Figure 3`, `Table~1`, or `Section 2` (textidote sh:hcfig/hctab/hcsec). If the reference points into this document, use `\ref` or `\cref` to a `\label` so the number tracks its target and the reference can carry a hyperlink.
+
+The rule is opt-in because prose alone cannot distinguish local references from valid references to external work, such as `Bob's Lemma~1` or `Lemma~1 in Bob's paper`. No autofix is offered because the correct rewrite needs a label that the text does not supply.
 
 The rule flags only a capitalized reference word (`Figure`, `Table`, `Section`, `Eq.`, ...) matched as a whole word and followed by an Arabic number across one space or a tie (`~`). It leaves plurals, lowercase words, `Figure~\ref{x}`, and `Figure three` alone. It also skips citation locators (`\cite[Section~8.1]{...}`, which refers to external work), environment titles (`\begin{thm}[Conway's Theorem 0]`, a proper name), and description-list captions (`\item[Part 3.]`). It never touches math, comments, or verbatim content.
 
-This rule is **enabled by default**.
+This rule is **disabled by default**; enable it with `select`.
 
 A hard-coded figure number instead of a cross-reference:
 
@@ -21,7 +23,7 @@ warning: hard-coded-reference
  --> example.tex:1:5
   |
 1 | See Figure 3 for the results.
-  |     ^^^^^^^^ hard-coded reference `Figure 3`; use `\ref`/`\cref` to a `\label` so the number stays in sync
+  |     ^^^^^^^^ possible hard-coded reference `Figure 3`; if this refers to this document, use `\ref` or `\cref`
 ```
 
 Even tied with `~`, the number is still hard-coded:
@@ -35,5 +37,5 @@ warning: hard-coded-reference
  --> example.tex:1:1
   |
 1 | Table~1 lists the parameters.
-  | ^^^^^^^ hard-coded reference `Table~1`; use `\ref`/`\cref` to a `\label` so the number stays in sync
+  | ^^^^^^^ possible hard-coded reference `Table~1`; if this refers to this document, use `\ref` or `\cref`
 ```

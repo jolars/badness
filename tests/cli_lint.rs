@@ -128,6 +128,43 @@ fn dash_length_is_disabled_by_default_and_selectable() {
 }
 
 #[test]
+fn hard_coded_reference_is_disabled_by_default_and_selectable() {
+    let dir = repo_dir();
+    let source = "Bob's Lemma~1 matches what we have here.\nSee Figure 3 for the results.\n";
+    std::fs::write(dir.path().join("doc.tex"), source).unwrap();
+
+    let default = lint(dir.path(), &["--output=json", "doc.tex"], None);
+    assert!(default.status.success());
+    assert_eq!(String::from_utf8(default.stdout).unwrap(), "[]\n");
+
+    let selected = lint(
+        dir.path(),
+        &[
+            "--output=json",
+            "--select",
+            "hard-coded-reference",
+            "doc.tex",
+        ],
+        None,
+    );
+    assert_eq!(selected.status.code(), Some(1));
+    let findings: serde_json::Value = serde_json::from_slice(&selected.stdout).unwrap();
+    let findings = findings.as_array().unwrap();
+    assert_eq!(findings.len(), 2);
+    for (finding, phrase) in findings.iter().zip(["Lemma~1", "Figure 3"]) {
+        assert_eq!(finding["rule"], "hard-coded-reference");
+        assert_eq!(finding["severity"], "warning");
+        assert_eq!(
+            finding["message"],
+            format!(
+                "possible hard-coded reference `{phrase}`; if this refers to this document, use `\\ref` or `\\cref`"
+            ),
+        );
+        assert!(finding.get("fix").is_none());
+    }
+}
+
+#[test]
 fn json_reports_findings_with_fix_on_stdout() {
     let dir = repo_dir();
     std::fs::write(dir.path().join("doc.tex"), FIXABLE).unwrap();

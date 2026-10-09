@@ -1,15 +1,11 @@
 {
   "manifest-version": 1,
-  "baseline-sha": "d8d4531175eb718474be51dfbe5a8bcc8fee676b",
+  "baseline-sha": "4a47e146fd3d6242910d4653e0ae66328a192517",
   "release-targets": [
     {
       "path": ".",
-      "version": "0.27.0",
-      "tag": "v0.27.0",
-      "dependencies": [
-        "crates/badness-formatter",
-        "crates/badness-parser"
-      ]
+      "version": "0.28.0",
+      "tag": "v0.28.0"
     },
     {
       "path": "crates/badness-formatter",
@@ -26,8 +22,8 @@
     },
     {
       "path": "editors/code",
-      "version": "0.27.0",
-      "tag": "badness-code-v0.27.0",
+      "version": "0.28.0",
+      "tag": "badness-code-v0.28.0",
       "dependencies": [
         "."
       ]
@@ -36,30 +32,13 @@
   "pending-release-targets": [
     {
       "path": ".",
-      "version": "0.27.0",
-      "tag": "v0.27.0",
-      "dependencies": [
-        "crates/badness-formatter",
-        "crates/badness-parser"
-      ]
-    },
-    {
-      "path": "crates/badness-formatter",
-      "version": "0.10.2",
-      "tag": "badness-formatter-v0.10.2",
-      "dependencies": [
-        "crates/badness-parser"
-      ]
-    },
-    {
-      "path": "crates/badness-parser",
-      "version": "0.11.1",
-      "tag": "badness-parser-v0.11.1"
+      "version": "0.28.0",
+      "tag": "v0.28.0"
     },
     {
       "path": "editors/code",
-      "version": "0.27.0",
-      "tag": "badness-code-v0.27.0",
+      "version": "0.28.0",
+      "tag": "badness-code-v0.28.0",
       "dependencies": [
         "."
       ]

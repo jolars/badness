@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.28.0](https://github.com/jolars/badness/compare/v0.27.0...v0.28.0) (2026-10-09)
+
+### Features
+
+- **lsp:** add code action for inlining `\input` calls ([`11d0728`](https://github.com/jolars/badness/commit/11d07287b4491547316fa5776d71bff51e1a6755))
+
+### Bug Fixes
+
+- make `hard-coded-reference` opt-in ([`4a47e14`](https://github.com/jolars/badness/commit/4a47e146fd3d6242910d4653e0ae66328a192517))
+
 ## [0.27.0](https://github.com/jolars/badness/compare/v0.26.0...v0.27.0) (2026-10-08)
 
 ### Features

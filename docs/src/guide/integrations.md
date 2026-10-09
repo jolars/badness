@@ -146,9 +146,11 @@ Add settings under `badness`, keeping the `plugins` array created above:
 The plugin reads `dprint.json` and does not load `badness.toml`. Its keys use
 camelCase. See the [plugin's configuration
 reference](https://github.com/jolars/dprint-plugin-badness#configuration) for
-the supported settings. Leaving `wrap` unset preserves the default for each file
-kind: prose in `.tex` files reflows, while code files such as `.sty` and `.cls`
-preserve authored line breaks.
+the supported settings. The independently released plugin uses different
+wrapping defaults from the CLI. When `wrap` is unset, ordinary `.tex` files and
+`.bib` files reflow, while `.sty`, `.cls`, `.dtx`, `.ins`, and `*.code.tex`
+files preserve authored line breaks. Set `"wrap": "reflow"` under `badness` in
+`dprint.json` to match the CLI's default for every file kind.
 
 Use dprint's top-level `includes` and `excludes` for file selection; Badness's
 TOML exclusions do not apply. dprint also respects `.gitignore`. See [dprint's

@@ -34,8 +34,10 @@ print a single rule's description and examples from the terminal:
 badness lint --explain deprecated-command
 ```
 
-Every rule is on by default. Narrow the active set through the `[lint]` table in
-`badness.toml` or the matching `--select`/`--ignore` CLI flags; see the
+Most rules are on by default; the rule reference marks opt-in rules. Set
+`select` in the `[lint]` table in `badness.toml` or use `--select` to choose the
+active rules, including opt-in rules. An explicit selection replaces the default
+set. Use `ignore` or `--ignore` to disable rules from that set; see the
 [Configuration reference](../reference/configuration.md#lint).
 
 Suppress a rule at one site with a comment directive:

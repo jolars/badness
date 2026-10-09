@@ -306,8 +306,11 @@ greedy fill. (The soft target is not currently configurable.) With
 `line-width = 0`, `stable` retains authored breaks without balancing line
 lengths.
 
-When omitted, every file kind reflows—`.tex`, `.bib`, `.sty`, `.cls`, `.dtx`,
-and `.ins` alike. A file's extension is not a layout input.
+When `wrap` is omitted from `badness.toml`, the CLI defaults to reflow for every
+file kind—`.tex`, `.bib`, `.sty`, `.cls`, `.dtx`, and `.ins` alike. A file's
+extension does not determine the CLI's wrapping mode. The independently released
+[dprint plugin](../guide/integrations.md#dprint) has its own file-specific
+defaults; set `"wrap": "reflow"` in its configuration to match the CLI.
 
 Reflow is safe because structural checks determine whether content may move. In
 *every* wrap mode, the formatter preserves anything it cannot lay out without

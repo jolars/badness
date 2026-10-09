@@ -119,6 +119,98 @@ pub(crate) fn table_column_actions(
     .collect()
 }
 
+/// Inline one literal input at the request start, using the caller's file view.
+pub(crate) fn inline_input_actions(
+    root: &SyntaxNode,
+    text: &TextBuffer,
+    uri: &Uri,
+    path: &Path,
+    request_range: Range,
+    resolve: &dyn Fn(&Path) -> Option<String>,
+) -> CodeActionResponse {
+    use crate::project::{IncludeKind, IncludeTarget, collect_include_edges};
+
+    let build = || {
+        if crate::semantic::scan_definitions(root)
+            .command("input")
+            .is_some()
+        {
+            return None;
+        }
+        let idx = text.line_index();
+        let offset = TextSize::try_from(
+            idx.offset_at(request_range.start.line, request_range.start.character),
+        )
+        .ok()?;
+        let command = root
+            .descendants()
+            .filter_map(Command::cast)
+            .filter(|command| command.name().as_deref() == Some("input"))
+            .filter(|command| command.syntax().text_range().contains_inclusive(offset))
+            .min_by_key(|command| command.syntax().text_range().len())?;
+        let group = children::<Group>(command.syntax()).next()?;
+        if group.inner_source().trim().is_empty()
+            || group.syntax().last_token()?.kind() != SyntaxKind::R_BRACE
+        {
+            return None;
+        }
+        let span = rowan::TextRange::new(
+            command.syntax().text_range().start(),
+            group.syntax().text_range().end(),
+        );
+        if !span.contains_inclusive(offset)
+            || command
+                .syntax()
+                .children_with_tokens()
+                .take_while(|element| {
+                    element.text_range().start() < group.syntax().text_range().start()
+                })
+                .any(|element| {
+                    !matches!(
+                        element.kind(),
+                        SyntaxKind::CONTROL_WORD | SyntaxKind::WHITESPACE
+                    )
+                })
+        {
+            return None;
+        }
+        let edge = collect_include_edges(command.syntax(), path.parent())
+            .into_iter()
+            .find(|edge| edge.kind == IncludeKind::Input)?;
+        let IncludeTarget::Path(target) = edge.target else {
+            return None;
+        };
+        if target == path {
+            return None;
+        }
+        let mut content = resolve(&target)?;
+        // EOF separates tokens and ends comments in the original input file.
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        Some(CodeActionOrCommand::CodeAction(CodeAction {
+            title: "Inline input file".to_string(),
+            kind: Some(CodeActionKind::REFACTOR_INLINE),
+            edit: Some(WorkspaceEdit {
+                changes: Some(HashMap::from([(
+                    uri.clone(),
+                    vec![TextEdit {
+                        range: byte_range_to_lsp(
+                            &idx,
+                            usize::from(span.start()),
+                            usize::from(span.end()),
+                        ),
+                        new_text: content,
+                    }],
+                )])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+    };
+    build().into_iter().collect()
+}
+
 fn table_column_insertions(
     root: &SyntaxNode,
     text: &str,
@@ -602,6 +694,81 @@ mod tests {
             )),
             "unresolved cross-file fix must not be offered"
         );
+    }
+
+    fn inline(src: &str, character: u32, content: Option<&str>) -> Option<(CodeAction, String)> {
+        let root = crate::parser::parse(src).syntax();
+        let buffer = buf(src);
+        let cursor = Range::new(Position::new(0, character), Position::new(0, character));
+        let mut actions = inline_input_actions(
+            &root,
+            &buffer,
+            &uri(),
+            Path::new("/main.tex"),
+            cursor,
+            &|path| {
+                assert_eq!(path, Path::new("/oracle-numerics.tex"));
+                content.map(str::to_string)
+            },
+        );
+        let CodeActionOrCommand::CodeAction(action) = actions.pop()? else {
+            return None;
+        };
+        let edit = &action.edit.as_ref()?.changes.as_ref()?[&uri()][0];
+        let idx = buffer.line_index();
+        let mut result = src.to_string();
+        result.replace_range(
+            idx.offset_at(edit.range.start.line, edit.range.start.character)
+                ..idx.offset_at(edit.range.end.line, edit.range.end.character),
+            &edit.new_text,
+        );
+        Some((action, result))
+    }
+
+    #[test]
+    fn inline_input_replaces_only_the_input_argument() {
+        let (action, output) =
+            inline("é \\input{oracle-numerics}{next}\r\n", 4, Some("α\r\n")).unwrap();
+        assert_eq!(action.title, "Inline input file");
+        assert_eq!(action.kind, Some(CodeActionKind::REFACTOR_INLINE));
+        assert_eq!(
+            inline("\\input{./oracle-numerics.tex}", 3, Some("body\n"))
+                .unwrap()
+                .1,
+            "body\n"
+        );
+        assert_eq!(output, "é α\r\n{next}\r\n");
+        assert_eq!(
+            inline("\\input{oracle-numerics}tail", 3, Some("% comment"))
+                .unwrap()
+                .1,
+            "% comment\ntail"
+        );
+        assert_eq!(
+            inline("\\input{oracle-numerics}", 3, Some("")).unwrap().1,
+            ""
+        );
+    }
+
+    #[test]
+    fn inline_input_declines_unproved_targets() {
+        for (source, cursor) in [
+            ("outside \\input{oracle-numerics}", 0),
+            ("\\input{oracle-numerics", 3),
+            ("\\input{\\filename}", 3),
+            ("\\input[option]{oracle-numerics}", 3),
+            ("\\input% comment\n{oracle-numerics}", 3),
+            (
+                "\\renewcommand{\\input}[1]{other} \\input{oracle-numerics}",
+                36,
+            ),
+            ("\\input{oracle-numerics}{next}", 25),
+        ] {
+            assert!(inline(source, cursor, Some("body")).is_none(), "{source}");
+        }
+        assert!(inline("\\input{oracle-numerics}", 3, None).is_none());
+        assert!(inline("\\input{main}", 3, Some("body")).is_none());
+        assert!(inline("\\input{}", 3, Some("body")).is_none());
     }
 
     fn apply_table_action(src: &str, line: u32, character: u32) -> Option<(CodeAction, String)> {

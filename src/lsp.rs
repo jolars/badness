@@ -4249,6 +4249,24 @@ fn run_code_action(
         let parsed = parse_with_declarations(text, kind.lex_config(), snapshot.declarations());
         let root = SyntaxNode::new_root(parsed.green);
         actions.extend(code_action::table_column_actions(&root, text, uri, range));
+        if code_action_kind_requested(&CodeActionKind::REFACTOR_INLINE, only)
+            && snapshot.declarations().as_db().command("input").is_none()
+        {
+            let resolve_input = |target: &Path| {
+                snapshot
+                    .lookup_file(target)
+                    .map(|file| snapshot.file_text(file).to_string())
+                    .or_else(|| std::fs::read_to_string(target).ok())
+            };
+            actions.extend(code_action::inline_input_actions(
+                &root,
+                text,
+                uri,
+                path,
+                range,
+                &resolve_input,
+            ));
+        }
     }
     actions.retain(|action| match action {
         CodeActionOrCommand::CodeAction(action) => action

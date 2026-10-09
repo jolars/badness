@@ -1397,6 +1397,83 @@ fn lsp_code_action_quickfix() {
 }
 
 #[test]
+fn lsp_code_action_inlines_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let target = dir.path().join("oracle-numerics.tex");
+    std::fs::write(&main, "\\input{oracle-numerics}\n").unwrap();
+    std::fs::write(&target, "disk contents\n").unwrap();
+    let uri: Uri = path_to_file_uri(&main);
+    let target_uri: Uri = path_to_file_uri(&target);
+    let (client, server_thread) = start_server(None);
+    did_open(&client, &uri, 1, "\\input{oracle-numerics}\n");
+    let _ = recv_diagnostics(&client);
+    for (id, kind) in [
+        (2, CodeActionKind::REFACTOR),
+        (3, CodeActionKind::REFACTOR_INLINE),
+        (4, CodeActionKind::QUICKFIX),
+    ] {
+        if id == 3 {
+            did_open(&client, &target_uri, 1, "unsaved α\n");
+            let _ = recv_diagnostics(&client);
+        }
+        send_request(
+            &client,
+            id,
+            "textDocument/codeAction",
+            serde_json::to_value(CodeActionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                range: Range::new(Position::new(0, 3), Position::new(0, 3)),
+                context: CodeActionContext {
+                    only: Some(vec![kind]),
+                    ..Default::default()
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .unwrap(),
+        );
+        let resp = loop {
+            match recv(&client) {
+                Message::Response(response) => break response,
+                Message::Notification(notification)
+                    if notification.method == "textDocument/publishDiagnostics" => {}
+                other => panic!("expected a code-action response, got {other:?}"),
+            }
+        };
+        let actions: Vec<CodeActionOrCommand> =
+            serde_json::from_value(resp.result().unwrap()).unwrap();
+        let action = actions.iter().find_map(|action| match action {
+            CodeActionOrCommand::CodeAction(action) if action.title == "Inline input file" => {
+                Some(action)
+            }
+            _ => None,
+        });
+        if id != 4 {
+            let action = action.expect("inline refactoring");
+            assert_eq!(action.kind, Some(CodeActionKind::REFACTOR_INLINE));
+            let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
+            assert_eq!(changes.len(), 1);
+            assert_eq!(
+                changes[&uri],
+                vec![lsp_types::TextEdit {
+                    range: Range::new(Position::new(0, 0), Position::new(0, 23)),
+                    new_text: if id == 2 {
+                        "disk contents\n"
+                    } else {
+                        "unsaved α\n"
+                    }
+                    .to_string(),
+                }]
+            );
+        } else {
+            assert!(action.is_none());
+        }
+    }
+    shutdown(&client, server_thread);
+}
+
+#[test]
 fn lsp_code_action_adds_a_table_column() {
     let (client, server_thread) = start_server(None);
     let uri: Uri = "file:///table.tex".parse().unwrap();

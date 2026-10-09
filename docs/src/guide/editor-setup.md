@@ -265,6 +265,21 @@ One caveat inherent to SyncTeX: it maps the source **as it was compiled**. With
 unsaved edits, buffer line numbers and PDF line numbers drift apart until you
 rebuild.
 
+## Inlining an input file
+
+With the cursor on `\input{filename}`, **Inline input file** replaces the
+statement with the referenced file's contents. This `refactor.inline` action
+resolves paths relative to the current file and defaults a missing extension to
+`.tex`. It uses unsaved editor contents when available and otherwise reads the
+file from disk. It preserves following groups and adds a final newline when
+needed to separate inserted tokens and comments from following text. The
+referenced file stays in place.
+
+The action requires a complete, literal brace argument. It is withheld for
+missing files, self-inputs, comments between the command and its argument, and
+locally redefined or project-declared `\input` commands. It expands only the
+selected input; nested inputs remain as written.
+
 ## Table refactoring
 
 With the cursor inside a statically understood `tabular`, `tabular*`, or `array`

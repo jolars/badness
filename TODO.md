@@ -634,9 +634,9 @@ a file and a line, never a coordinate.
 
 ## Documentation site
 
-- [ ] Split `docs/src/guide/editor-setup.md` into focused editor recipes and a
-  short overview, separating capability lookup from setup instructions.
-  Preserve published URLs and anchors.
+- [x] Keep editor recipes together in `docs/src/guide/editor-setup.md`; move
+  language-server capabilities and shared editor configuration to dedicated
+  guide and reference pages. Preserve published URLs and anchors.
 - [ ] Shorten `docs/src/guide/getting-started.md` by moving detailed usage and
   output explanations to Formatting and Linting, then linking to those guides.
   Update the current Formatting links back to Getting Started at the same time.

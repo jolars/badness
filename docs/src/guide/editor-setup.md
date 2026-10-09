@@ -10,283 +10,18 @@ The server speaks the Language Server Protocol over **stdio**. Point your
 editor's LSP client at the `badness` binary with the `lsp` argument and
 associate it with LaTeX (`.tex`) and BibTeX (`.bib`) files.
 
-Settings can be supplied as `initializationOptions` at startup or through
-`workspace/didChangeConfiguration`, either as a bare object or namespaced under
-a `badness` key.
+<span id="command-completion"></span> <span id="latex3-completion"></span>
+<span id="renaming-source-files"></span>
+<span id="inlining-an-input-file"></span> <span id="table-refactoring"></span>
 
-**Formatter widths**: `lineWidth` and `indentWidth`. They act as a fallback: a
-discovered `badness.toml` always wins outright, and absent one, your editor's
-tab size (sent with each formatting request) overrides the indent width.
+See [Language Server](language-server.md) for capabilities and feature behavior.
 
-The language server is also the sole consumer of the `[build]` section of
-`badness.toml`, which locates the compile's `.aux` artifacts; see the
-[Configuration reference](../reference/configuration.md#build).
+<span id="texmf-discovery"></span> <span id="forward-and-inverse-search"></span>
+<span id="configuring-the-viewer"></span>
+<span id="triggering-forward-search"></span> <span id="inverse-search"></span>
 
-## Command completion
-
-Command suggestions include short signatures, such as `\section[]{}` and
-`\vspace{}`, before you select an item. Clients that support completion label
-details can display the argument suffix beside the command name. Other clients
-receive the full signature in the completion item's `detail` field. Full
-documentation loads when the client resolves the selected item.
-
-Signatures use the document's definitions, loaded local packages, and Badness's
-built-in data. They display the known brace and bracket argument slots; they do
-not describe every TeX argument protocol. The signature display does not insert
-arguments.
-
-Known math and text symbols and logos, such as `\omega`, `\hbar`, `\copyright`,
-and `\LaTeX`, have the completion kind `Constant`. Known argument-free control,
-spacing, and declaration commands, such as `\newpage`, `\par`, `\quad`, and
-`\bfseries`, have kind `Keyword`. Argument-taking commands such as `\vspace`
-retain `Function`. Editors can use these distinctions for icons and automatic
-brackets; for example, blink.cmp can insert braces after `\vspace` while leaving
-`\omega` and `\newpage` bare. Recognized definitions in the document or loaded
-local packages, and explicit project declarations, override the built-in
-classification. Commands without a curated classification keep their existing
-completion kinds; an empty signature alone does not establish zero arguments.
-
-## LaTeX3 completion
-
-Badness completes expl3 functions, variables, and constants inside
-`\ExplSyntaxOn` regions, after `\ProvidesExplPackage`, `\ProvidesExplClass`, or
-`\ProvidesExplFile`, and inside recognized expl3 macrocode regions in `.dtx`
-files. For example, `\tl_` offers `\tl_set:Nn`, and `\l_tmpa_` offers scratch
-variables. The built-in catalog ships with Badness and needs no TeX
-installation.
-
-Completion also includes literal definitions in the current file and loaded
-local packages and classes, including `\cs_new:Npn` functions, variable and
-constant declarations, conditional forms, and generated variants. Badness does
-not expand macros to discover computed names. It skips incomplete definitions
-and definitions stored as token-list data. These names support completion; expl3
-definition navigation and argument signature help are not yet provided.
-
-## Renaming source files
-
-Invoke your editor's LSP rename command inside a literal source path, such as
-`\input{chapters/introduction}`. Badness renames the file and updates its
-references across the discovered workspace. This also works with `\include`,
-`\subfile`, `\subfileinclude`, `\import`, `\subimport`, `\loadglsentries`, and
-the parent path in `\documentclass[...]{subfiles}`. Literal `\includeonly` lists
-are updated along with their targets.
-
-The new name uses the same base directory as the original argument. For example,
-renaming `chapters/introduction` to `appendix` moves the file to `appendix.tex`
-beside the referring document. Use `chapters/appendix` to keep it in the same
-directory. Import commands use their directory argument as the base. Badness
-preserves the file extension when you omit it and keeps each reference's
-extension spelling when it still resolves correctly. Renaming an imported file
-preserves the import directory argument unless that directory itself moves.
-
-Moves stay within the same workspace root and never overwrite existing files or
-destination buffers. New parent directories are allowed when the editor creates
-them while applying the file operation; Neovim supports this. Without workspace
-folders, Badness uses the initiating document's directory as the boundary.
-
-File explorers can also rename source files and folders through
-`workspace/willRenameFiles` and `workspace/didRenameFiles`. Your explorer must
-send these requests and notifications. When files move, Badness adjusts their
-recognized references, including references to assets inside moved folders.
-Cursor rename includes its reference edits even when explorer hooks are enabled.
-Unsaved editor buffers take precedence over disk contents. Each referring file
-uses its own project's declarations and exclusions, including nested projects
-and other workspace folders.
-
-Badness declines moves across directories when a moved source contains relative
-file arguments. Their resolution can depend on the compilation directory or an
-import context, which cannot be inferred from the source's location alone. It
-also checks the compilation and import directories inherited through literal
-source loads. If a reference requires different edits in those contexts, Badness
-declines the rename, even when the referring file stays in place.
-
-File rename requires a client that supports LSP resource-rename operations.
-Dynamic paths, braceless inputs, `\graphicspath`, and symlink aliases are not
-resolved for rename. Source and destination paths cannot pass through symlinks
-inside the workspace, and new names cannot contain quotation marks or TeX
-delimiters. Badness also declines names containing spaces when a reference uses
-`\usepackage`, `\RequirePackage`, or `\bibliography`, which strip those spaces.
-Unresolved references and files excluded from discovery remain unchanged.
-Installed TEXMF files and navigation-only `.dtx` fallbacks are never renamed.
-Renaming directly from bibliography, graphics, package, or class arguments is
-not supported.
-
-## TEXMF discovery
-
-How the language server discovers the installed TeX tree for package resolution:
-document links, package hover, go-to-definition, and installed-set completion.
-Where a TeX installation lives is a fact about the machine, not the project, so
-these settings come from the editor rather than `badness.toml`, and they never
-affect `badness format` or `badness lint`, whose output stays a pure function of
-the input regardless of what is installed.
-
-A `texmf` object with three keys, all optional:
-
-- `enabled` (boolean, default `true`): whether to scan the TEXMF tree at all.
-  When `false`, package resolution stays local to the document's directory.
-- `roots` (array of paths, default `[]`): extra TEXMF root directories to index
-  in addition to (and ahead of) the discovered ones. Useful for a non-standard
-  install that `kpsewhich` can't see.
-- `useKpsewhich` (boolean, default `true`): whether to shell out to `kpsewhich`
-  to discover the TEXMF tree roots. When `false`, discovery falls back to
-  default-path heuristics only.
-
-```json
-{ "texmf": { "enabled": true, "roots": ["/opt/texmf"], "useKpsewhich": true } }
-```
-
-## Forward and inverse search
-
-Jump between a source line and the matching place in the compiled PDF.
-
-**Badness never typesets, and it never reads a `.synctex.gz`.** Forward search
-works out three things — the file your cursor is in, the root document's PDF,
-and the line number — and hands them to a viewer you configure. Every
-SyncTeX-aware viewer (zathura, Okular, SumatraPDF, Skim) links libsynctex and
-does the mapping itself, which is why they all want a file and a line rather
-than a coordinate. Inverse search runs in the other direction and is started by
-the viewer.
-
-You need a PDF compiled with SyncTeX enabled — `latexmk -pdf -synctex=1`, or
-`-synctex=1` passed to `pdflatex`/`lualatex` directly. Badness will not run that
-for you; use your existing build setup, or an extension like LaTeX Workshop.
-
-### Configuring the viewer
-
-Which viewer is installed on your machine, and under what name, is a fact about
-the machine rather than the project — so these settings come from the editor,
-like [TEXMF discovery](#texmf-discovery), and not from `badness.toml`. Where the
-*PDF* lives is project data and belongs to the [`[build]`
-section](../reference/configuration.md#build) instead.
-
-A `forwardSearch` object:
-
-- `executable` (string): the viewer program. **Spawned directly, not through a
-  shell**, so it is a program name and never a command line — putting flags here
-  (`"zathura --synctex-forward"`) silently fails to launch. This is the most
-  common misconfiguration.
-- `args` (array of strings): the viewer's arguments. Required — there is no
-  useful default, since every viewer spells forward search differently. Without
-  it, forward search reports itself unconfigured.
-- `ipcDir` (path, optional): where inverse-search servers advertise themselves.
-  An escape hatch for containers and sandboxes; see below.
-
-Each argument may carry:
-
-  | Placeholder | Expands to                       |
-  | ----------- | -------------------------------- |
-  | `%f`        | the `.tex` file the cursor is in |
-  | `%p`        | the **root document's** PDF      |
-  | `%l`        | the line number, counting from 1 |
-  | `%%f`       | a literal `%f`                   |
-
-An argument wrapped entirely in `"` is passed through with the quotes stripped
-and nothing substituted — the escape hatch when a viewer needs a literal `%`.
-
-Recipes, matching texlab's, so an existing configuration ports unchanged:
-
-  | Viewer     | `executable`     | `args`                                                     |
-  | ---------- | ---------------- | ---------------------------------------------------------- |
-  | zathura    | `zathura`        | `["--synctex-forward", "%l:1:%f", "%p"]`                   |
-  | Okular     | `okular`         | `["--unique", "file:%p#src:%l%f"]`                         |
-  | SumatraPDF | `SumatraPDF`     | `["-reuse-instance", "%p", "-forward-search", "%f", "%l"]` |
-  | Skim       | `displayline`    | `["%l", "%p", "%f"]`                                       |
-  | Evince     | `evince-synctex` | `["-f", "%l", "%p", "\"code -g %f:%l\""]`                  |
-  | qpdfview   | `qpdfview`       | `["--unique", "%p#src:%f:%l:1"]`                           |
-
-```json
-{
-  "forwardSearch": {
-    "executable": "zathura",
-    "args": ["--synctex-forward", "%l:1:%f", "%p"]
-  }
-}
-```
-
-### Triggering forward search
-
-The server handles `textDocument/forwardSearch`, a custom request taking the
-standard `{ textDocument, position }` params — the same method name and shape
-texlab uses, so a client written for texlab works unchanged. It never fails the
-request; it answers with a status:
-
-  | Status | Meaning                                                              |
-  | ------ | -------------------------------------------------------------------- |
-  | `0`    | the viewer was launched                                              |
-  | `1`    | the viewer would not start                                           |
-  | `2`    | no PDF on disk, or the buffer has no path — build the document first |
-  | `3`    | no viewer configured                                                 |
-
-The capability is advertised as `experimental.textDocumentForwardSearch`.
-
-If forward search opens the wrong PDF, or reports status `2` on a project that
-has been built, the root document is probably not being found — see
-[`root`](../reference/configuration.md#root) in the `[build]` reference.
-
-### Inverse search
-
-Configure your viewer to run:
-
-```sh
-badness inverse-search --input "%f" --line "%l"
-```
-
-substituting the viewer's own placeholders. For zathura that is:
-
-```sh
-zathura --synctex-editor-command "badness inverse-search --input %{input} --line %{line}"
-```
-
-Use `--line0` instead if your viewer counts lines from zero. (`--line1` is
-accepted as a synonym for `--line`, so a texlab configuration ports directly.)
-
-The command finds the language server whose workspace contains the file and asks
-it to reveal the position, so **an editor must already have that project open**,
-and its LSP client must support `window/showDocument`. Servers whose client does
-not support it never register, which is why inverse search silently does nothing
-in an editor lacking it — the command says so when nothing is listening.
-
-With several editor windows open, the server whose workspace root contains the
-file wins; the longest matching root is preferred, so nested projects resolve
-deterministically.
-
-Servers advertise themselves in `$BADNESS_IPC_DIR`, else a per-user directory
-under your runtime directory (`$XDG_RUNTIME_DIR`), else the temporary directory.
-The `forwardSearch.ipcDir` setting overrides all of these — useful when the
-viewer and the server see different filesystems, as in a container or a remote
-development setup. Keep it short: a Unix socket path cannot exceed about 100
-bytes, and badness says so explicitly in its log if yours does. On a system with
-no `$XDG_RUNTIME_DIR` and a `/tmp` shared between users, that last fallback is
-worth knowing about: the directory is created `0700`, the advertisements `0600`,
-and badness ignores any advertisement it does not own, so another user can
-neither read nor impersonate one.
-
-One caveat inherent to SyncTeX: it maps the source **as it was compiled**. With
-unsaved edits, buffer line numbers and PDF line numbers drift apart until you
-rebuild.
-
-## Inlining an input file
-
-With the cursor on `\input{filename}`, **Inline input file** replaces the
-statement with the referenced file's contents. This `refactor.inline` action
-resolves paths relative to the current file and defaults a missing extension to
-`.tex`. It uses unsaved editor contents when available and otherwise reads the
-file from disk. It preserves following groups and adds a final newline when
-needed to separate inserted tokens and comments from following text. The
-referenced file stays in place.
-
-The action requires a complete, literal brace argument. It is withheld for
-missing files, self-inputs, comments between the command and its argument, and
-locally redefined or project-declared `\input` commands. It expands only the
-selected input; nested inputs remain as written.
-
-## Table refactoring
-
-With the cursor inside a statically understood `tabular`, `tabular*`, or `array`
-environment, the **Add column at end** code action appends a centered `c` column
-to the preamble and an empty trailing cell to every row. The action is withheld
-when the preamble uses unknown column types, a row has an ambiguous width, or
-the environment has been redefined, so it never applies a partial table rewrite.
+See the [Editor Configuration reference](../reference/editor-configuration.md)
+for shared settings, their precedence, TEXMF discovery, and PDF search.
 
 ## Neovim
 
@@ -302,8 +37,10 @@ vim.lsp.config.badness = {
 vim.lsp.enable("badness")
 ```
 
-The `init_options` block is optional; omit it to use the defaults or a
-`badness.toml`.
+See the [Editor Configuration
+reference](../reference/editor-configuration.md#supplying-settings) for shared
+settings and their precedence. The `init_options` block is optional; omit it to
+use the defaults or a `badness.toml`.
 
 ## VS Code
 
@@ -412,8 +149,10 @@ Zed's `settings.json`:
 To retain Texlab alongside Badness for LaTeX files, list `"texlab"` after
 `"badness-language-server"` in the `LaTeX` settings.
 
-Editor settings go under the server ID. For example, these formatting settings
-apply when the project has no `badness.toml`:
+Shared [editor
+settings](../reference/editor-configuration.md#supplying-settings) go under the
+server ID. For example, these formatting settings apply when the project has no
+`badness.toml`:
 
 ```json
 {

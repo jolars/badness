@@ -490,7 +490,7 @@ ignore = ["missing-nonbreaking-space"]
 Where the TeX compiler leaves its artifacts, and which file it was run on. Read
 by the **language server** only — it pulls resolved label and section numbers
 from the `.aux` files for hover and document symbols, and locates the compiled
-PDF for [forward search](../guide/editor-setup.md#forward-and-inverse-search).
+PDF for [forward search](editor-configuration.md#forward-and-inverse-search).
 Never read by the formatter or linter.
 
 ### `aux-dir`
@@ -765,4 +765,4 @@ end = ['\eea']
 > through your editor's LSP settings, not `badness.toml`. Where a TeX
 > installation lives is a fact about the machine, not the project, so it does
 > not belong in a file shared across contributors. See [Editor
-> Setup](../guide/editor-setup.md#texmf-discovery).
+> Configuration](editor-configuration.md#texmf-discovery).

@@ -144,7 +144,12 @@ fn check_rows(
                 }
                 cell.clear();
             }
-            SyntaxElement::Node(child) if child.kind() == SyntaxKind::LINE_BREAK => {
+            SyntaxElement::Node(child)
+                if child.kind() == SyntaxKind::LINE_BREAK
+                    || Command::cast(child.clone()).is_some_and(|command| {
+                        command.name().as_deref() == Some("tabularnewline")
+                    }) =>
+            {
                 finish_row(
                     rule,
                     &cell,
@@ -314,6 +319,67 @@ mod tests {
     #[test]
     fn permits_omitted_trailing_cells() {
         assert!(findings("\\begin{tabular}{lll}\n  a & b \\\\\n\\end{tabular}\n").is_empty());
+    }
+
+    #[test]
+    fn tabularnewline_separates_rows() {
+        for (name, preamble) in [
+            ("tabular", "{lp{5em}}"),
+            ("tabular*", "{4cm}{ll}"),
+            ("array", "{ll}"),
+        ] {
+            for ending in [
+                r"\tabularnewline",
+                r"\tabularnewline*",
+                r"\tabularnewline[2pt]",
+                r"\tabularnewline*[2pt]",
+            ] {
+                let src = format!(
+                    "\\begin{{{name}}}{preamble}\n  One & Two {ending} % row end\n  Three & Four\n\\end{{{name}}}\n"
+                );
+                assert!(findings(&src).is_empty(), "{src}");
+            }
+        }
+    }
+
+    #[test]
+    fn tabularnewline_resets_reported_and_declined_rows() {
+        let src = r"\begin{tabular}{ll}
+  a & b & c \tabularnewline
+  a & b \tabularnewline
+  \multicolumn{\n}{c}{a} & b \tabularnewline
+  a & b & c \tabularnewline
+\end{tabular}
+";
+        let out = findings(src);
+        assert_eq!(out.len(), 2);
+        let separators: Vec<_> = src.match_indices("& c").map(|(offset, _)| offset).collect();
+        assert_eq!(out.iter().map(|d| d.start).collect::<Vec<_>>(), separators);
+        assert!(out.iter().all(|d| &src[d.start..d.end] == "&"));
+    }
+
+    #[test]
+    fn tabularnewline_finishes_a_final_multicolumn() {
+        let src = r"\begin{tabular}{ll}
+  a & \multicolumn{2}{c}{b} \tabularnewline
+  a & b
+\end{tabular}
+";
+        let out = findings(src);
+        assert_eq!(out.len(), 1);
+        assert_eq!(&src[out[0].start..out[0].end], r"\multicolumn{2}{c}{b}");
+    }
+
+    #[test]
+    fn a_nested_tabularnewline_does_not_end_the_outer_row() {
+        let src = r"\begin{tabular}{ll}
+  a & {b \tabularnewline} & c
+\end{tabular}
+";
+        let out = findings(src);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].start, src.find("& c").unwrap());
+        assert_eq!(&src[out[0].start..out[0].end], "&");
     }
 
     #[test]

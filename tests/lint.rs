@@ -54,6 +54,23 @@ fn extra_alignment_tab_runs_through_the_public_driver() {
 }
 
 #[test]
+fn tabularnewline_does_not_cause_extra_alignment_tabs() {
+    let src = r"\documentclass{article}
+\begin{document}
+\begin{tabular}{lp{5em}}
+  One & Two \tabularnewline
+  Three & Four
+\end{tabular}
+\end{document}
+";
+    assert!(
+        !lint(src)
+            .iter()
+            .any(|(rule, _)| *rule == "extra-alignment-tab")
+    );
+}
+
+#[test]
 fn extra_math_linebreak_runs_through_the_public_driver() {
     let src = "\\begin{align}\n  a &= b \\\\\n  \\intertext{hello world}\\\\\n  c &= d \\\\\n  e &= f \\\\\n\\end{align}\n";
     assert_eq!(

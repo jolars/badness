@@ -34,11 +34,20 @@ print a single rule's description and examples from the terminal:
 badness lint --explain deprecated-command
 ```
 
-Most rules are on by default; the rule reference marks opt-in rules. Set
-`select` in the `[lint]` table in `badness.toml` or use `--select` to choose the
-active rules, including opt-in rules. An explicit selection replaces the default
-set. Use `ignore` or `--ignore` to disable rules from that set; see the
-[Configuration reference](../reference/configuration.md#lint).
+Most rules are on by default; the rule reference marks opt-in rules. Use
+`extend-select` in the `[lint]` table in `badness.toml` to enable additional
+rules while keeping the defaults:
+
+```toml
+[lint]
+extend-select = ["dash-length"]
+```
+
+The CLI flag `--extend-select` adds to the configured list and can be repeated.
+Set `select` or use `--select` to replace the default set, then add rules with
+`extend-select`. An empty `select = []` leaves only those additional rules. Use
+`ignore` or `--ignore` to disable rules from either list; see the [Configuration
+reference](../reference/configuration.md#lint).
 
 Suppress a rule at one site with a comment directive:
 

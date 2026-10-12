@@ -20,6 +20,153 @@ const CLEAN: &str = "Nothing to see here.\n";
 const OPT_IN_DASH: &str = "A global--local search.\n";
 
 #[test]
+fn extend_select_adds_rules_and_ignore_takes_precedence() {
+    let dir = repo_dir();
+    std::fs::write(
+        dir.path().join("doc.tex"),
+        format!("{FIXABLE}{OPT_IN_DASH}"),
+    )
+    .unwrap();
+    for (config, flags, expected) in [
+        ("extend-select = []", vec![], vec!["ellipsis"]),
+        (
+            "extend-select = ['dash-length']",
+            vec![],
+            vec!["dash-length", "ellipsis"],
+        ),
+        (
+            "select = ['ellipsis']\nextend-select = ['dash-length', 'dash-length']",
+            vec![],
+            vec!["dash-length", "ellipsis"],
+        ),
+        (
+            "select = []\nextend-select = ['dash-length']",
+            vec![],
+            vec!["dash-length"],
+        ),
+        (
+            "extend-select = ['dash-length']\nignore = ['dash-length']",
+            vec![],
+            vec!["ellipsis"],
+        ),
+        (
+            "",
+            vec!["--extend-select", "dash-length"],
+            vec!["dash-length", "ellipsis"],
+        ),
+        (
+            "extend-select = ['dash-length']",
+            vec!["--select", "ellipsis"],
+            vec!["dash-length", "ellipsis"],
+        ),
+        (
+            "select = []\nextend-select = ['dash-length']",
+            vec![
+                "--extend-select",
+                "ellipsis",
+                "--extend-select",
+                "dash-length",
+            ],
+            vec!["dash-length", "ellipsis"],
+        ),
+        (
+            "",
+            vec!["--extend-select", "dash-length", "--ignore", "dash-length"],
+            vec!["ellipsis"],
+        ),
+    ] {
+        std::fs::write(
+            dir.path().join("badness.toml"),
+            format!("[lint]\n{config}\n"),
+        )
+        .unwrap();
+        let mut args = vec!["--output=json", "doc.tex"];
+        args.extend(flags);
+        let output = lint(dir.path(), &args, None);
+        assert_eq!(output.status.code(), Some(1), "{config}: {args:?}");
+        assert!(output.stderr.is_empty(), "{config}: {:?}", output.stderr);
+        let findings: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut rules: Vec<_> = findings
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["rule"].as_str().unwrap())
+            .collect();
+        rules.sort_unstable();
+        assert_eq!(rules, expected, "{config}: {args:?}");
+    }
+}
+
+#[test]
+fn extend_select_warns_once_for_unknown_rules() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("doc.tex"), CLEAN).unwrap();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[lint]\nextend-select = ['future-rule', 'future-rule']\nignore = ['future-rule']\n",
+    )
+    .unwrap();
+    let output = lint(
+        dir.path(),
+        &["--output=json", "--extend-select", "future-rule", "doc.tex"],
+        None,
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"[]\n");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "badness: warning: unknown lint rule `future-rule`\n"
+    );
+}
+
+#[test]
+fn extend_select_applies_fixes_from_additional_rules() {
+    let dir = repo_dir();
+    let path = dir.path().join("doc.tex");
+    std::fs::write(&path, FIXABLE).unwrap();
+    let output = lint(
+        dir.path(),
+        &[
+            "--select",
+            "duplicate-label",
+            "--extend-select",
+            "ellipsis",
+            "--fix",
+            "doc.tex",
+        ],
+        None,
+    );
+    assert!(output.status.success());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "Wait \\dots what\n");
+}
+
+#[test]
+fn extend_select_enables_bib_rules() {
+    let dir = repo_dir();
+    std::fs::write(
+        dir.path().join("badness.toml"),
+        "[lint]\nselect = []\nextend-select = ['missing-required-field']\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("refs.bib"),
+        "@article{key, title = {Example}}\n",
+    )
+    .unwrap();
+    let output = lint(dir.path(), &["--output=json", "refs.bib"], None);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let findings: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let findings = findings.as_array().unwrap();
+    assert!(!findings.is_empty());
+    assert!(
+        findings
+            .iter()
+            .all(|d| d["rule"] == "missing-required-field")
+    );
+}
+
+#[test]
 fn expl3_rules_are_selectable_report_only_and_default_enabled() {
     let dir = repo_dir();
     let source = "\\ExplSyntaxOn\n\

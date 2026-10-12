@@ -130,7 +130,10 @@ With paths, lints each file. Reads stdin when given `-`, or when paths are omitt
 :   Apply exclude patterns to files named explicitly on the command line too (they are normally always processed). For runners like pre-commit that pass staged files as arguments
 
 `--select <RULE>`
-:   Run only these rules (repeatable). Overrides `[lint] select` from `badness.toml` when given
+:   Set the base rule selection (repeatable). Overrides `[lint] select` from `badness.toml` when given
+
+`--extend-select <RULE>`
+:   Enable additional rules alongside `--select` or the defaults (repeatable). Added to `[lint] extend-select` from `badness.toml`
 
 `--ignore <RULE>`
 :   Disable these rules (repeatable). Overrides `[lint] ignore` from `badness.toml` when given

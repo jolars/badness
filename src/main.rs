@@ -189,6 +189,7 @@ fn main() -> ExitCode {
             exclude,
             force_exclude,
             select,
+            extend_select,
             ignore,
             explain,
             output,
@@ -214,11 +215,15 @@ fn main() -> ExitCode {
             if !select.is_empty() {
                 config.lint.select = Some(select);
             }
+            config.lint.extend_select.extend(extend_select);
             if !ignore.is_empty() {
                 config.lint.ignore = ignore;
             }
-            let (rules, unknown) =
-                RuleSelection::resolve(config.lint.select.as_deref(), &config.lint.ignore);
+            let (rules, unknown) = RuleSelection::resolve(
+                config.lint.select.as_deref(),
+                &config.lint.extend_select,
+                &config.lint.ignore,
+            );
             for id in &unknown {
                 eprintln!("badness: warning: unknown lint rule `{id}`");
             }
@@ -453,9 +458,9 @@ const STARTER_CONFIG: &str = "\
                           # auto keeps the endings each file was written with
 
 [lint]
-# select = [\"...\"]  # if set, only these rules run
-# ignore = []        # rules to disable
-# default-off rules remain available through select
+# select = [\"...\"]  # replaces the default rule set
+# extend-select = []  # adds rules to select or the defaults
+# ignore = []         # rules to disable, including extend-select
 
 # Where the compiler leaves its artifacts, and which file it ran on. Read by the
 # language server only: `.aux` for label/section numbers, the PDF for forward

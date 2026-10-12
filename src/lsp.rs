@@ -506,7 +506,7 @@ struct ResolvedSettings {
     /// Whether a `badness.toml` governed this resolution. When `true` the file
     /// config wins outright and a request's `tab_size` is ignored.
     config_present: bool,
-    /// The `[lint]` `select`/`ignore` selection (the default-enabled rules when
+    /// The `[lint]` rule selection (the default-enabled rules when
     /// no file has resolved settings).
     lint: LintConfig,
     /// The sibling-discovery exclude filter, rooted at the config's directory. The
@@ -714,7 +714,12 @@ impl ResolvedSettings {
     /// The active lint-rule set this config implies (unknown ids are dropped; the
     /// CLI surfaces them, the LSP has no good channel to yet).
     fn rule_selection(&self) -> RuleSelection {
-        RuleSelection::resolve(self.lint.select.as_deref(), &self.lint.ignore).0
+        RuleSelection::resolve(
+            self.lint.select.as_deref(),
+            &self.lint.extend_select,
+            &self.lint.ignore,
+        )
+        .0
     }
 }
 
@@ -8418,6 +8423,29 @@ mod tests {
     }
 
     #[test]
+    fn resolve_settings_applies_extend_select_and_ignore() {
+        for (base, ignore, defaults, dash) in [
+            ("", "", true, true),
+            ("select = []\n", "", false, true),
+            ("", "ignore = ['dash-length']\n", true, false),
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::write(
+                dir.path().join("badness.toml"),
+                format!("[lint]\n{base}extend-select = ['dash-length']\n{ignore}"),
+            )
+            .expect("write config");
+            let mut state = state_with_editor(EditorSettings::default());
+            let rules = state
+                .resolve_settings(&file_uri_in(dir.path()))
+                .rule_selection();
+            assert_eq!(rules.is_active("duplicate-label"), defaults);
+            assert_eq!(rules.is_active("dash-length"), dash);
+            assert!(rules.is_active("parse"));
+        }
+    }
+
+    #[test]
     fn resolve_settings_builds_exclude_filter_for_sibling_discovery() {
         // The resolved exclude filter is what `Worker::seed_dir` feeds to
         // `collect_lint_files`, so verify it prunes a configured directory while
@@ -8952,7 +8980,7 @@ mod tests {
             path: main.clone(),
             version: 1,
             kind: FileKind::Tex,
-            rules: RuleSelection::resolve(None, &[]).0,
+            rules: RuleSelection::resolve(None, &[], &[]).0,
         });
         // A higher version with identical bytes still supersedes diagnostics,
         // but performs no database write that could cancel either read.
@@ -8962,7 +8990,7 @@ mod tests {
             text: Arc::clone(&text),
             version: 2,
             kind: FileKind::Tex,
-            rules: RuleSelection::resolve(None, &[]).0,
+            rules: RuleSelection::resolve(None, &[], &[]).0,
             exclude: ExcludeFilter::none(),
             edits: None,
         });

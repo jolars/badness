@@ -201,10 +201,14 @@ pub enum Command {
         /// that pass staged files as arguments.
         #[arg(long)]
         force_exclude: bool,
-        /// Run only these rules (repeatable). Overrides `[lint] select` from
+        /// Set the base rule selection (repeatable). Overrides `[lint] select` from
         /// `badness.toml` when given.
         #[arg(long, value_name = "RULE")]
         select: Vec<String>,
+        /// Enable additional rules alongside `--select` or the defaults
+        /// (repeatable). Added to `[lint] extend-select` from `badness.toml`.
+        #[arg(long, value_name = "RULE")]
+        extend_select: Vec<String>,
         /// Disable these rules (repeatable). Overrides `[lint] ignore` from
         /// `badness.toml` when given.
         #[arg(long, value_name = "RULE")]

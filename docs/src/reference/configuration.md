@@ -22,8 +22,9 @@ Run `badness init` to write a commented starter file with defaults and examples.
 # line-ending = "auto"  # auto | lf | crlf | native
 
 [lint]
-# select = ["..."]  # if set, only these rules run
-# ignore = []       # rules to disable
+# select = ["..."]  # replaces the default rule set
+# extend-select = []  # adds rules to select or the defaults
+# ignore = []         # rules to disable, including extend-select
 ```
 
 ## Discovery
@@ -121,8 +122,8 @@ missing file or a cycle is an error.
 
 Badness merges tables by key, so a child can override one `[format]` setting
 while inheriting the others. Values in the child replace inherited values,
-including arrays. `extend-exclude` is the exception: its patterns append to the
-inherited patterns, in base-to-child order. Named `[commands]` and
+including arrays. `extend-exclude` and `[lint] extend-select` append to
+inherited entries in base-to-child order. Named `[commands]` and
 `[environments]` declarations merge by name. Relative paths in inherited
 settings use the selected config's path root. For project configs, that root is
 the selected config's directory.
@@ -450,7 +451,9 @@ an unknown rule id when linting rather than when parsing the configuration.
 
 ### `select`
 
-Explicit allowlist of rule ids. When set, only these rules run.
+Base rule ids to enable. When set, this replaces the default rule set. An empty
+`select = []` disables the defaults. [`extend-select`](#extend-select) can still
+add rules, and [`ignore`](#ignore) takes precedence over both lists.
 
 **Default value**: unset (all default-enabled rules run)
 
@@ -463,17 +466,28 @@ Explicit allowlist of rule ids. When set, only these rules run.
 select = ["deprecated-command", "dollar-display-math"]
 ```
 
-To enable the opt-in dash check:
+### `extend-select`
+
+Additional rule ids to enable alongside [`select`](#select) or the defaults. Use
+this to enable opt-in rules while keeping the default checks. Entries accumulate
+across an [`extend`](#extend) chain, including when the child's list is empty.
+The repeatable CLI flag `--extend-select` appends to this list.
+
+**Default value**: `[]`
+
+**Type**: array of strings
+
+**Example**:
 
 ```toml
 [lint]
-select = ["dash-length"]
+extend-select = ["dash-length"]
 ```
 
 ### `ignore`
 
-Rule ids to disable, applied on top of either [`select`](#select) or the default
-rule set.
+Rule ids to disable, including those added by [`extend-select`](#extend-select).
+Applied after [`select`](#select) or the defaults and `extend-select`.
 
 **Default value**: `[]`
 

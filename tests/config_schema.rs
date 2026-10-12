@@ -38,6 +38,7 @@ de = ["bzw.", "Abb."]
 
 [lint]
 select = ["duplicate-label"]
+extend-select = ["dash-length", "future-rule"]
 ignore = ["deprecated-command"]
 
 [build]
@@ -170,6 +171,7 @@ fn schema_rejects_unknown_keys() {
     for source in [
         "formatt = true",
         "[format]\nline-widht = 80",
+        "[lint]\nextend_select = []",
         "[commands.eqrefs]\nliek = 'cref'",
         "[environments.myenv]\nliek = 'align'",
     ] {
@@ -189,6 +191,8 @@ fn schema_rejects_invalid_enums_and_types() {
         "[format]\nmath-wrap = 'never'",
         "[format]\nline-ending = 'cr'",
         "[lint]\nselect = 'duplicate-label'",
+        "[lint]\nextend-select = 'dash-length'",
+        "[lint]\nextend-select = [1]",
         "[environments.eqnarray]\nbegin = '\\bea'",
     ] {
         assert!(

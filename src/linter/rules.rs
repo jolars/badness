@@ -1,9 +1,9 @@
 //! The rule abstraction: the [`Rule`] trait every lint implements, the
 //! [`RuleContext`] handed to it, and the registry of built-in rules.
 //!
-//! Every rule is on by default; the
-//! `badness.toml` `[lint]` `select`/`ignore` keys (and the CLI's matching flags)
-//! narrow the active set via [`RuleSelection`], applied as a post-filter so the
+//! Most rules are on by default. The `badness.toml` `[lint]` selection keys
+//! and matching CLI flags set the active rules via [`RuleSelection`],
+//! applied as a post-filter so the
 //! shared `lint_document` driver stays config-unaware.
 
 use std::path::Path;
@@ -640,7 +640,7 @@ pub trait Rule: Send + Sync {
         Severity::Warning
     }
 
-    /// Whether the rule runs when neither `select` nor `ignore` names it.
+    /// Whether the rule runs in the default selection.
     /// Rules with unavoidable false positives may override this to remain
     /// available as opt-in checks without adding noise to every project.
     fn default_enabled(&self) -> bool {
@@ -891,7 +891,7 @@ pub const RETIRED_RULE_IDS: &[&str] = &["mismatched-delimiter"];
 ///
 /// The CLI lints `.tex` and `.bib` files in one pass and folds their findings into
 /// a single diagnostic stream filtered by one [`RuleSelection`], so the selectable
-/// universe — and the set `select`/`ignore` are validated against — must span both
+/// universe—and the set selection keys are validated against—must span both
 /// registries. Without the bib half, every bib finding's id reads as "not active"
 /// and the CLI silently drops it (the LSP, which doesn't post-filter, still shows
 /// them — the source of the CLI/LSP divergence).
@@ -938,10 +938,10 @@ pub(crate) fn is_unsuppressible_suppression_meta_rule(id: &str) -> bool {
 }
 
 /// The pseudo-rule id parse diagnostics carry. It is never a lint rule, so
-/// `select`/`ignore` never touch it: a parse error always surfaces.
+/// Rule selection never touches it: a parse error always surfaces.
 pub const PARSE_RULE_ID: &str = "parse";
 
-/// The active lint-rule set for one run, after applying `select`/`ignore`.
+/// The active lint-rule set after applying `select`, `extend-select`, and `ignore`.
 ///
 /// Resolution by rule id (not by constructing the rule objects) so it can filter
 /// the diagnostics `lint_document` already produced without changing that shared
@@ -950,21 +950,30 @@ pub const PARSE_RULE_ID: &str = "parse";
 /// 1. Base set = the current ids in `select` when it is `Some`, else every
 ///    default-enabled built-in rule. Retired and opt-in ids remain accepted
 ///    configuration entries.
-/// 2. Subtract anything in `ignore`.
-/// 3. Unknown ids in `select`/`ignore` are returned via the second tuple element
-///    so the caller can surface them; they do not error.
+/// 2. Add current ids in `extend-select`, then subtract anything in `ignore`.
+/// 3. Unknown ids in the selection lists are returned via the second tuple
+///    element so the caller can surface them; they do not error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleSelection {
     active: Vec<&'static str>,
 }
 
 impl RuleSelection {
-    /// Build the active set from `select`/`ignore`, returning it plus any unknown
-    /// ids encountered (preserving their original spelling and order).
-    pub fn resolve(select: Option<&[String]>, ignore: &[String]) -> (Self, Vec<String>) {
+    /// Build the active set, returning it plus unknown ids in first-seen order,
+    /// deduplicated and preserving their original spelling.
+    pub fn resolve(
+        select: Option<&[String]>,
+        extend_select: &[String],
+        ignore: &[String],
+    ) -> (Self, Vec<String>) {
         let mut unknown = Vec::new();
-        for id in select.iter().flat_map(|v| v.iter()).chain(ignore.iter()) {
-            if !all_known_rule_ids().any(|known| known == id) {
+        for id in select
+            .iter()
+            .flat_map(|v| v.iter())
+            .chain(extend_select)
+            .chain(ignore)
+        {
+            if !all_known_rule_ids().any(|known| known == id) && !unknown.contains(id) {
                 unknown.push(id.clone());
             }
         }
@@ -974,8 +983,8 @@ impl RuleSelection {
                 .collect(),
             None => all_default_rule_ids().collect(),
         };
-        let active = base
-            .into_iter()
+        let active = all_current_rule_ids()
+            .filter(|id| base.contains(id) || extend_select.iter().any(|p| p == id))
             .filter(|id| !ignore.iter().any(|i| i == id))
             .collect();
         (Self { active }, unknown)
@@ -1030,7 +1039,7 @@ mod tests {
                 !registered.contains(id),
                 "retired rule `{id}` is registered"
             );
-            let (selection, unknown) = RuleSelection::resolve(Some(&[id.to_string()]), &[]);
+            let (selection, unknown) = RuleSelection::resolve(Some(&[id.to_string()]), &[], &[]);
             assert!(unknown.is_empty(), "retired rule `{id}` is unknown");
             assert!(!selection.is_active(id), "retired rule `{id}` is active");
         }
@@ -1071,7 +1080,8 @@ mod tests {
 
     #[test]
     fn select_restricts_to_listed_rules_but_keeps_parse() {
-        let (sel, unknown) = RuleSelection::resolve(Some(&["duplicate-label".to_string()]), &[]);
+        let (sel, unknown) =
+            RuleSelection::resolve(Some(&["duplicate-label".to_string()]), &[], &[]);
         assert!(unknown.is_empty());
         assert!(sel.is_active("duplicate-label"));
         assert!(!sel.is_active("deprecated-command"));
@@ -1081,7 +1091,7 @@ mod tests {
 
     #[test]
     fn ignore_subtracts_from_default_set() {
-        let (sel, unknown) = RuleSelection::resolve(None, &["deprecated-command".to_string()]);
+        let (sel, unknown) = RuleSelection::resolve(None, &[], &["deprecated-command".to_string()]);
         assert!(unknown.is_empty());
         assert!(!sel.is_active("deprecated-command"));
         assert!(sel.is_active("duplicate-label"));
@@ -1089,11 +1099,12 @@ mod tests {
 
     #[test]
     fn dash_length_is_opt_in() {
-        let (default, unknown) = RuleSelection::resolve(None, &[]);
+        let (default, unknown) = RuleSelection::resolve(None, &[], &[]);
         assert!(unknown.is_empty());
         assert!(!default.is_active("dash-length"));
 
-        let (selected, unknown) = RuleSelection::resolve(Some(&["dash-length".to_string()]), &[]);
+        let (selected, unknown) =
+            RuleSelection::resolve(Some(&["dash-length".to_string()]), &[], &[]);
         assert!(unknown.is_empty());
         assert!(selected.is_active("dash-length"));
     }
@@ -1102,6 +1113,7 @@ mod tests {
     fn ignore_overrides_select() {
         let (sel, _) = RuleSelection::resolve(
             Some(&["duplicate-label".to_string(), "undefined-ref".to_string()]),
+            &[],
             &["undefined-ref".to_string()],
         );
         assert!(sel.is_active("duplicate-label"));
@@ -1117,7 +1129,7 @@ mod tests {
         for id in crate::bib::linter::ALL_BIB_RULE_IDS {
             assert!(sel.is_active(id), "{id} should be active");
         }
-        let (sel, unknown) = RuleSelection::resolve(None, &[]);
+        let (sel, unknown) = RuleSelection::resolve(None, &[], &[]);
         assert!(unknown.is_empty());
         assert!(sel.is_active("missing-required-field"));
     }
@@ -1125,12 +1137,13 @@ mod tests {
     #[test]
     fn bib_rules_are_selectable_and_ignorable() {
         let (sel, unknown) =
-            RuleSelection::resolve(Some(&["missing-required-field".to_string()]), &[]);
+            RuleSelection::resolve(Some(&["missing-required-field".to_string()]), &[], &[]);
         assert!(unknown.is_empty(), "bib id must be recognized, not unknown");
         assert!(sel.is_active("missing-required-field"));
         assert!(!sel.is_active("duplicate-label"));
 
-        let (sel, unknown) = RuleSelection::resolve(None, &["missing-required-field".to_string()]);
+        let (sel, unknown) =
+            RuleSelection::resolve(None, &[], &["missing-required-field".to_string()]);
         assert!(unknown.is_empty());
         assert!(!sel.is_active("missing-required-field"));
         assert!(sel.is_active("duplicate-label"));
@@ -1140,11 +1153,72 @@ mod tests {
     fn unknown_ids_are_reported() {
         let (_, unknown) = RuleSelection::resolve(
             Some(&["duplicate-label".to_string(), "no-such-rule".to_string()]),
+            &[],
             &["also-bogus".to_string()],
         );
         assert_eq!(
             unknown,
             vec!["no-such-rule".to_string(), "also-bogus".to_string()]
         );
+    }
+
+    #[test]
+    fn extend_select_adds_to_defaults_or_explicit_selection() {
+        for select in [None, Some(vec!["ellipsis".to_string()]), Some(vec![])] {
+            let (selection, unknown) = RuleSelection::resolve(
+                select.as_deref(),
+                &["dash-length".to_string(), "dash-length".to_string()],
+                &[],
+            );
+            assert!(unknown.is_empty());
+            assert!(selection.is_active("dash-length"));
+            assert!(selection.is_active(PARSE_RULE_ID));
+            assert_eq!(selection.is_active("duplicate-label"), select.is_none());
+            assert_eq!(
+                selection.is_active("ellipsis"),
+                select.as_ref().is_none_or(|ids| !ids.is_empty())
+            );
+            assert_eq!(
+                selection
+                    .active
+                    .iter()
+                    .filter(|id| **id == "dash-length")
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn ignore_overrides_extend_select() {
+        let (selection, unknown) = RuleSelection::resolve(
+            None,
+            &[
+                "dash-length".to_string(),
+                "missing-required-field".to_string(),
+            ],
+            &[
+                "dash-length".to_string(),
+                "missing-required-field".to_string(),
+            ],
+        );
+        assert!(unknown.is_empty());
+        assert!(!selection.is_active("dash-length"));
+        assert!(!selection.is_active("missing-required-field"));
+        assert!(selection.is_active("ellipsis"));
+    }
+
+    #[test]
+    fn unknown_ids_in_extend_select_are_deduplicated() {
+        let (_, unknown) = RuleSelection::resolve(
+            Some(&["typo".to_string()]),
+            &[
+                "future-rule".to_string(),
+                "typo".to_string(),
+                "future-rule".to_string(),
+            ],
+            &["future-rule".to_string(), "other-typo".to_string()],
+        );
+        assert_eq!(unknown, ["typo", "future-rule", "other-typo"]);
     }
 }

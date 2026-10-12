@@ -221,9 +221,17 @@
       "additionalProperties": false,
       "description": "The `[lint]` section of `badness.toml`.",
       "properties": {
+        "extend-select": {
+          "default": [],
+          "description": "Additional rule IDs to enable alongside `select` or the defaults.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "ignore": {
           "default": [],
-          "description": "Rule IDs to disable. Applied on top of either `select` (subtracts) or the\ndefault rule set.",
+          "description": "Rule IDs to disable, including those in `extend-select`.",
           "items": {
             "type": "string"
           },
@@ -231,7 +239,7 @@
         },
         "select": {
           "default": null,
-          "description": "Explicit allowlist of rule IDs. When `Some`, only these rules run.\nUnknown rule IDs are reported at lint-time, not at config parse-time.",
+          "description": "Base rule IDs to enable. When `None`, default-enabled rules run.\nUnknown rule IDs are reported at lint-time, not at config parse-time.",
           "items": {
             "type": "string"
           },

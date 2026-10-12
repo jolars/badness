@@ -66,8 +66,9 @@ line-width = 100
 
 The path is relative to the file that declares it. Tables merge by key, and the
 project's values override inherited values. `extend-exclude` adds patterns to
-inherited exclusions. See the [inheritance
-reference](../reference/configuration.md#extend) for the other merge rules.
+inherited exclusions, and `[lint] extend-select` adds to inherited rule lists.
+See the [inheritance reference](../reference/configuration.md#extend) for the
+other merge rules.
 
 ## Exclude Files
 

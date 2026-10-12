@@ -404,12 +404,14 @@ impl BuildConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct LintConfig {
-    /// Explicit allowlist of rule IDs. When `Some`, only these rules run.
+    /// Base rule IDs to enable. When `None`, default-enabled rules run.
     /// Unknown rule IDs are reported at lint-time, not at config parse-time.
     #[serde(default)]
     pub select: Option<Vec<String>>,
-    /// Rule IDs to disable. Applied on top of either `select` (subtracts) or the
-    /// default rule set.
+    /// Additional rule IDs to enable alongside `select` or the defaults.
+    #[serde(default)]
+    pub extend_select: Vec<String>,
+    /// Rule IDs to disable, including those in `extend-select`.
     #[serde(default)]
     pub ignore: Vec<String>,
 }
@@ -744,7 +746,7 @@ fn extend_path(extend: &str, path: &Path) -> PathBuf {
 }
 
 /// Fill keys absent from the child, recursively preserving sibling settings.
-/// Only `extend-exclude` accumulates across files; other arrays replace.
+/// `extend-exclude` and `extend-select` accumulate across files; other arrays replace.
 fn merge_config_tables(child: &mut toml::Table, parent: toml::Table) {
     for (key, inherited) in parent {
         match child.get_mut(&key) {
@@ -752,7 +754,9 @@ fn merge_config_tables(child: &mut toml::Table, parent: toml::Table) {
                 child.insert(key, inherited);
             }
             Some(current)
-                if key == "extend-exclude" && current.is_array() && inherited.is_array() =>
+                if matches!(key.as_str(), "extend-exclude" | "extend-select")
+                    && current.is_array()
+                    && inherited.is_array() =>
             {
                 let mut combined = inherited.as_array().expect("checked array").clone();
                 combined.extend(current.as_array().expect("checked array").iter().cloned());
@@ -932,6 +936,39 @@ mod tests {
             paths,
             [child, dir.path().join("b.toml"), dir.path().join("a.toml")]
         );
+    }
+
+    #[test]
+    fn extend_select_accumulates_while_select_and_ignore_replace() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("base.toml"),
+            "[lint]\nselect = ['duplicate-label']\nextend-select = ['dash-length']\nignore = ['ellipsis']\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("middle.toml"),
+            "extend = 'base.toml'\n[lint]\nextend-select = ['hard-coded-reference']\n",
+        )
+        .unwrap();
+        let child = dir.path().join("badness.toml");
+        for additions in ["[]", "['ellipsis']"] {
+            fs::write(
+                &child,
+                format!(
+                    "extend = 'middle.toml'\n[lint]\nselect = []\nextend-select = {additions}\nignore = []\n"
+                ),
+            )
+            .unwrap();
+            let config = Config::load_from(&child).unwrap();
+            assert_eq!(config.lint.select, Some(vec![]));
+            assert!(config.lint.ignore.is_empty());
+            let mut expected = vec!["dash-length", "hard-coded-reference"];
+            if additions != "[]" {
+                expected.push("ellipsis");
+            }
+            assert_eq!(config.lint.extend_select, expected);
+        }
     }
 
     #[test]

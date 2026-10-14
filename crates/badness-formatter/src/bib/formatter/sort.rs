@@ -3,32 +3,117 @@
 //!
 //! Both routines reorder existing CST nodes only; they never synthesize or mutate
 //! content, so meaning is preserved and the lowering stays a pure replay of the
-//! reordered nodes. They read only the syntactic accessors ([`crate::bib::ast`]) plus
-//! the static signature DB — no semantic-model state, no parser changes.
+//! reordered nodes. Field order is formatter-owned and independent of entry-type
+//! validation, so a change to required fields cannot rearrange formatted entries.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use super::lint_directive_verb;
 use crate::bib::ast;
-use crate::bib::semantic::{BibFieldDb, RequiredField};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
 use crate::directives::Verb;
 
-/// The `FIELD` children of `entry`, reordered into the canonical order for its entry
-/// type: the signature DB's **required-then-optional** sequence, with any field the DB
-/// does not list alphabetized after the known ones. An unknown entry type has no known
-/// fields, so all of its fields fall through to the alphabetical tail.
+// Keep related metadata together, including classic BibTeX spellings alongside
+// their BibLaTeX equivalents, so every entry type has the same reading order.
+const FIELD_ORDER: &[&str] = &[
+    "title",
+    "subtitle",
+    "titleaddon",
+    "shorttitle",
+    "author",
+    "shortauthor",
+    "editor",
+    "shorteditor",
+    "editortype",
+    "translator",
+    "bookauthor",
+    "journaltitle",
+    "journal",
+    "journalsubtitle",
+    "shortjournal",
+    "booktitle",
+    "booksubtitle",
+    "booktitleaddon",
+    "maintitle",
+    "mainsubtitle",
+    "maintitleaddon",
+    "eventtitle",
+    "eventtitleaddon",
+    "date",
+    "year",
+    "month",
+    "day",
+    "eventdate",
+    "publisher",
+    "institution",
+    "school",
+    "organization",
+    "location",
+    "address",
+    "series",
+    "volume",
+    "volumes",
+    "number",
+    "issue",
+    "edition",
+    "version",
+    "chapter",
+    "part",
+    "pages",
+    "pagetotal",
+    "eid",
+    "doi",
+    "eprint",
+    "eprinttype",
+    "archiveprefix",
+    "eprintclass",
+    "primaryclass",
+    "isbn",
+    "issn",
+    "isrn",
+    "url",
+    "urldate",
+    "type",
+    "howpublished",
+    "pubstate",
+    "language",
+    "langid",
+    "note",
+    "addendum",
+    "abstract",
+    "annotation",
+    "annote",
+    "keywords",
+    "crossref",
+    "xref",
+    "xdata",
+    "related",
+    "relatedtype",
+    "relatedstring",
+    "file",
+    "pdf",
+];
+
+static FIELD_RANKS: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
+    FIELD_ORDER
+        .iter()
+        .enumerate()
+        .map(|(rank, &name)| (name, rank))
+        .collect()
+});
+
+/// The `FIELD` children of `entry`, reordered into the shared title-first order.
+/// Fields absent from [`FIELD_ORDER`] are alphabetized after the listed fields,
+/// including in entries whose types are unknown.
 ///
 /// The sort is **stable**, which is load-bearing: a repeated field name (two `note =`)
 /// keeps its source order, so BibTeX's last/first-wins semantics are preserved.
-pub(super) fn canonical_fields(entry: &SyntaxNode, db: &BibFieldDb) -> Vec<SyntaxNode> {
-    let etype = ast::entry_type(entry).unwrap_or_default();
-    let ranks = field_ranks(db, &etype);
-
+pub(super) fn canonical_fields(entry: &SyntaxNode) -> Vec<SyntaxNode> {
     let mut fields: Vec<SyntaxNode> = ast::fields(entry).collect();
     fields.sort_by_cached_key(|field| {
         let name = ast::field_name(field).unwrap_or_default().to_lowercase();
-        match ranks.get(name.as_str()) {
+        match FIELD_RANKS.get(name.as_str()) {
             // Known field: group 0, ordered by its position in the canonical sequence.
             Some(&rank) => (0u8, rank, String::new()),
             // Unknown field: group 1, alphabetized by name.
@@ -36,27 +121,6 @@ pub(super) fn canonical_fields(entry: &SyntaxNode, db: &BibFieldDb) -> Vec<Synta
         }
     });
     fields
-}
-
-/// A `field-name (lowercased) → rank` map giving the canonical position of each field
-/// the DB lists for `etype`: required fields first (each `OneOf` alternative in listed
-/// order), then optional fields. First occurrence wins. Empty for an unknown type.
-fn field_ranks<'a>(db: &'a BibFieldDb, etype: &str) -> HashMap<&'a str, usize> {
-    let mut order: Vec<&str> = Vec::new();
-    if let Some(sig) = db.entry(etype) {
-        for req in &sig.required {
-            match req {
-                RequiredField::One(name) => order.push(name.as_str()),
-                RequiredField::OneOf(alts) => order.extend(alts.iter().map(|a| a.as_str())),
-            }
-        }
-        order.extend(sig.optional.iter().map(|o| o.as_str()));
-    }
-    let mut ranks = HashMap::new();
-    for (rank, name) in order.into_iter().enumerate() {
-        ranks.entry(name).or_insert(rank);
-    }
-    ranks
 }
 
 /// The top-level blocks of `root`, reordered so regular entries are sorted by cite key
@@ -165,7 +229,7 @@ mod tests {
 
     /// The lowercased field names of `entry` after canonical reordering.
     fn ordered_names(entry: &SyntaxNode) -> Vec<String> {
-        canonical_fields(entry, builtin())
+        canonical_fields(entry)
             .iter()
             .map(|f| ast::field_name(f).unwrap_or_default().to_lowercase())
             .collect()
@@ -181,9 +245,22 @@ mod tests {
 
     #[test]
     fn fields_sorted_to_canonical_order() {
-        // article required: author, title, journaltitle, (date|year).
         let e = entry("@article{k, year = 2020, title = {T}, author = {A}}\n");
-        assert_eq!(ordered_names(&e), ["author", "title", "year"]);
+        assert_eq!(ordered_names(&e), ["title", "author", "year"]);
+    }
+
+    #[test]
+    fn title_first_order_is_shared_by_all_entry_types() {
+        for etype in builtin().entry_names().chain(["weirdtype"]) {
+            let e = entry(&format!(
+                "@{etype}{{k, url = {{U}}, date = {{2020}}, author = {{A}}, title = {{T}}}}\n"
+            ));
+            assert_eq!(
+                ordered_names(&e),
+                ["title", "author", "date", "url"],
+                "field order differs for @{etype}"
+            );
+        }
     }
 
     #[test]
@@ -193,17 +270,22 @@ mod tests {
     }
 
     #[test]
-    fn unknown_entry_type_is_fully_alphabetical() {
-        let e = entry("@weirdtype{k, charlie = {c}, alpha = {a}, bravo = {b}}\n");
-        assert_eq!(ordered_names(&e), ["alpha", "bravo", "charlie"]);
+    fn unknown_entry_type_uses_shared_order_and_alphabetical_tail() {
+        let e = entry(
+            "@weirdtype{k, charlie = {c}, Author = {A}, alpha = {a}, TITLE = {T}, bravo = {b}}\n",
+        );
+        assert_eq!(
+            ordered_names(&e),
+            ["title", "author", "alpha", "bravo", "charlie"]
+        );
     }
 
     #[test]
     fn duplicate_field_names_keep_source_order() {
-        let e = entry("@misc{k, note = {first}, note = {second}}\n");
-        let values: Vec<String> = canonical_fields(&e, builtin())
+        let e = entry("@misc{k, note = {first}, title = {T}, NOTE = {second}}\n");
+        let values: Vec<String> = canonical_fields(&e)
             .iter()
-            .filter(|f| ast::field_name(f).as_deref() == Some("note"))
+            .filter(|f| ast::field_name(f).is_some_and(|name| name.eq_ignore_ascii_case("note")))
             .map(|f| ast::field_value(f).unwrap().to_string())
             .collect();
         assert_eq!(values, ["{first}", "{second}"]);

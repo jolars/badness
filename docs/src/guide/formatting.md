@@ -1,8 +1,8 @@
 # Formatting
 
-`badness format` lays out LaTeX source deterministically. The formatter's rules
-and layout engine determine the output, so there are no special cases for
-individual constructs to memorize.
+`badness format` lays out LaTeX and BibTeX source deterministically. The
+formatter's rules and layout engine determine the output, so there are no
+special cases for individual constructs to memorize.
 
 ## In Place, `stdin`, or check
 
@@ -123,6 +123,18 @@ layout; custom commands and forms with parenthesized side comments use the
 ordinary fallback. Top-level `\;` statements require a recognized control-flow
 call in the environment's direct body, since the separate `algorithm` package
 uses the same float name and can use `\;` for ordinary spacing.
+
+## BibTeX Field Order
+
+BibTeX entries share one field order across all entry types, including custom
+types. The formatter places `title`, `subtitle`, `titleaddon`, and `shorttitle`
+first, followed by `author` and other contributors, container titles, dates,
+publication details, identifiers, and notes. Fields outside the shared order
+appear afterward in alphabetical order. Whether a field is required or optional
+does not affect its position.
+
+Repeated fields retain their relative order, and comments move with the fields
+they belong to.
 
 ## Turning the formatter off
 

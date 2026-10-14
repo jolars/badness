@@ -12,6 +12,8 @@
 //!   flush; normally one blank line between top-level blocks. A structured lint
 //!   directive stays adjacent to the entry or region boundary it governs.
 //! - **`=` alignment:** field names are padded to the longest field name in the entry.
+//! - **Field order:** a shared title-first sequence, with unlisted fields alphabetized
+//!   afterward. Entry-type validation does not determine display order.
 //! - **Value delimiters:** in a regular field, a top-level `"…"` value piece is
 //!   rewritten to `{…}` when safe (balanced inner braces). A bare `LITERAL` (a macro
 //!   reference or a number) is **never** wrapped — that would change its meaning —
@@ -228,9 +230,7 @@ fn lower_entry(entry: &SyntaxNode, cx: Lower) -> Ir {
         .unwrap_or_default();
     let (open, close) = entry_delimiters(entry);
 
-    // Fields are emitted in the canonical required-then-optional order for the entry
-    // type, not source order. See `super::sort::canonical_fields`.
-    let fields: Vec<SyntaxNode> = super::sort::canonical_fields(entry, cx.db);
+    let fields: Vec<SyntaxNode> = super::sort::canonical_fields(entry);
     let names: Vec<String> = fields
         .iter()
         .map(|field| ast::field_name(field).unwrap_or_default().to_lowercase())

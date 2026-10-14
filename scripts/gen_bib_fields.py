@@ -11,9 +11,7 @@ by ``biber``) is the source of truth for the *mechanical* facts in our DB:
 This script keeps those in lockstep with whatever ``biblatex`` is installed. It does
 **not** own the *hand-curated* parts, which it preserves verbatim:
 
-* the ``optional`` field lists — their order is a deliberate formatter display choice
-  (fields are emitted required-then-optional), and the data model only lists fields
-  alphabetically, which would read badly;
+* the ``optional`` field lists, which retain hand-curated per-type field coverage;
 * the classic-BibTeX overlay — any entry type or field present in the JSON but absent
   from the data model (e.g. ``mastersthesis``/``school``, the ``journal`` alias) is
   treated as an intentional addition and left untouched;
@@ -279,11 +277,10 @@ def _apply(model: DataModel, doc: OrderedDict) -> None:
         if ty in entries:
             # Only rewrite when the *set* differs — preserve the curated item order
             # (and one-of alternative order) of an already-correct list, so a synced
-            # file round-trips unchanged. On genuine drift, emit the model order; a
-            # human can reorder for display.
+            # file round-trips unchanged. On genuine drift, emit the model order.
             if _req_key(entries[ty]["required"]) != _req_key(req):
                 entries[ty]["required"] = req
-        else:  # new type: seed optional from the model (a human may reorder later)
+        else:
             opt = [f for f in model.type_fields.get(ty, []) if f not in reqnames]
             entries[ty] = {"required": req, "optional": opt}
 

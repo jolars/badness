@@ -2354,11 +2354,11 @@ fn reflow_elements_checked(
     // riding comment keeps a single space before it.
     let mut prev_was_block = false;
     let mut block_gap = false;
-    // Set alongside `prev_was_block` when the committed block *closes* its line: an
-    // environment, sectioning command, or curated block command. A trailing `%`
-    // still rides (it must never be relocated), but content starts a fresh line.
-    // Other forced blocks, such as a doc-commented `\input`, leave their last line
-    // open so content from the same source line can ride it.
+    // Set alongside `prev_was_block` when the committed block *closes* its line: a
+    // non-inline environment, sectioning command, or curated block command. A
+    // trailing `%` still rides (it must never be relocated), but content starts a
+    // fresh line. Other forced blocks, such as a doc-commented `\input`, leave
+    // their last line open so content from the same source line can ride it.
     let mut prev_block_closes_line = false;
 
     let mut idx = 0;
@@ -2875,9 +2875,11 @@ fn reflow_elements_checked(
                     line_all_commands = true;
                     line_has_content = false;
                     prev_was_block = true;
-                    // Environments and display math are complete structural blocks,
-                    // so prose after their closers starts a fresh line whether the
-                    // source gap was a space or newline. Restrict display math to
+                    // Non-inline environments and display math are complete structural
+                    // blocks, so prose after their closers starts a fresh line whether
+                    // the source gap was a space or newline. An inline environment
+                    // leaves its line open: breaking a glued suffix would materialize
+                    // a TeX space token (issue #209). Restrict display math to
                     // genuine prose: the `Statement` path also lowers opaque group
                     // bodies, where breaking a glued suffix would add a meaningful
                     // space token. A block-level statement whose lowering forced a
@@ -2889,9 +2891,11 @@ fn reflow_elements_checked(
                     // `after_block` paths).
                     let display_math_closes_prose = child.kind() == SyntaxKind::DISPLAY_MATH
                         && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg);
+                    let environment_closes_line = child.kind() == SyntaxKind::ENVIRONMENT
+                        && !cx.signatures.environment_at(child).is_some_and(|sig| sig.inline);
                     prev_block_closes_line = is_block_stmt
                         || section_label_closes_line
-                        || child.kind() == SyntaxKind::ENVIRONMENT
+                        || environment_closes_line
                         || display_math_closes_prose;
                     if is_section_boundary && !next_nontrivia_is_label(&elements, idx, cx) {
                         b.separate_section();

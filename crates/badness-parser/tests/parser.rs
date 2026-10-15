@@ -1819,6 +1819,16 @@ fn lone_block_environment_is_not_wrapped() {
 }
 
 #[test]
+fn inline_list_environments_stay_in_paragraphs() {
+    insta::assert_snapshot!(tree(include_str!("corpus/inline_lists.tex")));
+    for name in ["enumerate*", "itemize*", "description*"] {
+        let input = format!("\\begin{{{name}}}\\item one\\item two\\end{{{name}}}");
+        assert_eq!(root_node_kinds(&input), [SyntaxKind::PARAGRAPH]);
+        assert!(parse(&input).errors.is_empty(), "{name} should parse");
+    }
+}
+
+#[test]
 fn block_environment_with_trailing_text_stays_wrapped() {
     // Not a *lone* env: trailing text makes the run ordinary prose, so the
     // PARAGRAPH wrapper is retained.

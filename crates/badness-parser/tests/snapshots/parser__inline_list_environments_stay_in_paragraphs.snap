@@ -1,0 +1,103 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "tree(include_str!(\"corpus/inline_lists.tex\"))"
+---
+ROOT@0..207
+  PARAGRAPH@0..83
+    WORD@0..6 "Before"
+    ENVIRONMENT@6..75
+      BEGIN@6..41
+        CONTROL_WORD@6..12 "\\begin"
+        NAME_GROUP@12..24
+          L_BRACE@12..13 "{"
+          WORD@13..23 "enumerate*"
+          R_BRACE@23..24 "}"
+        OPTIONAL@24..41
+          L_BRACKET@24..25 "["
+          WORD@25..34 "itemjoin="
+          GROUP@34..40
+            L_BRACE@34..35 "{"
+            GROUP@35..39
+              L_BRACE@35..36 "{"
+              WORD@36..37 ";"
+              WHITESPACE@37..38 " "
+              R_BRACE@38..39 "}"
+            R_BRACE@39..40 "}"
+          R_BRACKET@40..41 "]"
+      PARAGRAPH@41..59
+        COMMAND@41..46
+          CONTROL_WORD@41..46 "\\item"
+        WHITESPACE@46..47 " "
+        WORD@47..50 "one"
+        COMMAND@50..55
+          CONTROL_WORD@50..55 "\\item"
+        WHITESPACE@55..56 " "
+        WORD@56..59 "two"
+      END@59..75
+        CONTROL_WORD@59..63 "\\end"
+        NAME_GROUP@63..75
+          L_BRACE@63..64 "{"
+          WORD@64..74 "enumerate*"
+          R_BRACE@74..75 "}"
+    WORD@75..76 "."
+    WHITESPACE@76..77 " "
+    WORD@77..83 "After."
+  NEWLINE@83..84 "\n"
+  NEWLINE@84..85 "\n"
+  PARAGRAPH@85..133
+    ENVIRONMENT@85..133
+      BEGIN@85..101
+        CONTROL_WORD@85..91 "\\begin"
+        NAME_GROUP@91..101
+          L_BRACE@91..92 "{"
+          WORD@92..100 "itemize*"
+          R_BRACE@100..101 "}"
+      PARAGRAPH@101..119
+        COMMAND@101..106
+          CONTROL_WORD@101..106 "\\item"
+        WHITESPACE@106..107 " "
+        WORD@107..110 "one"
+        COMMAND@110..115
+          CONTROL_WORD@110..115 "\\item"
+        WHITESPACE@115..116 " "
+        WORD@116..119 "two"
+      END@119..133
+        CONTROL_WORD@119..123 "\\end"
+        NAME_GROUP@123..133
+          L_BRACE@123..124 "{"
+          WORD@124..132 "itemize*"
+          R_BRACE@132..133 "}"
+  NEWLINE@133..134 "\n"
+  NEWLINE@134..135 "\n"
+  PARAGRAPH@135..206
+    ENVIRONMENT@135..206
+      BEGIN@135..155
+        CONTROL_WORD@135..141 "\\begin"
+        NAME_GROUP@141..155
+          L_BRACE@141..142 "{"
+          WORD@142..154 "description*"
+          R_BRACE@154..155 "}"
+      PARAGRAPH@155..188
+        COMMAND@155..165
+          CONTROL_WORD@155..160 "\\item"
+          OPTIONAL@160..165
+            L_BRACKET@160..161 "["
+            WORD@161..164 "One"
+            R_BRACKET@164..165 "]"
+        WHITESPACE@165..166 " "
+        WORD@166..171 "first"
+        COMMAND@171..181
+          CONTROL_WORD@171..176 "\\item"
+          OPTIONAL@176..181
+            L_BRACKET@176..177 "["
+            WORD@177..180 "Two"
+            R_BRACKET@180..181 "]"
+        WHITESPACE@181..182 " "
+        WORD@182..188 "second"
+      END@188..206
+        CONTROL_WORD@188..192 "\\end"
+        NAME_GROUP@192..206
+          L_BRACE@192..193 "{"
+          WORD@193..205 "description*"
+          R_BRACE@205..206 "}"
+  NEWLINE@206..207 "\n"

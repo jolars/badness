@@ -374,8 +374,12 @@ pub struct EnvironmentSig {
     /// whose `\item`s the formatter lays out one per line, reflowing each item's
     /// body with continuation lines hanging-indented under the item text.
     pub list: bool,
+    /// `true` for environments that participate in running text, such as enumitem's
+    /// starred lists. List layout does not license a break after their closers.
+    /// Curated only; neither arity data nor scanned definitions prove this fact.
+    pub inline: bool,
     /// `true` when this environment is explicitly known to occupy its own vertical
-    /// space (`figure`, `center`, verbatim, …). Math, list, and no-indent
+    /// space (`figure`, `center`, verbatim, …). Math, non-inline list, and no-indent
     /// environments are inherently block-level and are included by [`Self::block`].
     pub block_explicit: bool,
     /// `Some(_)` for an environment that can earn a document-symbol outline entry —
@@ -393,7 +397,7 @@ impl EnvironmentSig {
 
     /// Whether the environment occupies its own vertical space.
     pub const fn block(&self) -> bool {
-        self.block_explicit || self.math || self.list || self.no_indent
+        self.block_explicit || self.math || (self.list && !self.inline) || self.no_indent
     }
 }
 
@@ -478,6 +482,7 @@ pub(crate) const fn environment(generated: GeneratedEnvironment) -> EnvironmentS
         align: generated.align,
         no_indent: generated.no_indent,
         list: generated.list,
+        inline: false,
         block_explicit: generated.block_explicit,
         outline: generated.outline,
     }
@@ -1243,6 +1248,8 @@ struct RawEnvironment {
     #[serde(default)]
     list: bool,
     #[serde(default)]
+    inline: bool,
+    #[serde(default)]
     block: bool,
     #[serde(default)]
     outline: Option<RawOutlineKind>,
@@ -1263,6 +1270,7 @@ impl From<RawEnvironment> for EnvironmentSig {
             align: raw.align,
             no_indent: raw.no_indent,
             list: raw.list,
+            inline: raw.inline,
             block_explicit: raw.block,
             outline: raw.outline.map(OutlineKind::from),
         }
@@ -1970,6 +1978,8 @@ mod tests {
         ] {
             let env = db.environment(name).unwrap();
             assert!(env.list, "{name} should be a list environment");
+            assert_eq!(env.inline, name.ends_with('*'), "{name} inline layout");
+            assert_eq!(env.block(), !env.inline, "{name} block classification");
             assert!(env.reflow());
             assert!(!env.math);
         }
@@ -2234,7 +2244,7 @@ mod tests {
         }
         for sig in db.environment_sigs() {
             assert!(!sig.verbatim_body && !sig.math && !sig.code && !sig.align);
-            assert!(!sig.no_indent && !sig.list && !sig.block());
+            assert!(!sig.no_indent && !sig.list && !sig.inline && !sig.block());
             assert!(sig.outline.is_none());
             assert!(sig.args.iter().all(|a| match a.content {
                 ContentKind::Opaque => true,

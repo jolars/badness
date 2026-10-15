@@ -3428,6 +3428,54 @@ fn inline_lists_put_each_item_on_its_own_line() {
     }
 }
 
+#[test]
+fn inline_lists_preserve_glued_suffixes() {
+    for name in ["enumerate*", "itemize*", "description*"] {
+        for wrap in [
+            WrapMode::Preserve,
+            WrapMode::Reflow,
+            WrapMode::Stable,
+            WrapMode::Sentence,
+            WrapMode::Semantic,
+        ] {
+            for suffix in [
+                ". Thus",
+                "\\emph{done}.",
+                "{done}.",
+                "$x$.",
+                " after",
+                "%\n. Thus",
+            ] {
+                let expected_suffix = if suffix == "%\n. Thus"
+                    && matches!(wrap, WrapMode::Sentence | WrapMode::Semantic)
+                {
+                    "%\n.\nThus"
+                } else {
+                    suffix
+                };
+                let style = FormatStyle {
+                    wrap,
+                    ..FormatStyle::default()
+                };
+                for prefix in ["", "Before"] {
+                    let input = format!(
+                        "{prefix}\\begin{{{name}}}\n    \\item one thing; or \\item another thing\n\\end{{{name}}}{suffix}\n"
+                    );
+                    let expected = format!(
+                        "{prefix}\\begin{{{name}}}\n  \\item one thing; or\n  \\item another thing\n\\end{{{name}}}{expected_suffix}\n"
+                    );
+                    assert_eq!(
+                        format_with_style(&input, style).unwrap(),
+                        expected,
+                        "{name}, {wrap:?}, {suffix:?}, {prefix:?}",
+                    );
+                    assert_format_invariants_with_style(&input, style);
+                }
+            }
+        }
+    }
+}
+
 /// The `sentence`/`semantic` language profile is config-driven: the German profile
 /// keeps `bzw.` from ending a sentence, while the default English profile does not
 /// know it and splits there. User `no-break-abbreviations` merge on top of the
@@ -4495,6 +4543,23 @@ fn assert_declared_format_invariants(input: &str, json: &str) {
 const EQNARRAY_DECL: &str =
     r#"{"environments": {"eqnarray": {"begin": ["\\bea"], "end": ["\\eea"]}}}"#;
 const ALIGN_LIKE_DECL: &str = r#"{"environments": {"myenv": {"like": "align"}}}"#;
+
+#[test]
+fn declared_inline_lists_preserve_glued_suffixes() {
+    let json = r#"{"environments": {"inlineitems": {
+        "like": "enumerate*", "begin": ["\\startitems"], "end": ["\\stopitems"]
+    }}}"#;
+    let decls = declarations(json);
+    for (begin, end) in [
+        ("\\begin{inlineitems}", "\\end{inlineitems}"),
+        ("\\startitems", "\\stopitems"),
+    ] {
+        let input = format!("{begin}\\item one \\item two{end}. Thus\n");
+        let expected = format!("{begin}\n  \\item one\n  \\item two\n{end}. Thus\n");
+        assert_eq!(format_declared(&input, &decls).unwrap(), expected);
+        assert_declared_format_invariants(&input, json);
+    }
+}
 
 /// A declared `like` routes the body the way its target's own body is routed:
 /// into math, and into the grid layout. `myenv` has no built-in counterpart at

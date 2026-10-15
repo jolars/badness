@@ -469,8 +469,11 @@
     "appendix": { "noIndent": true },
 
     "itemize": { "list": true },
+    "itemize*": { "list": true },
     "enumerate": { "list": true },
+    "enumerate*": { "list": true },
     "description": { "list": true },
+    "description*": { "list": true },
 
     "figure": { "block": true, "outline": "float" },
     "figure*": { "block": true, "outline": "float" },

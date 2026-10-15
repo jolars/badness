@@ -1960,7 +1960,14 @@ mod tests {
         assert!(!tabular.math);
         assert!(tabular.align);
         assert!(!tabular.list);
-        for name in ["itemize", "enumerate", "description"] {
+        for name in [
+            "itemize",
+            "itemize*",
+            "enumerate",
+            "enumerate*",
+            "description",
+            "description*",
+        ] {
             let env = db.environment(name).unwrap();
             assert!(env.list, "{name} should be a list environment");
             assert!(env.reflow());

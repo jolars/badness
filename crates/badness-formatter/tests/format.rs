@@ -3407,6 +3407,27 @@ fn item_indent_selects_continuation_layout() {
     }
 }
 
+#[test]
+fn inline_lists_put_each_item_on_its_own_line() {
+    for name in ["enumerate*", "itemize*", "description*"] {
+        for wrap in [WrapMode::Preserve, WrapMode::Reflow, WrapMode::Sentence] {
+            for options in ["", "[itemjoin={{; }}]"] {
+                let input =
+                    format!("\\begin{{{name}}}{options}\\item hello \\item world\\end{{{name}}}\n");
+                let expected = format!(
+                    "\\begin{{{name}}}{options}\n  \\item hello\n  \\item world\n\\end{{{name}}}\n"
+                );
+                let style = FormatStyle {
+                    wrap,
+                    ..FormatStyle::default()
+                };
+                assert_eq!(format_with_style(&input, style).unwrap(), expected);
+                assert_format_invariants_with_style(&input, style);
+            }
+        }
+    }
+}
+
 /// The `sentence`/`semantic` language profile is config-driven: the German profile
 /// keeps `bzw.` from ending a sentence, while the default English profile does not
 /// know it and splits there. User `no-break-abbreviations` merge on top of the

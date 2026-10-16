@@ -4634,3 +4634,71 @@ fn declared_environment_layout_upholds_every_invariant() {
         r#"{"environments": {"mycode": {"like": "lstlisting"}}}"#,
     );
 }
+
+#[test]
+fn sized_math_delimiters_have_interior_spacing() {
+    for size in ["big", "Big", "bigg", "Bigg"] {
+        for (open, close) in [
+            ("(", ")"),
+            ("[", "]"),
+            (r"\langle", r"\rangle"),
+            (r"\{", r"\}"),
+        ] {
+            for (left, right) in [("", ""), ("l", "r")] {
+                let gap = if open == r"\langle" { " " } else { "" };
+                let body = format!(r"f\{size}{left}{open}{gap}g(x)\{size}{right}{close}");
+                let expected = format!(r"f\{size}{left}{open} g(x) \{size}{right}{close}");
+                for math_wrap in [
+                    MathWrap::Auto,
+                    MathWrap::Preserve,
+                    MathWrap::SingleLine,
+                    MathWrap::Break,
+                ] {
+                    let style = FormatStyle {
+                        math_wrap,
+                        ..FormatStyle::default()
+                    };
+                    for (input, expected) in [
+                        (format!("${body}$\n"), format!("${expected}$\n")),
+                        (
+                            format!("\\[\n{body}\n\\]\n"),
+                            format!("\\[\n  {expected}\n\\]\n"),
+                        ),
+                    ] {
+                        let output = format_with_style(&input, style).unwrap();
+                        assert_eq!(output, expected, "{size}, {math_wrap:?}");
+                        check_format_invariants(&input, style, LexConfig::default()).unwrap();
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sized_math_delimiters_preserve_structure_and_comments() {
+    for (input, expected) in [
+        (r"$\bigl|x\bigr|^2$", r"$\bigl| x \bigr|^2$"),
+        (
+            r"$\Bigl\Vert x\Bigr\Vert_i$",
+            r"$\Bigl\Vert x \Bigr\Vert_i$",
+        ),
+        (r"$\big(\Big[x\Big]\big)$", r"$\big( \Big[ x \Big] \big)$"),
+        (r"$\big (  x  \big )$", r"$\big( x \big)$"),
+        (r"$x_{\bigl(a+b\bigr)}$", r"$x_{\bigl( a+b \bigr)}$"),
+        (r"$\big(\big)$", r"$\big(\big)$"),
+        (r"$\big x$", r"$\big x$"),
+        (r"$\bigm|$", r"$\bigm|$"),
+        (r"$a\bigm|b$", r"$a \bigm| b$"),
+        (r"$x_{a\bigm|b}$", r"$x_{a \bigm| b}$"),
+        (
+            "$\\big% delimiter\n(x\\big)$",
+            "$\\big% delimiter\n(x \\big)$",
+        ),
+        ("$\\big(x% body\n\\big)$", "$\\big( x% body\n\\big)$"),
+    ] {
+        let expected = format!("{expected}\n");
+        assert_eq!(format(input).unwrap(), expected, "{input}");
+        check_format_invariants(input, FormatStyle::default(), LexConfig::default()).unwrap();
+    }
+}

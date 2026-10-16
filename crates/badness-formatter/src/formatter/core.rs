@@ -9861,6 +9861,7 @@ struct MathPiece {
     /// spacing exactly as [`lower_math_seq`] does, so a tight command boundary
     /// (`\gamma)`, `}.`) stays tight rather than gaining a spurious space.
     space_before: bool,
+    sized_delimiter: Option<DelimiterRole>,
     /// Net change in bracket nesting (`(`/`[`/`\{`/named delimiters vs their
     /// closers) contributed by this atom's own text. Used to suppress operator
     /// breaks inside a bracketed subexpression (`(1 - \gamma)` must not break at
@@ -9869,6 +9870,7 @@ struct MathPiece {
 }
 
 struct MathSurfaceAtom {
+    sized_delimiter: Option<DelimiterRole>,
     ir: Ir,
     multiline_block: bool,
     block_suffix: bool,
@@ -9883,6 +9885,87 @@ struct MathSurfaceAtom {
     starts_control_word_letter: bool,
     ends_control_word: bool,
     postfix_left_limit: bool,
+}
+
+/// Treat a size command and its following delimiter as one layout atom. TeX
+/// consumes that delimiter as the command's argument, so no separator belongs
+/// between them. Comments remain barriers and are handled by the caller.
+fn lower_sized_math_atoms(
+    element: SyntaxElement,
+    iter: &mut impl Iterator<Item = SyntaxElement>,
+    cx: LowerCtx<'_>,
+    spacing: MathSpacing,
+) -> Vec<MathSurfaceAtom> {
+    let name = match &element {
+        SyntaxElement::Node(node) if node.kind() == SyntaxKind::COMMAND => {
+            let mut children = node.children_with_tokens();
+            match (children.next(), children.next()) {
+                (Some(SyntaxElement::Token(token)), None) => token.text().to_owned(),
+                _ => return lower_math_atoms(element, cx, spacing),
+            }
+        }
+        _ => return lower_math_atoms(element, cx, spacing),
+    };
+    let sized = ["big", "Big", "bigg", "Bigg"].iter().any(|prefix| {
+        name.strip_prefix('\\')
+            .and_then(|name| name.strip_prefix(prefix))
+            .is_some_and(|suffix| matches!(suffix, "" | "l" | "r" | "m"))
+    });
+    if !sized {
+        return lower_math_atoms(element, cx, spacing);
+    }
+    let mut next = element.next_sibling_or_token();
+    let mut skip = 0;
+    while next
+        .as_ref()
+        .is_some_and(|el| is_collapsible_trivia(el.kind()))
+    {
+        next = next.and_then(|element| element.next_sibling_or_token());
+        skip += 1;
+    }
+    let Some(delimiter) = next else {
+        return lower_math_atoms(element, cx, spacing);
+    };
+    let role = math_atoms(&delimiter)
+        .next()
+        .and_then(|atom| atom.delimiter);
+    let Some(mut role) = role else {
+        return lower_math_atoms(element, cx, spacing);
+    };
+    if name.ends_with('l') {
+        role = DelimiterRole::Open;
+    } else if name.ends_with('r') {
+        role = DelimiterRole::Close;
+    } else if name.ends_with('m') {
+        role = DelimiterRole::Fence;
+    }
+    for _ in 0..skip {
+        iter.next();
+    }
+    let Some(delimiter) = iter.next() else {
+        return lower_math_atoms(element, cx, spacing);
+    };
+    let mut atoms = lower_math_atoms(delimiter, cx, spacing);
+    if let Some(first) = atoms.first_mut() {
+        let middle = name.ends_with('m');
+        first.ir = Ir::concat([Ir::verbatim(name), first.ir.clone()]);
+        first.starts_control_word_letter = false;
+        first.sized_delimiter = Some(role);
+        first.delimiter = Some(role);
+        first.control_word_operator = middle;
+        first.class = match role {
+            DelimiterRole::Open => MathClass::Open,
+            DelimiterRole::Close => MathClass::Close,
+            DelimiterRole::Fence if middle => MathClass::Rel,
+            DelimiterRole::Fence => MathClass::Fence,
+        };
+    }
+    atoms
+}
+
+fn sized_delimiter_space(previous: Option<DelimiterRole>, current: Option<DelimiterRole>) -> bool {
+    (previous == Some(DelimiterRole::Open) || current == Some(DelimiterRole::Close))
+        && !(previous == Some(DelimiterRole::Open) && current == Some(DelimiterRole::Close))
 }
 
 /// Keep sibling math blocks at the body indent without detaching punctuation
@@ -9999,6 +10082,7 @@ fn lower_math_atoms(
         let ir = lower_math_element(el, cx, spacing);
         let multiline_block = block_shape && ir.contains_forced_break();
         return vec![MathSurfaceAtom {
+            sized_delimiter: None,
             ir,
             multiline_block,
             block_suffix,
@@ -10029,6 +10113,7 @@ fn lower_math_atoms(
         let control_word_operator =
             ends_control_word && matches!(atom.class, MathClass::Bin | MathClass::Rel);
         return vec![MathSurfaceAtom {
+            sized_delimiter: None,
             ir: lower_math_element(el, cx, spacing),
             multiline_block: false,
             block_suffix: atom.class == MathClass::Punct
@@ -10071,6 +10156,7 @@ fn lower_math_atoms(
             }
         }
         surface.push(MathSurfaceAtom {
+            sized_delimiter: None,
             ir: Ir::verbatim(text),
             multiline_block: false,
             block_suffix: atom.class == MathClass::Punct
@@ -10248,7 +10334,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
             SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK => return None,
             other => {
-                for atom in lower_math_atoms(other, cx, MathSpacing::Normal) {
+                for atom in lower_sized_math_atoms(other, &mut iter, cx, MathSpacing::Normal) {
                     let role = math_atom_role(
                         atom.class,
                         prev_class,
@@ -10295,6 +10381,7 @@ fn collect_math_pieces(elements: &[SyntaxElement], cx: LowerCtx<'_>) -> Option<V
                         spaced_slash: atom.spaced_slash,
                         slash: atom.slash,
                         space_before: pending_space,
+                        sized_delimiter: atom.sized_delimiter,
                         bracket_delta,
                     });
                     if atom.break_kind == MathBreakKind::Conditional && bracket_depth == 0 {
@@ -10395,7 +10482,10 @@ fn lower_math_piece_chain(pieces: &[MathPiece], initial_depth: i32) -> Ir {
     // [`lower_math_seq`]: a space around any operator (either side) or across an
     // authored gap, nothing between two operands authored tight.
     let space_sep = |k: usize| -> Ir {
-        if pieces[k].spaced_slash || pieces[k - 1].spaced_slash {
+        if sized_delimiter_space(pieces[k - 1].sized_delimiter, pieces[k].sized_delimiter)
+            || pieces[k].spaced_slash
+            || pieces[k - 1].spaced_slash
+        {
             Ir::verbatim(" ")
         } else if pieces[k].role == MathRole::PostfixLeftLimit
             || pieces[k - 1].role == MathRole::PostfixLeftLimit
@@ -10593,6 +10683,7 @@ fn lower_math_seq_with_blocks(
     let mut prev_class = MathClass::Rel;
     let mut prev_opener = false; // the previous atom ended with an opening delimiter
     let mut prev_delimiter_edge = false;
+    let mut prev_sized_delimiter = None;
     let mut prev_spaced_slash = false;
     let mut prev_control_word_operator = false;
     let mut prev_ends_control_word = false;
@@ -10642,7 +10733,7 @@ fn lower_math_seq_with_blocks(
                     &other,
                     SyntaxElement::Node(n) if n.kind() == SyntaxKind::LINE_BREAK
                 );
-                for atom in lower_math_atoms(other, cx, spacing) {
+                for atom in lower_sized_math_atoms(other, &mut iter, cx, spacing) {
                     let block_break = break_blocks && blocks.before(&atom);
                     let completes_colon_relation = prev_colon_relation_prefix
                         && atom.starts_equals_relation
@@ -10693,7 +10784,8 @@ fn lower_math_seq_with_blocks(
                         // Tight script spacing must not merge `\in A` into the
                         // distinct control word `\inA`.
                         out.push(Ir::verbatim(" "));
-                    } else if touches_spaced_slash
+                    } else if sized_delimiter_space(prev_sized_delimiter, atom.sized_delimiter)
+                        || touches_spaced_slash
                         || normal_spacing
                         || spacing == MathSpacing::Script
                             && (script_operator_spacing || spaced_operands)
@@ -10705,6 +10797,7 @@ fn lower_math_seq_with_blocks(
                     }
                     prev_opener = atom.delimiter == Some(DelimiterRole::Open);
                     prev_delimiter_edge = delimiter_edge;
+                    prev_sized_delimiter = atom.sized_delimiter;
                     prev_spaced_slash = spaced_slash;
                     prev_control_word_operator = atom.control_word_operator;
                     prev_ends_control_word = atom.ends_control_word;

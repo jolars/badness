@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/jolars/badness/compare/badness-parser-v0.11.1...badness-parser-v0.11.2) (2026-10-16)
+
+### Bug Fixes
+
+- preserve inline list suffix spacing ([`fef9350`](https://github.com/jolars/badness/commit/fef93506ed23405eb361185115850354e13b8405)), fixes [#209](https://github.com/jolars/badness/issues/209)
+- format inline list items on separate lines ([`271edc0`](https://github.com/jolars/badness/commit/271edc08759ba7cfb6d1d9111b881350798e7a82)), fixes [#210](https://github.com/jolars/badness/issues/210)
+
 ## [0.11.1](https://github.com/jolars/badness/compare/badness-parser-v0.11.0...badness-parser-v0.11.1) (2026-10-08)
 
 ### Bug Fixes

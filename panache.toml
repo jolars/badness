@@ -17,6 +17,5 @@ extend-exclude = [
   ".github/**/*.md",
 ]
 
-[flavor-overrides]
-"docs/src/**/*.md" = "gfm"
-"README.md" = "gfm"
+[flavors]
+gfm = ["docs/src/**/*.md", "README.md"]

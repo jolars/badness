@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.0](https://github.com/jolars/badness/compare/badness-formatter-v0.10.2...badness-formatter-v0.11.0) (2026-10-18)
+
+### Features
+
+- harmonize field order ([`c28c173`](https://github.com/jolars/badness/commit/c28c1731cd7ff8ac209340c0efa6721db02e92f7))
+
+### Bug Fixes
+
+- **formatter:** space sized math delimiters ([`4673f2f`](https://github.com/jolars/badness/commit/4673f2fc2e4ea1d226b8d484ff76289fcb634dae)), fixes [#211](https://github.com/jolars/badness/issues/211)
+- preserve inline list suffix spacing ([`fef9350`](https://github.com/jolars/badness/commit/fef93506ed23405eb361185115850354e13b8405)), fixes [#209](https://github.com/jolars/badness/issues/209)
+- format inline list items on separate lines ([`271edc0`](https://github.com/jolars/badness/commit/271edc08759ba7cfb6d1d9111b881350798e7a82)), fixes [#210](https://github.com/jolars/badness/issues/210)
+
+### Dependencies
+
+- updated crates/badness-parser to v0.11.2
+
 ## [0.10.2](https://github.com/jolars/badness/compare/badness-formatter-v0.10.1...badness-formatter-v0.10.2) (2026-10-08)
 
 ### Bug Fixes

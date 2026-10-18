@@ -198,6 +198,9 @@ const CLEAN_CASES: &[&str] = &[
     r"\\ \{ \} \% \, \;",
     "trailing backslash \\",
     "[opt] {req} & # ~ ^_",
+    // Nested argument ownership must survive trivia perturbations, including
+    // the comment fallback and the mandatory body's paragraph boundary.
+    include_str!("fixtures/formatter/optional_nested_commands/input.tex"),
     "no final newline",
     "para one\n\npara two\n",
     // Signature-DB-aware environment headers: a declared argument glued onto the
@@ -933,6 +936,10 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // The three `\wide` calls carry identical content and differ only in where
     // the author broke the line, so they must format identically.
     ("optional_expands_to_width", WrapMode::Reflow, 60),
+    // Nested commands and brace-protected optionals keep their commas out of
+    // the outer textual optional's split points. Comments preserve their
+    // binding through fallback layout, and mandatory-body paragraphs stay apart.
+    ("optional_nested_commands", WrapMode::Reflow, 48),
     // Splitting a comma the author *glued* needs the signature DB to prove the
     // argument keyval (`ContentKind::Keyval`; `axis` via the CWL `%keyvals` mark).
     // The lexer ends a `WORD` at every control sequence, so `width=\figurewidth`

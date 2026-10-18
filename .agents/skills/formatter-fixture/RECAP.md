@@ -43,7 +43,7 @@ fixture tables:
 | Sectioning | `sectioning_starts_own_line`, `sectioning_blank_line_and_comment` |
 | Keyval groups | `keyval_group_splits_entries`, `keyval_group_declines_on_comment`, `environment_keyval_group_splits_entries` |
 | List markers | `list_item_overlay_prefix` |
-| Inline command arguments | `inline_command_argument_glue` |
+| Command arguments | `inline_command_argument_glue`, `optional_nested_commands` |
 | Raw macro definitions | `def_delimited_parameters` |
 | Display math in prose | `display_math_prose_boundaries` |
 

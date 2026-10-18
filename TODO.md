@@ -487,6 +487,9 @@ sources below are missing.
   `inline_command_argument_glue` pins that collapsible trivia before matched
   arguments of a curated inline prose command is removed under ordinary prose
   and prose-argument reflow, while a trailing comment remains a hard barrier;
+  `optional_nested_commands` pins textual optional wrapping around nested
+  commands and brace-protected optionals, with comment binding and mandatory-body
+  paragraph breaks preserved;
   standalone or trivia-separated paragraph-spanning optionals remain blocked on
   a source-shape parser proof. Re-measure the remaining environment and argument
   shapes before choosing the next distinct target.

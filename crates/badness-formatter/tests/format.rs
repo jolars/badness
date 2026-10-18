@@ -201,6 +201,9 @@ const CLEAN_CASES: &[&str] = &[
     // Nested argument ownership must survive trivia perturbations, including
     // the comment fallback and the mandatory body's paragraph boundary.
     include_str!("fixtures/formatter/optional_nested_commands/input.tex"),
+    // Trivia perturbations must preserve comment binding around real and
+    // commented-out environment delimiters.
+    include_str!("fixtures/formatter/environment_delimiters_in_comments/input.tex"),
     "no final newline",
     "para one\n\npara two\n",
     // Signature-DB-aware environment headers: a declared argument glued onto the
@@ -625,6 +628,9 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // idiom) rides the `\begin` header instead of dropping to its own indented
     // line; a `%` the author put on its own line is left there.
     ("environment_begin_trailing_comment", WrapMode::Reflow, 80),
+    // Delimiter-like comment text must not affect environment pairing or enter
+    // verbatim mode. Nested bodies still reflow, and comments keep their binding.
+    ("environment_delimiters_in_comments", WrapMode::Reflow, 80),
     // The same `\begin`-line `%` lift for every *specialized* environment layout —
     // the alignment grid (`tabular`), math formula (`equation`), math grid
     // (`align`), list (`itemize`), and display math (`\[`), plus the empty-body

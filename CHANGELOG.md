@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.28.0](https://github.com/jolars/badness/compare/v0.27.0...v0.28.0) (2026-10-18)
+
+### Features
+
+- harmonize field order ([`c28c173`](https://github.com/jolars/badness/commit/c28c1731cd7ff8ac209340c0efa6721db02e92f7))
+- add `extend-select` for lint rules ([`11846b2`](https://github.com/jolars/badness/commit/11846b2e1c00208d2375dc979739b758fab9454f))
+- **lsp:** add code action for inlining `\input` calls ([`11d0728`](https://github.com/jolars/badness/commit/11d07287b4491547316fa5776d71bff51e1a6755))
+
+### Bug Fixes
+
+- preserve inline list suffix spacing ([`fef9350`](https://github.com/jolars/badness/commit/fef93506ed23405eb361185115850354e13b8405)), fixes [#209](https://github.com/jolars/badness/issues/209)
+- **lint:** recognize `\tabularnewline` row boundaries ([`b97aa91`](https://github.com/jolars/badness/commit/b97aa91bc1c52fe938718d45ea8cd23d0471d665)), fixes [#207](https://github.com/jolars/badness/issues/207)
+- make `hard-coded-reference` opt-in ([`4a47e14`](https://github.com/jolars/badness/commit/4a47e146fd3d6242910d4653e0ae66328a192517))
+
+### Dependencies
+
+- updated crates/badness-formatter to v0.11.0
+- updated crates/badness-parser to v0.11.2
+
 ## [0.27.0](https://github.com/jolars/badness/compare/v0.26.0...v0.27.0) (2026-10-08)
 
 ### Features

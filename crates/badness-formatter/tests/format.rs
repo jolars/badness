@@ -954,6 +954,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // and newline-separated commas without a space; every spelling therefore uses
     // the same empty-flat/broken-newline separator and width decision.
     ("optional_keyval_splits_glued", WrapMode::Reflow, 80),
+    ("issue_213_usepackage_spacing", WrapMode::Reflow, 80),
     // The mirror: a *textual* optional never gains a space, at any width. Compiling
     // both spellings shows `\item[red,green]`, a `\newcommand` default, and a
     // `\caption` short entry all typeset the inserted space, so these overflow
@@ -2349,6 +2350,63 @@ fn textual_environment_optionals_preserve_invariants() {
                 ..FormatStyle::default()
             },
         );
+    }
+}
+
+#[test]
+fn package_spacing_preserves_sensitive_content() {
+    for input in [
+        "\\usepackage[ title={ Some text, with spaces } , draft ]{ demo }\n",
+        "\\usepackage[ width=\\figurewidth , draft ]{ demo }\n",
+        "\\usepackage[ title=Some text , draft ]{ demo }\n",
+        "\\usepackage[ a=1, % keep this comment\n b=2 ]{ demo }\n",
+        "\\usepackage{ graphicx, % keep this comment\n xcolor }\n",
+        "\\unknown[ a , b ]{ padded }\n",
+        "\\item[ padded, text ] body\n",
+        "\\newcommand{\\usepackage}[2][]{#1#2}\n\\usepackage[ padded ]{ padded }\n",
+    ] {
+        for line_width in [20, 40, 80, 120] {
+            assert_format_invariants_with_style(
+                input,
+                FormatStyle {
+                    line_width,
+                    ..FormatStyle::default()
+                },
+            );
+        }
+    }
+    assert_eq!(
+        format("\\usepackage[ title={ Some text, with spaces } , draft ]{ demo }\n").unwrap(),
+        "\\usepackage[title={ Some text, with spaces },draft]{demo}\n",
+    );
+    for input in [
+        "\\unknown[ a , b ]{ padded }\n",
+        "\\item[ padded, text ] body\n",
+    ] {
+        assert_eq!(format(input).unwrap(), input);
+    }
+    let shadowed = "\\newcommand{\\usepackage}[2][]{#1#2}\n\\usepackage[ padded ]{ padded }\n";
+    assert!(
+        format(shadowed)
+            .unwrap()
+            .ends_with("\\usepackage[ padded ]{ padded }\n")
+    );
+}
+
+#[test]
+fn package_options_normalize_before_width_measurement() {
+    let padded = "\\usepackage[ letterpaper  , twoside=false , scale=0.8 ]{ geometry }\n";
+    let compact = "\\usepackage[letterpaper,twoside=false,scale=0.8]{geometry}\n";
+    for line_width in [20, 40, 54, 55, 60, 80] {
+        let style = FormatStyle {
+            line_width,
+            ..FormatStyle::default()
+        };
+        assert_eq!(
+            format_with_style(padded, style).unwrap(),
+            format_with_style(compact, style).unwrap(),
+        );
+        assert_format_invariants_with_style(padded, style);
     }
 }
 

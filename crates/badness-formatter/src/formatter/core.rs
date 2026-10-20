@@ -8517,14 +8517,18 @@ fn lower_segmented_group(
         close,
         splits,
     } = segments;
-    // Padding at the body's edges rides the flat rendering but must vanish when the
-    // delimiters take their own lines, or the first key lands at indent + 1.
+    // Keyval processors discard entry padding. Textual optionals must retain it
+    // even when there is no comma at which the body can break.
     let lead = peel_padding(&mut parts, Edge::Leading);
     let trail = peel_padding(&mut parts, Edge::Trailing);
     if splits == 0 {
         // Nothing to break at: emit the collapsed atom and let it overflow. A
         // breakable group here would push `[!htb]` onto three lines to no gain.
-        return Some(Ir::concat([open, lead, Ir::concat(parts), trail, close]));
+        return Some(if keyval {
+            Ir::concat([open, Ir::concat(parts), close])
+        } else {
+            Ir::concat([open, lead, Ir::concat(parts), trail, close])
+        });
     }
     if !keyval {
         // Only a single-space edge can become a newline and reconstruct the
@@ -8546,12 +8550,7 @@ fn lower_segmented_group(
     let body = Ir::concat(parts);
     Some(Ir::group(Ir::concat([
         open,
-        Ir::indent(Ir::concat([
-            Ir::soft_line(),
-            Ir::if_break(lead, Ir::Nil),
-            body,
-        ])),
-        Ir::if_break(trail, Ir::Nil),
+        Ir::indent(Ir::concat([Ir::soft_line(), body])),
         Ir::soft_line(),
         close,
     ])))
@@ -8665,6 +8664,9 @@ fn segment_delimited_body(
             }
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::COMMENT => return None,
             SyntaxElement::Token(t) if t.kind() == SyntaxKind::WORD && depth == 0 => {
+                if normalize_commas && t.text().starts_with(',') {
+                    let _ = peel_padding(&mut parts, Edge::Trailing);
+                }
                 splits += push_entry_word(t.text(), normalize_commas, &mut parts, entry_open);
                 // A word ending in `,` closes its entry and opens an empty one.
                 open_entry = t.text().ends_with(',');
@@ -9389,7 +9391,7 @@ fn lower_command_with_math_spacing(
                         // atom. The paragraph path exposes its top-level entries as
                         // fill atoms before reaching this lowering.
                         out.push(
-                            collapse_arg_group(&child, open, close, cx)
+                            lower_token_list_group(&child, open, close, cx)
                                 .unwrap_or_else(|| lower_node(&child, cx)),
                         );
                     }
@@ -9560,12 +9562,38 @@ fn body_ends_with_comment(node: &SyntaxNode, close: SyntaxKind) -> bool {
     false
 }
 
+/// Keep a token list together outside paragraph fill while normalizing its
+/// top-level entry padding. Nested groups retain their own whitespace semantics.
+fn lower_token_list_group(
+    node: &SyntaxNode,
+    open_kind: SyntaxKind,
+    close_kind: SyntaxKind,
+    cx: LowerCtx<'_>,
+) -> Option<Ir> {
+    if node
+        .children_with_tokens()
+        .any(|element| matches!(element.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD))
+    {
+        return None;
+    }
+    let GroupSegments {
+        open,
+        mut parts,
+        close,
+        ..
+    } = segment_delimited_body(node, open_kind, close_kind, cx, true)?;
+    let _ = peel_padding(&mut parts, Edge::Leading);
+    let _ = peel_padding(&mut parts, Edge::Trailing);
+    Some(Ir::concat([
+        open,
+        Ir::concat(parts.into_iter().filter(|part| !is_segment_separator(part))),
+        close,
+    ]))
+}
+
 /// Collapse top-level argument gaps without exposing word-wrap opportunities.
-/// Opaque environment values use this to stay together. A signature-marked
-/// [`ContentKind::TokenList`] also uses it outside paragraph reflow or when safe
-/// comma boundaries cannot be exposed there. Interior newlines collapse to
-/// spaces, so a citation list written across lines (`\citep{\n  a,\n  b\n}`)
-/// formats identically to its one-line form (`\citep{a, b}`).
+/// Opaque environment values use this to stay together while retaining interior
+/// spaces. Interior newlines collapse to spaces.
 ///
 /// Returns `None` — the caller falls back to the generic form ([`lower_node`]) — when
 /// the group is *not* safely collapsible: it holds a blank-line paragraph break, a `%`

@@ -92,6 +92,12 @@ they do not fit. Opaque braced environment arguments keep values such as
 comments retain their binding; the formatter does not insert `%` markers to
 create new break opportunities.
 
+Known key-value lists discard padding around their top-level entries. Package
+name lists also discard padding, so
+`\usepackage[ letterpaper , scale=0.8 ]{ geometry }` formats as
+`\usepackage[letterpaper,scale=0.8]{geometry}`. Spaces inside braced option
+values remain intact.
+
 For a literal top-level `\documentclass{cas-sc}` or `\documentclass{cas-dc}`,
 Badness treats the braced affiliation fields and the trailing address options of
 `\affiliation` as key-value lists. Short lists stay inline; longer lists expand

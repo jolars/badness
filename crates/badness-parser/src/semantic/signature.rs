@@ -91,8 +91,9 @@ pub enum ContentKind {
     Algorithm2e,
     /// A comma-separated token list whose interior whitespace is *insignificant*,
     /// so the formatter may collapse a multi-line authored form to a single line
-    /// (a `\citep`/`\cite` key list). Unlike [`Prose`](ContentKind::Prose), the
-    /// content participates in the surrounding paragraph fill only at its
+    /// (a `\citep`/`\cite` key list or package names). Unlike
+    /// [`Prose`](ContentKind::Prose), the content participates in the surrounding
+    /// paragraph fill only at its
     /// top-level commas, so an over-width citation can wrap between keys without
     /// splitting a key or detaching its delimiters. Incidental source line breaks
     /// are normalized away, so `\citep{\n a,\n b\n}` formats identically to

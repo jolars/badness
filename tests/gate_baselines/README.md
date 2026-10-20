@@ -119,11 +119,10 @@ comparison** and the **`]`-deletion fix** it exposed. Two independent movements:
   latexindent 12) — **no new bugs**. The `all` gate never ran the
   whitespace-only comparison, so this class was invisible to it; the counts land
   exactly on the `content-change` totals the *trivia* sets already recorded
-  (latex2e 69, latex3
-  11) plus latexindent's `figureValign` family (12), which is what the
-      classification note below predicted when it said these reproduce "without
-      any perturbation via `badness format --wrap reflow`". The gate now says
-      so.
+  (latex2e 69, latex3 11) plus latexindent's `figureValign` family (12), which
+  is what the classification note below predicted when it said these reproduce
+  "without any perturbation via `badness format --wrap reflow`". The gate now
+  says so.
 
 Net: `all` grew latex2e 28 → 97, latex3 16 → 27, latexindent 190 → 202, pgf
 unchanged; `trivia` shrank latexindent 161 → 158, the others unchanged. No file

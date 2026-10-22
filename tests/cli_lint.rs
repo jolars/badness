@@ -275,6 +275,38 @@ fn dash_length_is_disabled_by_default_and_selectable() {
 }
 
 #[test]
+fn encoding_hints_is_disabled_by_default_and_selectable() {
+    let dir = repo_dir();
+    let source = "@misc{k, author = {Schölkopf, Bernhard}, title = {Example}, year = {2026}}\n";
+    std::fs::write(dir.path().join("refs.bib"), source).unwrap();
+
+    let default = lint(dir.path(), &["--output=json", "refs.bib"], None);
+    assert!(default.status.success());
+    assert!(default.stderr.is_empty());
+    assert_eq!(default.stdout, b"[]\n");
+
+    for flag in ["--select", "--extend-select"] {
+        let selected = lint(
+            dir.path(),
+            &["--output=json", flag, "encoding-hints", "refs.bib"],
+            None,
+        );
+        assert_eq!(selected.status.code(), Some(1));
+        assert!(selected.stderr.is_empty());
+        let findings: serde_json::Value = serde_json::from_slice(&selected.stdout).unwrap();
+        let findings = findings.as_array().unwrap();
+        assert_eq!(findings.len(), 1, "{flag}: {findings:?}");
+        let finding = &findings[0];
+        assert_eq!(finding["rule"], "encoding-hints");
+        assert_eq!(finding["severity"], "hint");
+        let start = finding["start"].as_u64().unwrap() as usize;
+        let end = finding["end"].as_u64().unwrap() as usize;
+        assert_eq!(&source[start..end], "ö");
+        assert!(finding.get("fix").is_none());
+    }
+}
+
+#[test]
 fn hard_coded_reference_is_disabled_by_default_and_selectable() {
     let dir = repo_dir();
     let source = "Bob's Lemma~1 matches what we have here.\nSee Figure 3 for the results.\n";

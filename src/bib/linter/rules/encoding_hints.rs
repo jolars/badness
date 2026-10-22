@@ -1,12 +1,10 @@
-//! `encoding-hints`: non-ASCII text in a field value.
+//! `encoding-hints`: opt-in non-ASCII checks for legacy bibliography toolchains.
 //!
-//! Raw non-ASCII bytes in a `.bib` file render correctly only when the file is
-//! UTF-8 *and* the consuming document loads the right input encoding
-//! (`\usepackage[utf8]{inputenc}` with pdfLaTeX, or `fontspec` with Xe/LuaLaTeX).
-//! Legacy BibTeX toolchains often mangle them. This rule surfaces each non-ASCII
-//! run as a [`Severity::Hint`] (not a warning — accented text is perfectly valid in
-//! a UTF-8 setup) suggesting either confirming the encoding or using a LaTeX escape
-//! (`\'e` for `é`). Report-only: the right fix depends on the project's toolchain.
+//! A `.bib` file may serve a website, Biber, or another Unicode-aware consumer.
+//! Modern pdfLaTeX also defaults to UTF-8 input. Non-ASCII text alone therefore
+//! does not establish an encoding problem, and this rule is disabled by default.
+//! For legacy BibTeX compatibility checks, it surfaces each non-ASCII run as a
+//! [`Severity::Hint`]. Report-only: the right fix depends on the consumer.
 //!
 //! Only field *values* are scanned; one hint is emitted per maximal non-ASCII run.
 
@@ -34,13 +32,20 @@ impl BibRule for EncodingHints {
         Severity::Hint
     }
 
+    fn default_enabled(&self) -> bool {
+        false
+    }
+
     fn description(&self) -> &'static str {
-        "Report non-ASCII text in a field value as a hint. Accented text is valid in a \
-         UTF-8 setup, so this is not a warning. Raw non-ASCII text renders correctly \
-         only when the file is UTF-8 and the document loads a matching input encoding \
-         (`inputenc` with pdfLaTeX, `fontspec` with XeLaTeX or LuaLaTeX). Legacy \
-         toolchains may corrupt it. Confirm the encoding or use a LaTeX escape (`\\'e` \
-         for `é`). No autofix is offered because the right change depends on the \
+        "Report non-ASCII text in field values as hints when checking compatibility \
+         with legacy BibTeX toolchains, which may mishandle UTF-8 during sorting, \
+         case conversion, or name abbreviation. Unicode-aware consumers, including \
+         Biber and website bibliography processors, can accept UTF-8 directly. \
+         pdfLaTeX has defaulted to UTF-8 input since April 2018, although supported \
+         characters still depend on LaTeX definitions and fonts. This rule does not \
+         infer the consumer or detect an actual encoding incompatibility. Enable \
+         it with `extend-select = [\"encoding-hints\"]` under `[lint]` for a \
+         compatibility audit. No autofix is offered because the right change depends on the \
          project's toolchain."
     }
 
@@ -69,8 +74,8 @@ impl BibRule for EncodingHints {
                 start: base + start,
                 end: base + end,
                 message: format!(
-                    "non-ASCII text `{run}`; ensure the file is UTF-8 and the document loads an \
-                     input encoding (inputenc/fontspec), or use a LaTeX escape"
+                    "non-ASCII text `{run}`; legacy BibTeX toolchains may mishandle UTF-8; \
+                     check compatibility or use a LaTeX escape"
                 ),
                 fix: None,
                 related: Vec::new(),

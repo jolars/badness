@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.0](https://github.com/jolars/badness/compare/badness-parser-v0.11.2...badness-parser-v0.12.0) (2026-10-22)
+
+### Features
+
+- **formatter:** normalize package and option spacing ([`950255b`](https://github.com/jolars/badness/commit/950255b6ad0be3f4a5abe8780fa4ab89716ae96f)), closes [#213](https://github.com/jolars/badness/issues/213)
+
 ## [0.11.2](https://github.com/jolars/badness/compare/badness-parser-v0.11.1...badness-parser-v0.11.2) (2026-10-18)
 
 ### Bug Fixes

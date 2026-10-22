@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.29.0](https://github.com/jolars/badness/compare/badness-code-v0.28.0...badness-code-v0.29.0) (2026-10-22)
+
+### Dependencies
+
+- updated badness to v0.29.0
+
 ## [0.28.0](https://github.com/jolars/badness/compare/badness-code-v0.27.0...badness-code-v0.28.0) (2026-10-18)
 
 ### Dependencies

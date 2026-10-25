@@ -225,6 +225,11 @@
     "tar": "^7.5.22",
     "vscode-languageclient": "^11.0.0"
   },
+  "overrides": {
+    "@azure/identity": {
+      "@azure/msal-node": "^7.1.0"
+    }
+  },
   "devDependencies": {
     "@types/adm-zip": "^0.6.0",
     "@types/node": "^26.6.5",

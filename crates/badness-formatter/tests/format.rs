@@ -1271,6 +1271,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("tabular_align_lcr", WrapMode::Preserve, 80),
     ("tabular_align_right_numeric", WrapMode::Preserve, 80),
     ("tabular_multicolumn", WrapMode::Preserve, 80),
+    ("issue_215_xltabular_caption", WrapMode::Sentence, 80),
     ("tabular_cmidrule_trim", WrapMode::Preserve, 80),
     ("tabular_rule_same_line", WrapMode::Preserve, 80),
     ("tabular_pmb_left", WrapMode::Preserve, 80),
@@ -4771,5 +4772,38 @@ fn sized_math_delimiters_preserve_structure_and_comments() {
         let expected = format!("{expected}\n");
         assert_eq!(format(input).unwrap(), expected, "{input}");
         check_format_invariants(input, FormatStyle::default(), LexConfig::default()).unwrap();
+    }
+}
+
+#[test]
+fn table_captions_do_not_set_column_widths() {
+    for env in ["xltabular", "longtable", "tabularx"] {
+        let header = match env {
+            "longtable" => "{ll}",
+            _ => "{\\linewidth}{lX}",
+        };
+        for caption in [
+            "\\caption{A caption much longer than any table cell}",
+            "\\caption*{A caption much longer than any table cell}",
+            "\\caption[Short]{A caption much longer than any table cell}",
+            "\\captionof{table}{A caption much longer than any table cell}",
+        ] {
+            for wrap in [WrapMode::Preserve, WrapMode::Sentence, WrapMode::Reflow] {
+                let style = FormatStyle {
+                    wrap,
+                    ..FormatStyle::default()
+                };
+                let input = format!(
+                    "\\begin{{{env}}}{header}\nA & B \\\\\nLong & C \\\\\n{caption} \\\\ % caption\n\\end{{{env}}}\n"
+                );
+                let output = format_with_style(&input, style).unwrap();
+                assert!(output.contains("  A    & B"), "{output}");
+                assert!(
+                    output.contains(&format!("  {caption} \\\\ % caption")),
+                    "{output}"
+                );
+                check_format_invariants(&input, style, LexConfig::default()).unwrap();
+            }
+        }
     }
 }

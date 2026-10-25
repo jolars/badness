@@ -6683,6 +6683,8 @@ fn is_math_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 struct Cell {
     text: String,
     span: usize,
+    // Only a standalone caption row is independent of the column grid.
+    caption: bool,
     align: Option<ColAlign>,
     block: Option<BlockCell>,
 }
@@ -6956,6 +6958,21 @@ fn build_alignment_grid(
         }
         // Read the `\multicolumn` span/alignment before the cell is drained below.
         let (span, align) = detect_multicolumn(cell);
+        let mut content = cell
+            .iter()
+            .filter(|element| !is_collapsible_trivia_element(element));
+        let caption = !math
+            && content
+                .next()
+                .and_then(SyntaxElement::as_node)
+                .is_some_and(|node| {
+                    node.kind() == SyntaxKind::COMMAND
+                        && matches!(
+                            command_name(node).as_deref(),
+                            Some("caption" | "caption*" | "captionof" | "captionof*")
+                        )
+                })
+            && content.next().is_none();
         // A comment in a cell is handled by the caller (passthrough / trailing /
         // fallback) and never reaches here in a handled case; this guard keeps the
         // fallback safe if one ever slips through an unmodeled path.
@@ -7038,6 +7055,7 @@ fn build_alignment_grid(
             cells.push(Cell {
                 text: String::new(),
                 span,
+                caption,
                 align,
                 block: Some(BlockCell { hang, ir }),
             });
@@ -7049,6 +7067,7 @@ fn build_alignment_grid(
         cells.push(Cell {
             text: printer.print_flat(&ir).trim().to_string(),
             span,
+            caption,
             align,
             block: None,
         });
@@ -7726,6 +7745,10 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
     };
     for item in items {
         let GridItem::Row(row) = item else { continue };
+        // A standalone caption describes the table rather than its first column.
+        if row.cells.len() == 1 && row.cells[0].caption {
+            continue;
+        }
         let mut c = 0;
         for cell in &row.cells {
             if cell.span == 1 && cell.block.is_none() {
@@ -7765,6 +7788,7 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
             }
             GridItem::Row(row) => row,
         };
+        let caption = row.cells.len() == 1 && row.cells[0].caption;
         let mut line = String::new();
         // A block cell (always the row's last, see [`Cell::block`]): its later
         // lines hang at the nested environment's start column, so its IR goes
@@ -7791,7 +7815,11 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
                 ));
                 break;
             }
-            let field = field_width(c, cell.span);
+            let field = if caption {
+                0
+            } else {
+                field_width(c, cell.span)
+            };
             let text_width = cell.text.chars().count();
             let pad = field.saturating_sub(text_width);
             // A `\multicolumn`'s own `{spec}` overrides the column alignment.
@@ -7812,7 +7840,7 @@ fn render_alignment_rows(items: &[GridItem], aligns: &[ColAlign]) -> Ir {
         }
         let mut tail = String::new();
         if let Some(line_break) = &row.line_break {
-            if block.is_none() {
+            if block.is_none() && !caption {
                 line.push_str(&" ".repeat(grid_width.saturating_sub(line.chars().count())));
             }
             tail.push(' ');

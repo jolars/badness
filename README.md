@@ -11,6 +11,8 @@ Code](https://vsmarketplacebadges.dev/version-short/jolars.badness.svg?logo=vsix
 version](https://badge.fury.io/py/badness.svg?icon=si%3Apython)](https://pypi.org/project/badness/)
 [![npm
 version](https://badge.fury.io/js/@badness%2Fbadness.svg?icon=si%3Anpm)](https://www.npmjs.com/package/badness)
+[![Software
+DOI](https://img.shields.io/badge/Software_DOI-10.5281%2Fzenodo.20664708-blue)](https://doi.org/10.5281/zenodo.20664708)
 
 Badness is a language server, formatter, and linter for LaTeX. It is designed to
 be fast, robust, and memory efficient. It bundles three tools in one:
@@ -145,6 +147,15 @@ complete workflow, dprint setup, and using Badness inside Panache code blocks.
 
 See <https://badness.dev/> for the full documentation, including a user guide,
 reference, and developer guide.
+
+## Citation
+
+If you use Badness in your research, please cite the release you used. Select
+that release in the [Zenodo archive](https://doi.org/10.5281/zenodo.20664708)
+and export its citation. To cite Badness generally, use the concept DOI
+`10.5281/zenodo.20664708`.
+
+Machine-readable metadata is available in [CITATION.cff](CITATION.cff).
 
 ## Contributing
 

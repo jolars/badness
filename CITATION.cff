@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: If you use this software, please cite the release you used. Use the concept
+  DOI to cite the project as a whole.
+type: software
+title: 'Badness: A language server, formatter, and linter for LaTeX'
+authors:
+  - family-names: Larsson
+    given-names: Johan
+    affiliation: University of Copenhagen
+    orcid: https://orcid.org/0000-0002-4029-5945
+doi: 10.5281/zenodo.20664708
+url: https://badness.dev
+repository-code: https://github.com/jolars/badness
+license: MIT

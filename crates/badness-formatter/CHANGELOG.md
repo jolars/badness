@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/jolars/badness/compare/badness-formatter-v0.11.0...badness-formatter-v0.12.0) (2026-10-29)
+
+### Features
+
+- **formatter:** normalize package and option spacing ([`950255b`](https://github.com/jolars/badness/commit/950255b6ad0be3f4a5abe8780fa4ab89716ae96f)), closes [#213](https://github.com/jolars/badness/issues/213)
+
+### Bug Fixes
+
+- exclude table captions from column widths ([`1c93df1`](https://github.com/jolars/badness/commit/1c93df1ab874bb35feb395f084ded518b2d0285c)), fixes [#215](https://github.com/jolars/badness/issues/215)
+
+### Dependencies
+
+- updated crates/badness-parser to v0.12.0
+
 ## [0.11.0](https://github.com/jolars/badness/compare/badness-formatter-v0.10.2...badness-formatter-v0.11.0) (2026-10-18)
 
 ### Features

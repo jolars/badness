@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.29.0](https://github.com/jolars/badness/compare/v0.28.0...v0.29.0) (2026-10-29)
+
+### Features
+
+- **formatter:** normalize package and option spacing ([`950255b`](https://github.com/jolars/badness/commit/950255b6ad0be3f4a5abe8780fa4ab89716ae96f)), closes [#213](https://github.com/jolars/badness/issues/213)
+
+### Bug Fixes
+
+- **lint:** make `encoding-hints` opt-in ([`be34f7e`](https://github.com/jolars/badness/commit/be34f7e992e2f5b51a7d9c333b4e2440b6cecf2f))
+
+### Dependencies
+
+- updated crates/badness-formatter to v0.12.0
+- updated crates/badness-parser to v0.12.0
+
 ## [0.28.0](https://github.com/jolars/badness/compare/v0.27.0...v0.28.0) (2026-10-18)
 
 ### Features

@@ -11,8 +11,7 @@ Code](https://vsmarketplacebadges.dev/version-short/jolars.badness.svg?logo=vsix
 version](https://badge.fury.io/py/badness.svg?icon=si%3Apython)](https://pypi.org/project/badness/)
 [![npm
 version](https://badge.fury.io/js/@badness%2Fbadness.svg?icon=si%3Anpm)](https://www.npmjs.com/package/badness)
-[![Software
-DOI](https://img.shields.io/badge/Software_DOI-10.5281%2Fzenodo.20664708-blue)](https://doi.org/10.5281/zenodo.20664708)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.20664708-blue)](https://doi.org/10.5281/zenodo.20664708)
 
 Badness is a language server, formatter, and linter for LaTeX. It is designed to
 be fast, robust, and memory efficient. It bundles three tools in one:

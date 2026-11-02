@@ -1,115 +1,17 @@
 # Configuration Reference
 
-For a walkthrough of creating and sharing a project config, see the
-[configuration guide](../guide/configuration.md).
+All keys in `badness.toml` are optional and spelled in kebab-case. Badness
+reports an error for an unknown key or section.
 
-Badness is configured through a `badness.toml` file. All keys are optional and
-spelled in kebab-case. Badness reports an error for an unknown key or section.
-Run `badness init` to write a commented starter file with defaults and examples.
+<!-- Preserve bookmarks to sections moved into the configuration guide. -->
+<span id="discovery"></span> <span id="editor-support"></span>
+<span id="vs-code-even-better-toml"></span>
+<span id="inline-schema-directive"></span> <span id="other-editors"></span>
 
-```toml
-# extend = "../shared/badness.toml"
-
-# Gitignore-style patterns to skip during directory discovery.
-# exclude = [".git/"]
-# extend-exclude = []
-
-[format]
-# line-width = 80  # 0 disables width-based wrapping
-# indent-width = 2
-# item-indent = "hang"  # hang | indent | none
-# wrap = "reflow"  # reflow | stable | sentence | semantic | preserve
-# line-ending = "auto"  # auto | lf | crlf | native
-
-[lint]
-# select = ["..."]  # replaces the default rule set
-# extend-select = []  # adds rules to select or the defaults
-# ignore = []         # rules to disable, including extend-select
-```
-
-## Discovery
-
-For each input, Badness walks from the file's directory upward and uses the
-first `badness.toml` it finds. The walk stops at a directory containing a `.git`
-entry (the repository root), so a config file outside your repository is never
-picked up.
-
-If no project file is found, Badness next checks the `BADNESS_CONFIG`
-environment variable. When set (and non-empty), it names a config file to use
-instead of the global user config below—handy for keeping one config on a synced
-drive and pointing every machine at it. A set `BADNESS_CONFIG` shadows the
-global config entirely.
-
-If `BADNESS_CONFIG` is unset, Badness falls back to a global user config: the
-first existing file among
-
-1. `$XDG_CONFIG_HOME/badness/config.toml`
-2. `~/.config/badness/config.toml`
-3. the platform config directory (`%APPDATA%\badness\config.toml` on Windows,
-   `~/Library/Application Support/badness/config.toml` on macOS)
-
-The `BADNESS_CONFIG` and global files use the same schema as a project
-`badness.toml` and are whole-file fallbacks, never merged with a project config.
-Relative `exclude` patterns in them resolve against the working directory (CLI)
-or the document's directory (language server) rather than the config's own
-directory. The language server uses the same resolution, so both are easy ways
-to set editor-wide defaults such as `wrap = "preserve"` (an edit is picked up
-when the server restarts). If none of these files is found, built-in defaults
-apply.
-
-Two global CLI flags override discovery:
-
-- `--config <PATH>` uses that file instead of discovering one.
-- `--no-config` ignores any project, `BADNESS_CONFIG`, or global file and uses
-  built-in defaults.
-
-CLI flags for individual options (`--line-width`, `--wrap`, `--select`, etc.)
-override the corresponding config values for a single run.
-
-## Editor support
-
-Badness publishes a [JSON Schema](https://json-schema.org/) for `badness.toml`
-so editors with TOML support can provide key and value completion, hover
-documentation, and validation.
-
-**Schema URL:** <https://badness.dev/badness.schema.json>
-
-The schema is generated from the configuration types and checked against them in
-the test suite. The version at the URL tracks the latest released version of
-Badness.
-
-### VS Code (Even Better TOML)
-
-With the [Even Better
-TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml)
-extension installed, add this association to your user or workspace
-`settings.json`:
-
-```jsonc
-{
-  "evenBetterToml.schema.associations": {
-    "^(.*/)?badness\\.toml$": "https://badness.dev/badness.schema.json"
-  }
-}
-```
-
-### Inline `#:schema` directive
-
-TOML tools that support inline schema directives can select the schema from the
-configuration file itself:
-
-```toml
-#:schema https://badness.dev/badness.schema.json
-```
-
-This is also useful for the global user configuration, whose generic
-`config.toml` file name should not be associated with Badness automatically.
-
-### Other editors
-
-Any editor or language server that consumes JSON Schemas—including Helix, Neovim
-with `taplo-lsp`, Zed, and IntelliJ—can use the same URL through its TOML schema
-settings.
+For configuration
+[discovery](../guide/configuration.md#choose-the-configuration-source), project
+setup, and [editor support](../guide/configuration.md#editor-support), see the
+configuration guide.
 
 ## Top level
 
@@ -775,9 +677,3 @@ so an entry may name a closing spelling without naming an opening one.
 begin = ['\bea']
 end = ['\eea']
 ```
-
-> **Note**: TEXMF-tree discovery (the former `[texmf]` section) is configured
-> through your editor's LSP settings, not `badness.toml`. Where a TeX
-> installation lives is a fact about the machine, not the project, so it does
-> not belong in a file shared across contributors. See [Editor
-> Configuration](editor-configuration.md#texmf-discovery).

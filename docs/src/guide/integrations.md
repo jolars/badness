@@ -35,8 +35,8 @@ By default, the action runs `badness format --check` and `badness lint` from the
 repository root, checking `.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, and `.bib`
 files without changing them. Formatting differences or lint findings fail the
 check. It uses the CLI's [configuration
-discovery](../reference/configuration.md); directory walks honor `.gitignore`
-and the exclusions in `badness.toml`.
+discovery](configuration.md#choose-the-configuration-source); directory walks
+honor `.gitignore` and the exclusions in `badness.toml`.
 
 The `@v1` tag selects the action version, and `version` selects the Badness CLI
 release. Keep the CLI release aligned with your local installation and

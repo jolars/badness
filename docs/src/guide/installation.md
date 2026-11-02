@@ -11,6 +11,8 @@ Badness is distributed as a single binary, `badness`. The current version is
 - **Nix**: `nix shell nixpkgs#badness`; add `pkgs.badness` to
   `environment.systemPackages` for a persistent NixOS installation
 - **mise/Aqua**: see [mise and Aqua](#mise-and-aqua) below
+- **Mason** (Neovim): `:MasonInstall badness`; see the [Neovim
+  setup](editor-setup.md#neovim) for enabling the language server
 - **Prebuilt binaries**: from the [releases
   page](https://github.com/jolars/badness/releases)
 - **VS Code/Open VSX**: the

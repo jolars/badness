@@ -26,7 +26,26 @@ for shared settings, their precedence, TEXMF discovery, and PDF search.
 
 ## Neovim
 
-With the built-in `vim.lsp` client (Neovim 0.11+):
+Badness is included in
+[nvim-lspconfig](https://github.com/neovim/nvim-lspconfig/blob/master/lsp/badness.lua)
+and the [Mason
+registry](https://github.com/mason-org/mason-registry/blob/main/packages/badness/package.yaml).
+If you use [mason.nvim](https://github.com/mason-org/mason.nvim), install it
+with:
+
+```vim
+:MasonInstall badness
+```
+
+With nvim-lspconfig installed and `badness` on your `PATH`, add this to your
+`init.lua` (Neovim 0.11.3+):
+
+```lua
+vim.lsp.enable("badness")
+```
+
+Without nvim-lspconfig, [install Badness](installation.md) and define the
+configuration with the built-in `vim.lsp` client (Neovim 0.11+):
 
 ```lua
 vim.lsp.config.badness = {

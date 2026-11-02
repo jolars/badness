@@ -99,6 +99,12 @@ The language server runs over stdio (`badness lsp`); see the [editor setup
 guide](https://badness.dev/guide/editor-setup) for instructions on how to
 integrate with your editor.
 
+For Neovim, Badness is included in
+[nvim-lspconfig](https://github.com/neovim/nvim-lspconfig/blob/master/lsp/badness.lua)
+and
+[Mason](https://github.com/mason-org/mason-registry/blob/main/packages/badness/package.yaml).
+See the [Neovim setup guide](https://badness.dev/guide/editor-setup#neovim).
+
 Badness is also available in Zed. See the [Zed setup
 guide](https://badness.dev/guide/editor-setup#zed).
 

@@ -1,39 +1,61 @@
-# Badness
+---
+layout: home
+hero:
+  name: Badness
+  text: LaTeX tools that keep up.
+  tagline: A fast formatter, linter, and language server for LaTeX and BibTeX.
+    Keep your source tidy and get feedback as you write.
+  image:
+    light: /images/logo.svg
+    dark: /images/logo-dark.svg
+    alt: Badness logo
+  actions:
+    - theme: brand
+      text: Get started
+      link: /guide/getting-started
+    - theme: alt
+      text: Try the playground
+      link: /playground/
+      target: _self
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/jolars/badness
+features:
+  - title: Format your source
+    details: Get consistent formatting for LaTeX and BibTeX, from papers and bibliographies to packages and expl3 code.
+    link: /guide/formatting
+  - title: Find and fix problems
+    details: Catch syntax errors and common mistakes, apply fixes, and run the same checks locally and in CI.
+    link: /guide/linting
+  - title: Stay in your editor
+    details: Get completions, diagnostics, navigation, and code actions through the language server, with formatting on save.
+    link: /guide/editor-setup
+---
 
-<img src="/images/logo.svg" alt="" class="right logo-light" style="width: 160px; padding-left: 16px; padding-bottom: 16px;" />
-<img src="/images/logo-dark.svg" alt="" class="right logo-dark" style="width: 160px; padding-left: 16px; padding-bottom: 16px;" />
+## Quick start {#where-to-go-next}
 
-**Badness** is a language server, formatter, and linter for LaTeX.
+Install Badness, then format and lint your first file:
 
-It parses LaTeX into a **lossless concrete syntax tree** and builds three tools
-on top of it:
+```sh
+npm install -g badness
+badness format paper.tex
+badness lint paper.tex
+```
 
-- a **formatter** (`badness format`) that lays out source deterministically,
-- a **linter** (`badness lint`) that reports diagnostics, and
-- a **language server** (`badness lsp`) that brings both to your editor, as well
-  as many other features.
+The [installation guide](/guide/installation) also covers Homebrew, Python,
+Cargo, Nix, and prebuilt binaries. For feedback as you write, follow the [editor
+setup guide](/guide/editor-setup).
 
-The architecture follows [rust-analyzer](https://rust-analyzer.github.io/): a
-generic, error-tolerant, hand-written parser produces a lossless tree, semantics
-are layered on top as a separate concern, and recomputation is incremental.
+## Built on your source {#the-architecture}
 
-## The Architecture
+Badness parses your source into a lossless syntax tree and updates its analysis
+as you type. The formatter preserves non-trivia content, and formatting an
+already-formatted file changes nothing. The same parser powers the formatter,
+linter, and language server.
 
-Badness treats input as generic TeX surface syntax. It never *requires*
-resolving macros or catcodes to succeed—doing that in full generality is
-equivalent to running a TeX engine, so anything it cannot statically recognize
-degrades to generic nodes rather than a crash. Two properties are guaranteed by
-construction and enforced as test oracles:
-
-- **Losslessness**: the parsed tree reconstructs the input byte-for-byte.
-- **Idempotence**: formatting an already-formatted file changes nothing.
-
-## Where to Go Next
-
-- [Installation](guide/installation.md): get the `badness` binary.
-- [Getting Started](guide/getting-started.md): format and lint your first file.
-- [Playground](/playground/){target="_self"}: try the formatter in your browser.
-- [Editor Setup](guide/editor-setup.md): wire up the language server.
+Explore the [architecture](/development/architecture), see the [performance
+comparisons](/guide/performance), or try your own document in the
+[playground](/playground/){target="_self"}.
 
 ## Funding
 

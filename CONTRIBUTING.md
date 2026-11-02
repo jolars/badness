@@ -85,9 +85,8 @@ stream that a tree builder feeds into
 assigns meaning to the generic tree, and
 [salsa](https://github.com/salsa-rs/salsa) provides incremental recomputation.
 
-Read the book's
-[Architecture](https://badness.dev/development/architecture) page for a
-full tour before making a substantial change.
+Read the book's [Architecture](https://badness.dev/development/architecture)
+page for a full tour before making a substantial change.
 
 Where things live:
 
@@ -197,17 +196,17 @@ URIs: decode LSP URIs to filesystem paths only through `uri_to_fs_path` and
 
 ## Documentation
 
-User-facing docs use [VitePress](https://vitepress.dev/) under `docs/`.
-Preview them locally with `task docs:serve` (live reload), build them with
-`task docs`, or run the documentation checks with `task docs:check`.
-The linter-rules reference and benchmark results are generated; regenerate them
-with `task docs:rules` and `task bench` rather than editing them by hand.
-Building the site reads the committed benchmark data without running benchmarks.
+User-facing docs use [VitePress](https://vitepress.dev/) under `docs/`. Preview
+them locally with `task docs:serve` (live reload), build them with `task docs`,
+or run the documentation checks with `task docs:check`. The linter-rules
+reference and benchmark results are generated; regenerate them with
+`task docs:rules` and `task bench` rather than editing them by hand. Building
+the site reads the committed benchmark data without running benchmarks.
 
 The documentation build publishes canonical and social metadata, the sitemap,
 processed Markdown, installers, the configuration schema, and the standalone
-WASM playground. The benchmark renderer loads the vendored Vega scripts only
-on pages with charts. `docs/doc-utils` renders generated content shared by
+WASM playground. The benchmark renderer loads the vendored Vega scripts only on
+pages with charts. `docs/doc-utils` renders generated content shared by
 VitePress and Markdown exports.
 
 GitHub Actions validates pull requests and main pushes. Release tags and manual

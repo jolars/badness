@@ -27,7 +27,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install Rust
-        run: rustup toolchain install
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |

@@ -118,9 +118,8 @@ repos:
       - id: badness-format
 ```
 
-See the [pre-commit
-guide](https://badness.dev/guide/integrations#pre-commit) for installation,
-optional fixes, and updates.
+See the [pre-commit guide](https://badness.dev/guide/integrations#pre-commit)
+for installation, optional fixes, and updates.
 
 ## GitHub Actions
 

@@ -1,28 +1,102 @@
 # Installation
 
 Badness is distributed as a single binary, `badness`. The current version is
-`{{ badness-version }}`. It is available from several sources:
+`{{ badness-version }}`. Use the installer below or choose a package manager you
+already use.
 
-- **crates.io**: `cargo install badness`
-- **Homebrew**: `brew install jolars/tap/badness`
-- **npm**: `npm install -g badness` (bundles a prebuilt binary)
-- **PyPI**: `uv tool install badness`/`pipx install badness`
-- **AUR** (Arch Linux): `yay -S badness-bin` (prebuilt binary)
-- **Nix**: `nix shell nixpkgs#badness`; add `pkgs.badness` to
-  `environment.systemPackages` for a persistent NixOS installation
-- **mise/Aqua**: see [mise and Aqua](#mise-and-aqua) below
-- **Mason** (Neovim): `:MasonInstall badness`; see the [Neovim
-  setup](editor-setup.md#neovim) for enabling the language server
-- **Prebuilt binaries**: from the [releases
-  page](https://github.com/jolars/badness/releases)
-- **VS Code/Open VSX**: the
-  [**Badness**](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
-  extension (also on [Open VSX](https://open-vsx.org/extension/jolars/badness);
-  works in Positron and Cursor)
+## Install script
 
-The editor extension bundles a platform-specific `badness` binary and starts the
-language server automatically, so you do not need to install the CLI separately.
-See [Editor setup](editor-setup.md) for configuration.
+The installer selects the release for your platform and installs it in a
+directory under your user account:
+
+::: code-group
+
+```sh [macOS/Linux]
+curl --proto '=https' --tlsv1.2 -sSf https://badness.dev/install | sh
+```
+
+```powershell [Windows (PowerShell)]
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://badness.dev/install.ps1 | iex"
+```
+
+:::
+
+The default installation directory is `~/.local/bin` on macOS and Linux, or
+`%LOCALAPPDATA%\Programs\badness\bin` on Windows. Make sure that directory is on
+your `PATH` before running `badness` from a terminal.
+
+## Homebrew
+
+If you use Homebrew, install Badness from the `jolars/tap` tap:
+
+```sh
+brew install jolars/tap/badness
+```
+
+## npm
+
+With Node.js and npm installed, install the `badness` command globally:
+
+```sh
+npm install -g badness
+```
+
+The package includes a prebuilt binary for your platform, so no Rust toolchain
+is required.
+
+## PyPI
+
+Install Badness as a command-line tool with uv:
+
+```sh
+uv tool install badness
+```
+
+If you use pipx instead:
+
+```sh
+pipx install badness
+```
+
+The PyPI package provides prebuilt binary wheels for supported platforms, so you
+do not need a Rust toolchain to install a wheel.
+
+## Cargo
+
+With a Rust toolchain installed, build and install the published release from
+crates.io:
+
+```sh
+cargo install badness
+```
+
+Cargo compiles Badness from source and installs it in Cargo's bin directory.
+
+## AUR
+
+On Arch Linux, install the `badness-bin` package from the AUR. With the `yay`
+AUR helper:
+
+```sh
+yay -S badness-bin
+```
+
+This package installs a prebuilt binary.
+
+## Nix
+
+Start a temporary shell with Badness available:
+
+```sh
+nix shell nixpkgs#badness
+```
+
+For a persistent NixOS installation, add Badness to your system configuration
+and rebuild:
+
+```nix
+environment.systemPackages = [ pkgs.badness ];
+```
 
 ## mise and Aqua
 
@@ -46,20 +120,36 @@ Commit `aqua.yaml` to share the selected version. Both tools use the
 [`jolars/badness` registry
 entry](https://github.com/aquaproj/aqua-registry/tree/main/pkgs/jolars/badness).
 
-## Install script
+## VS Code and Open VSX
 
-The installer selects the release for your platform and installs it in a
-directory under your user account. On macOS or Linux:
+Install the [Badness
+extension](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
+from the VS Code Marketplace or [Open
+VSX](https://open-vsx.org/extension/jolars/badness). The extension also works in
+Positron and Cursor.
 
-```sh
-curl --proto '=https' --tlsv1.2 -sSf https://badness.dev/install | sh
+The extension bundles a platform-specific `badness` binary and starts the
+language server automatically, so you do not need to install the CLI separately
+to use it in your editor. See [editor setup](editor-setup.md#vs-code) for
+configuration.
+
+## Mason (Neovim)
+
+If you use Mason in Neovim, install Badness from its registry:
+
+```vim
+:MasonInstall badness
 ```
 
-On Windows, run this in PowerShell:
+Then follow the [Neovim setup](editor-setup.md#neovim) to enable the language
+server.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://badness.dev/install.ps1 | iex"
-```
+## Prebuilt binaries
+
+To install manually, download the archive for your operating system and
+architecture from the [releases
+page](https://github.com/jolars/badness/releases). Extract it and place the
+`badness` binary (`badness.exe` on Windows) in a directory on your `PATH`.
 
 ## From source
 

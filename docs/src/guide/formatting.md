@@ -4,7 +4,7 @@
 formatter's rules and layout engine determine the output, so there are no
 special cases for individual constructs to memorize.
 
-## In Place, `stdin`, or check
+## In place, `stdin`, or check
 
 ```sh
 badness format paper.tex          # rewrite the file in place
@@ -27,10 +27,10 @@ cat paper.tex | badness format -
 
 Badness also reads piped input when you omit paths, so the shorter
 `cat paper.tex | badness format` works too. At an interactive prompt,
-`badness format` with no paths reports a usage error. See [Checking Without
-Writing](#checking-without-writing) for `--check` reporting.
+`badness format` with no paths reports a usage error. See [Checking without
+writing](#checking-without-writing) for `--check` reporting.
 
-## Checking Without Writing
+## Checking without writing
 
 In CI you usually want to *verify* that files are already formatted rather than
 rewrite them. The `--check` flag prints a diff of what would change and exits
@@ -60,7 +60,7 @@ The report goes to stdout and uses color when writing to a terminal. Only errors
 use stderr. Override the color setting with `--color always|never`; Badness also
 honors `NO_COLOR`.
 
-## Style Options
+## Style options
 
 Style flags such as `--line-width`, `--indent-width`, `--item-indent`, and
 `--wrap` mirror the `[format]` section of `badness.toml` and override it for a
@@ -73,7 +73,7 @@ For example, set the line width, indentation, and wrapping mode for one run:
 badness format --line-width 100 --indent-width 4 --wrap preserve paper.tex
 ```
 
-See the [CLI Reference](../reference/cli.md) for every flag and the
+See the [CLI reference](../reference/cli.md) for every flag and the
 [Configuration reference](../reference/configuration.md#wrap) for what `--wrap`
 controls.
 
@@ -130,7 +130,7 @@ ordinary fallback. Top-level `\;` statements require a recognized control-flow
 call in the environment's direct body, since the separate `algorithm` package
 uses the same float name and can use `\;` for ordinary spacing.
 
-## BibTeX Field Order
+## BibTeX field order
 
 BibTeX entries share one field order across all entry types, including custom
 types. The formatter places `title`, `subtitle`, `titleaddon`, and `shorttitle`

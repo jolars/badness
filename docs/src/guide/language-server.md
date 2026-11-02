@@ -1,8 +1,8 @@
-# Language Server
+# Language server
 
 Badness brings formatting, linting, and language features to LaTeX and BibTeX
 editors through the Language Server Protocol. See [Editor
-Setup](editor-setup.md) to connect your editor and the [Editor Configuration
+setup](editor-setup.md) to connect your editor and the [Editor configuration
 reference](../reference/editor-configuration.md) for shared settings and PDF
 search.
 

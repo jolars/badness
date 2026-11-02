@@ -27,7 +27,7 @@ silenced by `select`/`ignore`.
 Beyond parse recovery, Badness ships a growing set of built-in rules
 (`deprecated-command`, `dollar-display-math`, `undefined-ref`, and more). Each
 has a stable id used in diagnostics, config, and suppression comments. See the
-[Linter Rules](../reference/linter-rules.md) reference for the full catalog, or
+[Linter rules](../reference/linter-rules.md) reference for the full catalog, or
 print a single rule's description and examples from the terminal:
 
 ```sh

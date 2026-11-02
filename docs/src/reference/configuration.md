@@ -1,4 +1,4 @@
-# Configuration Reference
+# Configuration reference
 
 All keys in `badness.toml` are optional and spelled in kebab-case. Badness
 reports an error for an unknown key or section.

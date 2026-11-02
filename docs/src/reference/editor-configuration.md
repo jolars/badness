@@ -1,8 +1,8 @@
-# Editor Configuration
+# Editor configuration
 
 These settings configure the Badness language server. See [Editor
-Setup](../guide/editor-setup.md) for editor-specific configuration examples and
-[Language Server](../guide/language-server.md) for its capabilities. Project
+setup](../guide/editor-setup.md) for editor-specific configuration examples and
+[Language server](../guide/language-server.md) for its capabilities. Project
 settings belong in [badness.toml](configuration.md).
 
 ## Supplying settings

@@ -19,17 +19,17 @@ const guide = [
   ["Formatting", "formatting"],
   ["Linting", "linting"],
   ["Configuration", "configuration"],
-  ["Editor Setup", "editor-setup"],
-  ["Language Server", "language-server"],
+  ["Editor setup", "editor-setup"],
+  ["Language server", "language-server"],
   ["Integrations", "integrations"],
   ["Performance", "performance"],
 ];
 const reference = [
-  ["CLI Reference", "cli"],
-  ["Configuration Reference", "configuration"],
-  ["Editor Configuration", "editor-configuration"],
-  ["Lint Rules", "linter-rules"],
-  ["BibTeX Lint Rules", "bib-linter-rules"],
+  ["CLI reference", "cli"],
+  ["Configuration reference", "configuration"],
+  ["Editor configuration", "editor-configuration"],
+  ["Lint rules", "linter-rules"],
+  ["BibTeX lint rules", "bib-linter-rules"],
 ];
 
 export default defineConfig({
@@ -117,7 +117,7 @@ export default defineConfig({
       {
         text: "Introduction",
         items: [
-          { text: "Getting Started", link: "/guide/getting-started" },
+          { text: "Getting started", link: "/guide/getting-started" },
           { text: "Installation", link: "/guide/installation" },
         ],
       },

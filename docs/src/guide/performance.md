@@ -40,7 +40,7 @@ recursive directory mode, so this benchmark covers individual files only.
 
 {{ lint-benchmark-results }}
 
-## Language Server
+## Language server
 
 We compare Badness with [TexLab](https://github.com/latex-lsp/texlab) by opening
 the same five documents in the complete thesis project. The benchmark measures

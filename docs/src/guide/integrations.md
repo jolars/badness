@@ -1,7 +1,7 @@
 # Integrations
 
 Use Badness in CI, Git hooks, and other formatting tools. For editor setup, see
-[Editor Setup](editor-setup.md).
+[Editor setup](editor-setup.md).
 
 ## GitHub Actions
 

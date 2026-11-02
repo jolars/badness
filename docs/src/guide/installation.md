@@ -22,7 +22,7 @@ Badness is distributed as a single binary, `badness`. The current version is
 
 The editor extension bundles a platform-specific `badness` binary and starts the
 language server automatically, so you do not need to install the CLI separately.
-See [Editor Setup](editor-setup.md) for configuration.
+See [Editor setup](editor-setup.md) for configuration.
 
 ## mise and Aqua
 
@@ -46,7 +46,7 @@ Commit `aqua.yaml` to share the selected version. Both tools use the
 [`jolars/badness` registry
 entry](https://github.com/aquaproj/aqua-registry/tree/main/pkgs/jolars/badness).
 
-## Install Script
+## Install script
 
 The installer selects the release for your platform and installs it in a
 directory under your user account. On macOS or Linux:
@@ -61,7 +61,7 @@ On Windows, run this in PowerShell:
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://badness.dev/install.ps1 | iex"
 ```
 
-## From Source
+## From source
 
 Badness is written in Rust. With a Rust toolchain installed, build from a
 checkout:
@@ -81,7 +81,7 @@ To install it into Cargo's bin directory instead:
 cargo install --path .
 ```
 
-## Verifying the Install
+## Verifying the install
 
 ```sh
 badness --version

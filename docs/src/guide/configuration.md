@@ -7,7 +7,7 @@ This guide covers common setup tasks; the [configuration
 reference](../reference/configuration.md) lists all keys, defaults, and accepted
 values.
 
-## Create a Project Config
+## Create a project config
 
 Run this in a project that does not yet have a `badness.toml`:
 
@@ -34,7 +34,7 @@ Commit the file so contributors use the same settings. Add
 validation in editors that support TOML schema directives. See [editor
 support](#editor-support) for other ways to associate the schema.
 
-## Choose the Configuration Source
+## Choose the configuration source
 
 For each input, Badness walks from the file's directory upward and uses the
 first `badness.toml` it finds. The walk stops at a directory containing a `.git`
@@ -80,7 +80,7 @@ badness --config path/to/badness.toml format paper.tex
 badness --no-config lint paper.tex
 ```
 
-## Editor Support
+## Editor support
 
 Badness publishes a [JSON Schema](https://json-schema.org/) for `badness.toml`
 so editors with TOML support can provide key and value completion, hover
@@ -107,7 +107,7 @@ extension installed, add this association to your user or workspace
 }
 ```
 
-### Inline `#:schema` Directive
+### Inline `#:schema` directive
 
 TOML tools that support inline schema directives can select the schema from the
 configuration file itself:
@@ -119,13 +119,13 @@ configuration file itself:
 This is also useful for the global user configuration, whose generic
 `config.toml` file name should not be associated with Badness automatically.
 
-### Other Editors
+### Other editors
 
 Any editor or language server that consumes JSON Schemas—including Helix, Neovim
 with `taplo-lsp`, Zed, and IntelliJ—can use the same URL through its TOML schema
 settings.
 
-## Share Settings Between Projects
+## Share settings between projects
 
 Use `extend` to inherit another file and override the settings this project
 needs:
@@ -143,7 +143,7 @@ inherited exclusions, and `[lint] extend-select` adds to inherited rule lists.
 See the [inheritance reference](../reference/configuration.md#extend) for the
 other merge rules.
 
-## Exclude Files
+## Exclude files
 
 Use `extend-exclude` to add gitignore-style patterns without replacing the
 built-in exclusions:
@@ -165,7 +165,7 @@ document, use the directives in the
 [formatting](formatting.md#turning-the-formatter-off) and [linting](linting.md)
 guides.
 
-## Adjust Formatting and Linting
+## Adjust formatting and linting
 
 Use `[format]` for layout and `[lint]` for rule selection. The
 [formatting](formatting.md) and [linting](linting.md) guides show the usual

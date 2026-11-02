@@ -1,4 +1,4 @@
-# Editor Setup
+# Editor setup
 
 Badness ships a language server. Start it with:
 
@@ -15,13 +15,13 @@ files.
 <span id="renaming-source-files"></span>
 <span id="inlining-an-input-file"></span> <span id="table-refactoring"></span>
 
-See [Language Server](language-server.md) for capabilities and feature behavior.
+See [Language server](language-server.md) for capabilities and feature behavior.
 
 <span id="texmf-discovery"></span> <span id="forward-and-inverse-search"></span>
 <span id="configuring-the-viewer"></span>
 <span id="triggering-forward-search"></span> <span id="inverse-search"></span>
 
-See the [Editor Configuration reference](../reference/editor-configuration.md)
+See the [Editor configuration reference](../reference/editor-configuration.md)
 for shared settings, their precedence, TEXMF discovery, and PDF search.
 
 ## Neovim
@@ -57,7 +57,7 @@ vim.lsp.config.badness = {
 vim.lsp.enable("badness")
 ```
 
-See the [Editor Configuration
+See the [Editor configuration
 reference](../reference/editor-configuration.md#supplying-settings) for shared
 settings and their precedence. The `init_options` block is optional; omit it to
 use the defaults or a `badness.toml`.
@@ -189,7 +189,7 @@ For a custom binary, set `binary.path` under `lsp.badness-language-server`. If
 you also set `binary.arguments`, use `["lsp"]`: the arguments replace the
 default command line.
 
-## Other Editors
+## Other editors
 
 Any editor with an LSP client can run Badness. Configure it to use `badness lsp`
 over stdio for LaTeX documents. Consult your editor's LSP client documentation

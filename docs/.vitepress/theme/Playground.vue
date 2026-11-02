@@ -118,7 +118,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 16px;
   width: 100%;
-  max-width: 1600px;
+  max-width: var(--vp-layout-max-width);
   margin: 0 auto;
   padding: 32px 24px 24px;
 }
@@ -275,6 +275,12 @@ input:focus-visible {
 
 .pg-errors:empty {
   display: none;
+}
+
+@media (min-width: 768px) {
+  .badness-playground {
+    padding-inline: 32px;
+  }
 }
 
 @media (max-width: 900px) {

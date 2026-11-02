@@ -31,7 +31,7 @@ for (const path of [...chapters(), "playground/index.md"]) {
   }
   if (path === "index.md") {
     const env = {};
-    renderer.parse(content, env);
+    renderer.render(content, env);
     const { hero, features } = env.frontmatter;
     markdown =
       [

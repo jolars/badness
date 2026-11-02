@@ -16,8 +16,6 @@ const fragments = JSON.parse(
 );
 const repository = "https://github.com/jolars/badness";
 const guide = [
-  ["Getting Started", "getting-started"],
-  ["Installation", "installation"],
   ["Formatting", "formatting"],
   ["Linting", "linting"],
   ["Configuration", "configuration"],
@@ -119,7 +117,13 @@ export default defineConfig({
       { text: "Playground", link: "/playground/", target: "_self" },
     ],
     sidebar: [
-      { text: "Introduction", link: "/" },
+      {
+        text: "Introduction",
+        items: [
+          { text: "Getting Started", link: "/guide/getting-started" },
+          { text: "Installation", link: "/guide/installation" },
+        ],
+      },
       {
         text: "Guide",
         items: guide.map(([text, path]) => ({ text, link: `/guide/${path}` })),
@@ -143,5 +147,6 @@ export default defineConfig({
     socialLinks: [{ icon: "github", link: repository }],
     editLink: { pattern: `${repository}/edit/main/docs/src/:path` },
     search: { provider: "local" },
+    footer: { message: "Released under the MIT license." },
   },
 });

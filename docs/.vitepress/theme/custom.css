@@ -8,18 +8,6 @@
   --vp-c-brand-2: #9696e5;
   --vp-c-brand-3: #7d7dd8;
 }
-.logo-dark {
-  display: none;
-}
-.dark .logo-light {
-  display: none;
-}
-.dark .logo-dark {
-  display: block;
-}
-.right {
-  float: right;
-}
 .VPNavBarTitle .logo {
   height: 32px;
 }

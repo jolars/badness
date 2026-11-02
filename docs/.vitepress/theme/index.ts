@@ -26,7 +26,12 @@ export default {
       onMounted(refresh);
       watch([() => route.path, isDark], refresh, { flush: "post" });
       onUnmounted(unmountCharts);
-      return () => h(DefaultTheme.Layout);
+      return () =>
+        h(DefaultTheme.Layout, null, {
+          // Preserve links to the former homepage heading.
+          "home-hero-before": () =>
+            h("span", { id: "badness", "aria-hidden": "true" }),
+        });
     },
   }),
 };

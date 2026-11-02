@@ -11,7 +11,7 @@
 #                                           # benchmark one real file
 #
 # The JSON artifact feeds the docs benchmark page (docs/src/guide/performance.md),
-# rendered at mdbook-build time by the doc-utils preprocessor. Regenerate it
+# rendered at documentation-build time by doc-utils. Regenerate it
 # manually with `task bench`; it is never rebuilt at site-generation time or in CI.
 #
 # This is a *visibility* tool, not a CI gate and not an output-parity target.

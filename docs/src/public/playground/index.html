@@ -10,15 +10,15 @@
         <link rel="stylesheet" href="style.css" />
         <script>
       // Resolve the theme before first paint: explicit playground choice, then
-      // the book's mdBook theme, then the OS preference.
+      // the documentation theme, then the OS preference.
       (() => {
         const own = localStorage.getItem("badness-playground-theme");
-        const book = localStorage.getItem("mdbook-theme");
+        const book = localStorage.getItem("vitepress-theme-appearance");
         const dark =
           own !== null
             ? own === "dark"
             : book !== null
-              ? ["coal", "navy", "ayu"].includes(book)
+              ? book === "dark" || (book === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches)
               : window.matchMedia("(prefers-color-scheme: dark)").matches;
         document.documentElement.classList.toggle("dark", dark);
       })();
@@ -33,7 +33,7 @@
                     <h1><strong>Badness</strong> Playground</h1>
                 </a>
                 <span class="pg-header-spacer"></span>
-                <a class="pg-doc-link" href="../reference/configuration.html">Options reference</a>
+                <a class="pg-doc-link" href="/reference/configuration">Options reference</a>
                 <a class="pg-doc-link" href="../">Docs</a>
                 <button id="pg-theme" type="button" title="Toggle light/dark theme">
                     <span class="pg-theme-light">Dark</span><span class="pg-theme-dark">Light</span>

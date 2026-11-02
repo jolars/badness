@@ -5,16 +5,15 @@ on:
   workflow_call:
   pull_request:
   push:
-    branches:
-      - main
-    tags:
-      # Release tags for the CLI stream; only these (and a manual dispatch)
-      # deploy the built book to Pages. Branch pushes and PRs build-only.
-      - "v*"
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,112 +23,76 @@ jobs:
     name: Build Documentation
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
-          # Full history so the sitemap can derive per-page <lastmod> from git.
           fetch-depth: 0
-
       - name: Install Rust
-        run: rustup toolchain install
-
-      - name: Cache cargo dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            docs/doc-utils/target
-          key: ${{ runner.os }}-docs-${{ hashFiles('docs/doc-utils/Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-docs-
-
-      # Workspace target cache for the playground wasm build (the cache above
-      # only covers the doc-utils preprocessor).
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          key: docs-wasm
-
-      - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
+          workspaces: |
+            .
+            docs/doc-utils
+          key: docs
+      - uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack
-
-      # Build the playground's wasm bundle before the mdBook build so it is
-      # copied into the book alongside the committed playground assets.
-      - name: Build playground wasm bundle
-        run: >-
-          wasm-pack build crates/badness-wasm --target web --release
-          --out-dir ../../docs/src/playground/pkg
-
-      - uses: jontze/action-mdbook@v4
+      - uses: go-task/setup-task@v2
+      - uses: pnpm/action-setup@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      # Build the version-substitution preprocessor up front so the (optional)
-      # plugin actually runs during `mdbook build`. Without this the build still
-      # succeeds but ships raw `{{ badness-version }}` markers.
-      - name: Build docs preprocessor
-        run: cargo build --manifest-path docs/doc-utils/Cargo.toml
-
-      - name: Test Markdown negotiation
-        run: node --test docs/markdown-worker.test.mjs
-
-      - name: Build documentation
-        run: BADNESS_MARKDOWN_DIR=.agent-markdown-stage mdbook build docs
-
-      - name: Publish Markdown chapters
-        run: |
-          cp -R docs/.agent-markdown-stage docs/book/agent-markdown
-          cp -R docs/.agent-markdown-stage/. docs/book/
-
-      # mdbook has no `canonical-site-url` setting (rust-lang/mdBook#2706).
-      # Publish canonical links, social previews, and accessible navigation.
-      - name: Publish page metadata and navigation
-        run: |
-          cargo run --quiet --manifest-path docs/doc-utils/Cargo.toml \
-            --bin canonical -- docs/book https://badness.dev/
-
-      # mdbook has no built-in sitemap; generate one from the rendered pages.
-      # `lastmod` is derived from git history, so this runs against full history.
-      - name: Generate sitemap
-        run: |
-          cargo run --quiet --manifest-path docs/doc-utils/Cargo.toml \
-            --bin sitemap -- docs/book https://badness.dev/
-
-      - name: Publish installers
-        run: |
-          install -m 0644 scripts/badness-installer.sh docs/book/install
-          install -m 0644 scripts/badness-installer.ps1 docs/book/install.ps1
-          cmp scripts/badness-installer.sh docs/book/install
-          cmp scripts/badness-installer.ps1 docs/book/install.ps1
-          sh -n docs/book/install
-
-      - name: Upload Pages artifact
+          package_json_file: docs/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+      - name: Build and check documentation
+        run: task docs:check
+      - uses: actions/upload-artifact@v7
         if: >-
           github.event_name == 'workflow_dispatch' ||
           (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
-        uses: actions/upload-pages-artifact@v5
         with:
-          path: docs/book
+          name: documentation
+          path: docs/.vitepress/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
 
   deploy:
-    name: Deploy to GitHub Pages
+    name: Deploy to Cloudflare Workers
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
+    concurrency:
+      group: docs-cloudflare-workers
+      cancel-in-progress: false
     environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      name: cloudflare-workers
+      url: https://badness.dev/
     steps:
-      - name: Setup Pages
-        uses: actions/configure-pages@v6
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: docs/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: docs
+      - uses: actions/download-artifact@v8
+        with:
+          name: documentation
+          path: docs/.vitepress/dist
+      - name: Deploy documentation
+        working-directory: docs
+        run: pnpm run deploy
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

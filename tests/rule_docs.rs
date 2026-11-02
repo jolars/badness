@@ -5,7 +5,7 @@
 //! cannot drift from behavior. These tests pin that rendering, require every
 //! rule to be documented, and check that each example actually triggers its
 //! rule. The generator (`examples/docgen.rs`) writes the same
-//! `render_reference_page` output to the mdBook source tree.
+//! `render_reference_page` output to the documentation source tree.
 
 use std::path::Path;
 

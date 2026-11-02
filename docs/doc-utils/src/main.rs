@@ -1,21 +1,10 @@
-//! Preprocessor for the badness docs.
+//! Print generated documentation fragments as JSON.
 
-fn main() {
-    let mut args = std::env::args().skip(1);
-    match args.next().as_deref() {
-        Some("supports") => {
-            // Supports all renderers.
-            return;
-        }
-        Some(arg) => {
-            eprintln!("unknown argument: {arg}");
-            std::process::exit(1);
-        }
-        None => {}
-    }
-
-    if let Err(e) = doc_utils::handle_preprocessing() {
-        eprintln!("{e:?}");
-        std::process::exit(1);
-    }
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let root = std::env::args_os()
+        .nth(1)
+        .ok_or("usage: doc-utils <project-root>")?;
+    let fragments = doc_utils::fragments(std::path::Path::new(&root))?;
+    serde_json::to_writer(std::io::stdout(), &fragments)?;
+    Ok(())
 }

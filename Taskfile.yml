@@ -244,25 +244,28 @@ tasks:
       - cargo flamegraph --bench formatting -o benches/flamegraph_masters.svg
 
   docs:
-    desc: Build the documentation book
+    desc: Build and validate the documentation site
     deps: [docs:build]
 
-  docs:build:
-    desc: Build the mdBook docs into docs/book
-    deps: [docs:rules, playground:wasm]
+  docs:install:
+    desc: Install locked documentation dependencies
     dir: docs
     cmds:
-      - BADNESS_MARKDOWN_DIR=.agent-markdown-stage mdbook build
-      - task: docs:canonical
-      - task: docs:sitemap
-      - task: docs:markdown
+      - pnpm install --frozen-lockfile
+
+  docs:build:
+    desc: Build the VitePress docs into docs/.vitepress/dist
+    deps: [docs:rules, playground:wasm, docs:install]
+    dir: docs
+    cmds:
+      - pnpm build
 
   playground:wasm:
-    desc: Build the badness-wasm playground bundle into docs/src/playground/pkg
+    desc: Build the playground wasm bundle
     cmds:
       - >-
         wasm-pack build crates/badness-wasm --target web --release
-        --out-dir ../../docs/src/playground/pkg
+        --out-dir ../../docs/src/public/playground/pkg
 
   playground:vendor:
     desc: Rebuild the vendored CodeMirror bundle (commit the result)
@@ -276,40 +279,29 @@ tasks:
     cmds:
       - cargo run --quiet --example docgen
 
-  docs:canonical:
-    desc: Publish canonical links, social previews, and accessible navigation
-    dir: docs
-    cmds:
-      - >-
-        cargo run --quiet --manifest-path doc-utils/Cargo.toml --bin canonical --
-        book https://badness.dev/
-
-  docs:sitemap:
-    desc: Generate docs/book/sitemap.xml from the rendered book
-    dir: docs
-    cmds:
-      - >-
-        cargo run --quiet --manifest-path doc-utils/Cargo.toml --bin sitemap --
-        book https://badness.dev/
-
-  docs:markdown:
-    desc: Publish processed Markdown chapters for agent requests
-    dir: docs
-    cmds:
-      - cp -R .agent-markdown-stage book/agent-markdown
-      - cp -R .agent-markdown-stage/. book/
-
   docs:serve:
     desc: Serve the docs locally with live reload
+    deps: [docs:install, playground:wasm]
     dir: docs
     cmds:
-      - mdbook serve --open
+      - pnpm dev
+
+  docs:check:
+    desc: Test documentation tools, build the site, and validate Worker packaging
+    deps: [docs:build]
+    dir: docs
+    cmds:
+      - cargo fmt --manifest-path doc-utils/Cargo.toml -- --check
+      - cargo clippy --manifest-path doc-utils/Cargo.toml --all-targets -- -D warnings
+      - cargo test --manifest-path doc-utils/Cargo.toml
+      - pnpm format:check
+      - pnpm test
+      - pnpm deploy:check
 
   docs:clean:
-    desc: Remove built docs
-    dir: docs
+    desc: Remove documentation build artifacts
     cmds:
-      - mdbook clean
+      - rm -rf docs/.vitepress/dist docs/.vitepress/cache docs/.vitepress/generated
 
   brand:
     desc: Build all brand artifacts (logo, wordmark, OG card) — PDF + PNG
@@ -335,10 +327,10 @@ tasks:
       - magick -density 600 icon.pdf -strip -resize 256x256 icon.png
       # Distribute to consumers (the Taskfile is the only distributor —
       # never hand-copy these).
-      - cp logo.svg ../docs/src/images/logo.svg
-      - cp logo-dark.svg ../docs/src/images/logo-dark.svg
-      - cp icon.svg ../docs/theme/favicon.svg
-      - magick -density 600 icon.pdf -strip -resize 32x32 ../docs/theme/favicon.png
+      - cp logo.svg ../docs/src/public/images/logo.svg
+      - cp logo-dark.svg ../docs/src/public/images/logo-dark.svg
+      - cp icon.svg ../docs/src/public/favicon.svg
+      - magick -density 600 icon.pdf -strip -resize 32x32 ../docs/src/public/favicon.png
       - cp icon.png ../editors/code/icon.png
     sources:
       - logo.tex
@@ -353,10 +345,10 @@ tasks:
       - icon.pdf
       - icon.png
       - icon.svg
-      - ../docs/src/images/logo.svg
-      - ../docs/src/images/logo-dark.svg
-      - ../docs/theme/favicon.svg
-      - ../docs/theme/favicon.png
+      - ../docs/src/public/images/logo.svg
+      - ../docs/src/public/images/logo-dark.svg
+      - ../docs/src/public/favicon.svg
+      - ../docs/src/public/favicon.png
       - ../editors/code/icon.png
 
   brand:wordmark:

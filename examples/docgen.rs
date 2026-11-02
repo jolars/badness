@@ -4,7 +4,7 @@
 //! Run with `cargo run --example docgen`. It renders the same markdown the
 //! snapshot tests pin ([`badness::linter::docs::render_reference_page`] and
 //! [`badness::bib::linter::docs::render_reference_page`]) and writes it to the
-//! mdBook source tree. Living as an `examples/` target (not a `[[bin]]`) keeps
+//! documentation source tree. Living as an `examples/` target (not a `[[bin]]`) keeps
 //! badness a single, publishable crate.
 
 use std::fs;

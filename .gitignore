@@ -354,14 +354,23 @@ TSWLatexianTemp*
 #*Notes.bib
 /test.tex
 
-# mdBook docs
+# Documentation builds
 /docs/book/
 /docs/.agent-markdown-stage/
+/docs/node_modules/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/
+/docs/.vitepress/generated/
+/docs/.wrangler/
+/docs/src/public/install
+/docs/src/public/install.ps1
+/docs/src/public/badness.schema.json
+/docs/src/public/images/og.png
 /docs/doc-utils/target/
 
 # Playground: wasm bundle (built by `task playground:wasm`) and the vendor
 # bundle's npm project deps (the built vendor/codemirror.js IS committed)
-/docs/src/playground/pkg/
+/docs/src/public/playground/pkg/
 /docs/playground-build/node_modules/
 /test.bib
 

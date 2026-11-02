@@ -1,6 +1,6 @@
 // Re-export entry for the vendored CodeMirror bundle used by the docs
-// playground (docs/src/playground/app.js). esbuild bundles and tree-shakes
-// this into docs/src/playground/vendor/codemirror.js — keep the export list
+// playground (docs/src/public/playground/app.js). esbuild bundles and tree-shakes
+// this into docs/src/public/playground/vendor/codemirror.js — keep the export list
 // to what app.js actually uses.
 
 export {

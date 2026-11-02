@@ -124,7 +124,7 @@ fn generate_man_pages() -> std::io::Result<()> {
 }
 
 /// Render the markdown CLI reference into `docs/src/reference/cli.md` for the
-/// mdBook. Skipped during `cargo package` (the committed file is shipped, and
+/// VitePress site. Skipped during `cargo package` (the committed file is shipped, and
 /// packaging runs the build from a temporary directory).
 fn generate_cli_markdown() -> std::io::Result<()> {
     let is_packaging = env::current_dir()
@@ -137,7 +137,7 @@ fn generate_cli_markdown() -> std::io::Result<()> {
 
     let docs_dir = PathBuf::from("docs/src/reference");
 
-    // Only write when the mdBook source exists (it isn't shipped in the crate).
+    // Only write when the documentation source exists (it isn't shipped in the crate).
     if !docs_dir.exists() {
         return Ok(());
     }

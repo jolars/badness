@@ -12,6 +12,7 @@ updates:
     directories:
       - "/"
       - "/crates/*"
+      - "/docs/doc-utils"
     schedule:
       interval: "weekly"
     groups:
@@ -35,5 +36,13 @@ updates:
       interval: "weekly"
     groups:
       npm:
+        patterns:
+          - "*"
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "weekly"
+    groups:
+      docs:
         patterns:
           - "*"

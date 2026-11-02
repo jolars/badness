@@ -1,16 +1,13 @@
 # Badness <picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jolars/badness/main/branding/logo-dark.svg"><img src="https://raw.githubusercontent.com/jolars/badness/main/branding/logo.svg" align="right" width="120" alt="" /></picture>
 
-[![Build and
-Test](https://github.com/jolars/badness/actions/workflows/build-and-test.yml/badge.svg?branch=main)](https://github.com/jolars/badness/actions/workflows/build-and-test.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/jolars/badness/build-and-test.yml?branch=main&label=CI)](https://github.com/jolars/badness/actions/workflows/build-and-test.yml)
 [![Crates.io](https://img.shields.io/crates/v/badness.svg?logo=rust)](https://crates.io/crates/badness)
 [![Open
 VSX](https://img.shields.io/open-vsx/v/jolars/badness?logo=vsix)](https://open-vsx.org/extension/jolars/badness)
 [![VS
 Code](https://vsmarketplacebadges.dev/version-short/jolars.badness.svg?logo=vsix)](https://marketplace.visualstudio.com/items?itemName=jolars.badness)
-[![PyPI
-version](https://badge.fury.io/py/badness.svg?icon=si%3Apython)](https://pypi.org/project/badness/)
-[![npm
-version](https://badge.fury.io/js/@badness%2Fbadness.svg?icon=si%3Anpm)](https://www.npmjs.com/package/badness)
+[![PyPi](https://img.shields.io/pypi/v/badness?logo=python&label=PyPi)](https://pypi.org/project/badness/)
+[![npm](https://img.shields.io/npm/v/badness?logo=npm&label=npm)](https://www.npmjs.com/package/badness)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.20664708-blue)](https://doi.org/10.5281/zenodo.20664708)
 
 Badness is a language server, formatter, and linter for LaTeX. It is designed to

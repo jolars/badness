@@ -50,6 +50,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://badness.dev/
 See the [installation guide](/guide/installation) for Homebrew, npm, uv, Cargo,
 and other installation options.
 
+After installation, you can run Badness from the command line:
+
 ```sh
 badness format paper.tex
 badness lint bibliography.bib

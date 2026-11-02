@@ -11,9 +11,12 @@ onMounted(async () => {
   controller = new AbortController();
   const { signal } = controller;
   try {
-    const { mountPlayground } = await import(
-      /* @vite-ignore */ withBase("/playground/app.js")
+    // An absolute URL keeps Vite from transforming this prebuilt public bundle.
+    const appUrl = new URL(
+      withBase("/playground/app.js"),
+      window.location.href,
     );
+    const { mountPlayground } = await import(/* @vite-ignore */ appUrl.href);
     if (signal.aborted || !root.value) return;
     const cleanup = await mountPlayground(root.value, signal);
     if (signal.aborted) cleanup?.();

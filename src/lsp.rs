@@ -3991,9 +3991,9 @@ fn analyze_bib(
 /// Map a linter [`crate::linter::Diagnostic`] (shared by the LaTeX and BibTeX
 /// linters) onto an LSP [`Diagnostic`].
 /// Base URL of the published LaTeX linter-rules reference; each rule is a
-/// heading whose mdBook anchor is the rule id (`#deprecated-command`), so
+/// heading whose anchor is the rule id (`#deprecated-command`), so
 /// `{BASE}#{rule}` deep-links the rule's docs.
-const LATEX_RULES_DOC_URL: &str = "https://badness.dev/reference/linter-rules.html";
+const LATEX_RULES_DOC_URL: &str = "https://badness.dev/reference/linter-rules";
 
 /// Convert a linter finding into an LSP diagnostic. `link_docs` attaches a
 /// `code_description` pointing at the rule's entry in the published reference;
@@ -7846,7 +7846,7 @@ mod tests {
         let latex = lint_to_lsp(&idx, d(), true, Path::new("x.tex"));
         assert_eq!(
             latex.code_description.map(|c| c.href.to_string()),
-            Some("https://badness.dev/reference/linter-rules.html#deprecated-command".to_owned())
+            Some("https://badness.dev/reference/linter-rules#deprecated-command".to_owned())
         );
         assert_eq!(latex.tags, Some(vec![DiagnosticTag::DEPRECATED]));
 

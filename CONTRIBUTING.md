@@ -86,7 +86,7 @@ assigns meaning to the generic tree, and
 [salsa](https://github.com/salsa-rs/salsa) provides incremental recomputation.
 
 Read the book's
-[Architecture](https://badness.dev/development/architecture.html) page for a
+[Architecture](https://badness.dev/development/architecture) page for a
 full tour before making a substantial change.
 
 Where things live:
@@ -197,23 +197,24 @@ URIs: decode LSP URIs to filesystem paths only through `uri_to_fs_path` and
 
 ## Documentation
 
-User-facing docs are an [mdBook](https://rust-lang.github.io/mdBook/) under
-`docs/`. Preview them locally with `task docs:serve` (live reload) or build them
-with `task docs`. The linter-rules reference and the benchmark page are
-generated; regenerate them with `task docs:rules` and `task bench` respectively
-rather than editing the rendered pages by hand.
+User-facing docs use [VitePress](https://vitepress.dev/) under `docs/`.
+Preview them locally with `task docs:serve` (live reload), build them with
+`task docs`, or run the documentation checks with `task docs:check`.
+The linter-rules reference and benchmark results are generated; regenerate them
+with `task docs:rules` and `task bench` rather than editing them by hand.
+Building the site reads the committed benchmark data without running benchmarks.
 
-Use `task docs` before auditing the production output. Its postbuild steps add
-canonical and social metadata, publish `branding/og.png`, adapt the navigation
-for keyboard access, and generate the sitemap. A plain `mdbook build` or the
-live preview does not run these steps. The standalone playground receives the
-same metadata as the book chapters. Redirect and helper pages stay out of the
-sitemap.
+The documentation build publishes canonical and social metadata, the sitemap,
+processed Markdown, installers, the configuration schema, and the standalone
+WASM playground. The benchmark renderer loads the vendored Vega scripts only
+on pages with charts. `docs/doc-utils` renders generated content shared by
+VitePress and Markdown exports.
 
-Test the documentation tools with
-`cargo test --manifest-path docs/doc-utils/Cargo.toml`. The benchmark renderer
-loads the vendored scripts in `docs/src/vendor` only when a page contains
-charts.
+GitHub Actions validates pull requests and main pushes. Release tags and manual
+runs deploy the built site to Cloudflare Workers at <https://badness.dev>.
+`pnpm --dir docs preview:worker` previews redirects and Markdown negotiation
+locally after a build. Deployment uses the `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN` GitHub secrets.
 
 ## A note on `AGENTS.md`
 
@@ -221,7 +222,7 @@ The repo's `AGENTS.md` is the operational contract for AI coding agents. It
 includes both repository-wide and subsystem-specific directives and is kept
 under 32 KiB so agents can load it as a single checklist of things not to break.
 For architectural rationale and tradeoffs, read the book's
-[Architecture](https://badness.dev/development/architecture.html) page.
+[Architecture](https://badness.dev/development/architecture) page.
 
 ## License
 

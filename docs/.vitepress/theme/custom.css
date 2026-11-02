@@ -1,0 +1,28 @@
+:root {
+  --vp-c-brand-1: #5151b9;
+  --vp-c-brand-2: #6262c9;
+  --vp-c-brand-3: #7373d9;
+}
+.dark {
+  --vp-c-brand-1: #afaff2;
+  --vp-c-brand-2: #9696e5;
+  --vp-c-brand-3: #7d7dd8;
+}
+.logo-dark {
+  display: none;
+}
+.dark .logo-light {
+  display: none;
+}
+.dark .logo-dark {
+  display: block;
+}
+.right {
+  float: right;
+}
+.VPNavBarTitle .logo {
+  height: 32px;
+}
+.bench-chart svg {
+  max-width: 100%;
+}

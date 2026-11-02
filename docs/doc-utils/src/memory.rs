@@ -1,6 +1,6 @@
 //! Rendering for the committed external LSP speed and memory benchmark artifact.
 
-use mdbook_preprocessor::book::Book;
+use crate::Fragments;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -159,20 +159,7 @@ struct MemoryPoint<'a> {
     pss_mb: Option<f64>,
 }
 
-pub(crate) fn insert(book: &mut Book, project_root: &Path) {
-    let needs_render = {
-        let mut found = false;
-        book.for_each_chapter_mut(|chapter| {
-            found |= chapter.content.contains(META_MARKER)
-                || chapter.content.contains(SPEED_MARKER)
-                || chapter.content.contains(RESULTS_MARKER);
-        });
-        found
-    };
-    if !needs_render {
-        return;
-    }
-
+pub(crate) fn insert(fragments: &mut Fragments, project_root: &Path) {
     let path = project_root.join("benches/memory_results.json");
     let rendered = std::fs::read_to_string(&path)
         .ok()
@@ -192,17 +179,13 @@ pub(crate) fn insert(book: &mut Book, project_root: &Path) {
             (note.clone(), note.clone(), note)
         });
 
-    book.for_each_chapter_mut(|chapter| {
-        if chapter.content.contains(META_MARKER) {
-            chapter.content = chapter.content.replace(META_MARKER, &rendered.0);
-        }
-        if chapter.content.contains(SPEED_MARKER) {
-            chapter.content = chapter.content.replace(SPEED_MARKER, &rendered.1);
-        }
-        if chapter.content.contains(RESULTS_MARKER) {
-            chapter.content = chapter.content.replace(RESULTS_MARKER, &rendered.2);
-        }
-    });
+    for (marker, content) in [
+        (META_MARKER, rendered.0),
+        (SPEED_MARKER, rendered.1),
+        (RESULTS_MARKER, rendered.2),
+    ] {
+        fragments.insert(marker.into(), content);
+    }
 }
 
 fn render_meta(benchmarks: &MemoryBenchmarks) -> String {
@@ -460,15 +443,12 @@ fn render_results(benchmarks: &MemoryBenchmarks) -> String {
 }
 
 fn chart_block(kind: &str, points: &impl Serialize, caption: &str, table: &str) -> String {
-    // Escaping '<' keeps labels containing '</script>' inside the JSON payload.
-    let data = serde_json::to_string(points)
-        .unwrap()
-        .replace('<', "\\u003c");
+    let data = html_escape::encode_double_quoted_attribute(&serde_json::to_string(points).unwrap())
+        .into_owned();
     format!(
-        "<div class=\"bench-chart-block\" data-chart=\"{kind}\">\n\
+        "<div class=\"bench-chart-block\" data-chart=\"{kind}\" data-bench=\"{data}\">\n\
          <figure class=\"bench-figure\">\n\
          <div class=\"bench-chart\"></div>\n\
-         <script type=\"application/json\" class=\"bench-data\">{data}</script>\n\
          <figcaption>{caption}</figcaption>\n\
          </figure>\n\
          <noscript>The data table below contains the benchmark results. \

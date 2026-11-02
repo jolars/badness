@@ -1,7 +1,7 @@
 # Badness
 
-<img src="./images/logo.svg" alt="" class="right logo-light" style="width: 160px; padding-left: 16px; padding-bottom: 16px;" />
-<img src="./images/logo-dark.svg" alt="" class="right logo-dark" style="width: 160px; padding-left: 16px; padding-bottom: 16px;" />
+<img src="/images/logo.svg" alt="" class="right logo-light" style="width: 160px; padding-left: 16px; padding-bottom: 16px;" />
+<img src="/images/logo-dark.svg" alt="" class="right logo-dark" style="width: 160px; padding-left: 16px; padding-bottom: 16px;" />
 
 **Badness** is a language server, formatter, and linter for LaTeX.
 
@@ -32,7 +32,7 @@ construction and enforced as test oracles:
 
 - [Installation](guide/installation.md): get the `badness` binary.
 - [Getting Started](guide/getting-started.md): format and lint your first file.
-- [Playground](playground/index.html): try the formatter in your browser.
+- [Playground](/playground/){target="_self"}: try the formatter in your browser.
 - [Editor Setup](guide/editor-setup.md): wire up the language server.
 
 ## Funding

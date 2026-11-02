@@ -41,7 +41,7 @@ Badness is available from several sources:
 - **npm**: `npm install -g badness` (bundles a prebuilt binary)
 - **PyPI**: `uv tool install badness`/`pipx install badness`
 - **mise/Aqua**: see the [installation
-  guide](https://badness.dev/guide/installation.html#mise-and-aqua)
+  guide](https://badness.dev/guide/installation#mise-and-aqua)
 - **Prebuilt binaries**: from the [releases
   page](https://github.com/jolars/badness/releases)
 - **VS Code/Open VSX**: the [**Badness**
@@ -96,11 +96,11 @@ documentation for the full reference.
 ## Editor Integration
 
 The language server runs over stdio (`badness lsp`); see the [editor setup
-guide](https://badness.dev/guide/editor-setup.html) for instructions on how to
+guide](https://badness.dev/guide/editor-setup) for instructions on how to
 integrate with your editor.
 
 Badness is also available in Zed. See the [Zed setup
-guide](https://badness.dev/guide/editor-setup.html#zed).
+guide](https://badness.dev/guide/editor-setup#zed).
 
 ## Pre-Commit Hook
 
@@ -119,7 +119,7 @@ repos:
 ```
 
 See the [pre-commit
-guide](https://badness.dev/guide/integrations.html#pre-commit) for installation,
+guide](https://badness.dev/guide/integrations#pre-commit) for installation,
 optional fixes, and updates.
 
 ## GitHub Actions
@@ -136,7 +136,7 @@ jobs:
       - uses: jolars/badness-action@v1
 ```
 
-See the [integration guide](https://badness.dev/guide/integrations.html) for a
+See the [integration guide](https://badness.dev/guide/integrations) for a
 complete workflow, dprint setup, and using Badness inside Panache code blocks.
 
 ## Documentation

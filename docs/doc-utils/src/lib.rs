@@ -1,195 +1,29 @@
-//! Preprocessor for the docs, plus shared post-build helpers (see [`postbuild`]).
+//! Generated Markdown fragments shared by the documentation and Markdown exports.
 
 mod memory;
-pub mod postbuild;
 
-use mdbook_preprocessor::book::{Book, BookItem};
-use mdbook_preprocessor::errors::Result;
-use mdbook_preprocessor::{Preprocessor, PreprocessorContext};
-use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
-use std::io;
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::Path;
 
-/// Preprocessing entry point.
-pub fn handle_preprocessing() -> Result<()> {
-    let pre = GuideHelper;
-    let (ctx, book) = mdbook_preprocessor::parse_input(io::stdin())?;
+pub type Fragments = BTreeMap<String, String>;
 
-    let book_version = Version::parse(&ctx.mdbook_version)?;
-    let version_req = VersionReq::parse(mdbook_preprocessor::MDBOOK_VERSION)?;
-
-    if !version_req.matches(&book_version) {
-        eprintln!(
-            "warning: The {} plugin was built against version {} of mdbook, \
-             but we're being called from version {}",
-            pre.name(),
-            mdbook_preprocessor::MDBOOK_VERSION,
-            ctx.mdbook_version
-        );
-    }
-
-    let processed_book = pre.run(&ctx, book)?;
-    serde_json::to_writer(io::stdout(), &processed_book)?;
-
-    Ok(())
-}
-
-struct GuideHelper;
-
-impl Preprocessor for GuideHelper {
-    fn name(&self) -> &str {
-        "doc-utils"
-    }
-
-    fn run(&self, _ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
-        insert_version(&mut book);
-        insert_benchmarks(&mut book);
-        memory::insert(&mut book, &project_root());
-        insert_changelog(&mut book);
-        if let Some(dir) = std::env::var_os("BADNESS_MARKDOWN_DIR") {
-            publish_markdown(&book, &PathBuf::from(dir))?;
-        }
-        Ok(book)
-    }
-}
-
-/// Export the processed chapters so the public site can serve the same content
-/// to Markdown clients without including mdBook's navigation and scripts.
-fn publish_markdown(book: &Book, dir: &std::path::Path) -> Result<()> {
-    if dir.exists() {
-        std::fs::remove_dir_all(dir)?;
-    }
-    std::fs::create_dir_all(dir)?;
-    for item in book.iter() {
-        if let BookItem::Chapter(chapter) = item {
-            let Some(source_path) = &chapter.path else {
-                continue;
-            };
-            let path = dir.join(source_path);
-            std::fs::create_dir_all(path.parent().unwrap())?;
-            let content = if source_path == std::path::Path::new("guide/performance.md") {
-                chapter
-                    .content
-                    .lines()
-                    .filter(|line| {
-                        !line
-                            .trim_start()
-                            .starts_with("<script type=\"application/json\" class=\"bench-data\">")
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            } else if source_path == std::path::Path::new("index.md") {
-                chapter
-                    .content
-                    .lines()
-                    .filter(|line| !line.starts_with("<img src=\"./images/logo"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            } else {
-                chapter.content.clone()
-            };
-            std::fs::write(path, content)?;
-        }
-    }
-    let playground = dir.join("playground/index.md");
-    std::fs::create_dir_all(playground.parent().unwrap())?;
-    std::fs::write(
-        playground,
-        "# Playground\n\nTry Badness formatting and linting in the [interactive playground](https://badness.dev/playground/).\n",
-    )?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod markdown_tests {
-    use super::*;
-    use mdbook_preprocessor::book::Chapter;
-
-    #[test]
-    fn exports_processed_chapters_without_chart_scripts() {
-        let dir = std::env::temp_dir().join(format!("badness-markdown-{}", std::process::id()));
-        let book = Book::new_with_items(vec![
-            Chapter::new("Home", "# Home\n<img src=\"./images/logo.svg\" alt=\"\" />\n\nVersion 1.2.3\n".into(), "index.md", vec![]).into(),
-            Chapter::new(
-                "Performance",
-                "# Performance\n<script type=\"application/json\" class=\"bench-data\">lots of data</script>\n\nResults.\n".into(),
-                "guide/performance.md",
-                vec![],
-            ).into(),
-        ]);
-        publish_markdown(&book, &dir).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dir.join("index.md")).unwrap(),
-            "# Home\n\nVersion 1.2.3"
-        );
-        let benchmarks = std::fs::read_to_string(dir.join("guide/performance.md")).unwrap();
-        assert!(benchmarks.contains("Results."));
-        assert!(!benchmarks.contains("lots of data"));
-        assert!(dir.join("playground/index.md").exists());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-}
-
-/// The project root, one level up from the book root (`docs/`), which is the
-/// working directory mdbook runs preprocessors in.
-fn project_root() -> PathBuf {
-    std::env::current_dir()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
-
-/// Substitute the `{{ badness-version }}` marker with the crate version read from
-/// the project's root `Cargo.toml`. mdbook runs preprocessors with the book root
-/// (`docs/`) as the working directory, so the project manifest is one level up.
-fn insert_version(book: &mut Book) {
-    let path = project_root().join("Cargo.toml");
-    let manifest_contents = std::fs::read_to_string(&path).unwrap();
-    let manifest: toml::Value = toml::from_str(&manifest_contents).unwrap();
-    let version = manifest["package"]["version"].as_str().unwrap();
-    const MARKER: &str = "{{ badness-version }}";
-    book.for_each_chapter_mut(|ch| {
-        if ch.content.contains(MARKER) {
-            ch.content = ch.content.replace(MARKER, version);
-        }
-    });
-}
-
-/// Substitute the `{{ changelog }}` marker with the body of the project's root
-/// `CHANGELOG.md`, so the docs changelog page is a build-time copy of the canonical
-/// (release-tooling-generated) changelog. The file's leading
-/// `# Changelog` heading is stripped because the docs page supplies its own.
-fn insert_changelog(book: &mut Book) {
-    const MARKER: &str = "{{ changelog }}";
-    let needs_render = {
-        let mut found = false;
-        book.for_each_chapter_mut(|ch| {
-            if ch.content.contains(MARKER) {
-                found = true;
-            }
-        });
-        found
-    };
-    if !needs_render {
-        return;
-    }
-
-    let path = project_root().join("CHANGELOG.md");
-    let body = match std::fs::read_to_string(&path) {
-        Ok(s) => changelog_body(&s),
-        Err(_) => format!(
-            "_Changelog unavailable (`{}` missing or unreadable)._",
-            path.display()
+/// Read committed data without running benchmarks or changing source documents.
+pub fn fragments(root: &Path) -> Result<Fragments, Box<dyn std::error::Error>> {
+    let manifest: toml::Value = toml::from_str(&std::fs::read_to_string(root.join("Cargo.toml"))?)?;
+    let version = manifest["package"]["version"]
+        .as_str()
+        .ok_or("missing package version")?;
+    let mut fragments = Fragments::from([
+        ("{{ badness-version }}".into(), version.into()),
+        (
+            "{{ changelog }}".into(),
+            changelog_body(&std::fs::read_to_string(root.join("CHANGELOG.md"))?),
         ),
-    };
-
-    book.for_each_chapter_mut(|ch| {
-        if ch.content.contains(MARKER) {
-            ch.content = ch.content.replace(MARKER, &body);
-        }
-    });
+    ]);
+    insert_benchmarks(&mut fragments, root);
+    memory::insert(&mut fragments, root);
+    Ok(fragments)
 }
 
 /// Render the generated changelog beneath the docs page's own heading.
@@ -298,7 +132,7 @@ struct BenchResult {
 
 /// One dot in the results chart: a (document, formatter) timing, its ratio to
 /// the badness baseline, and the numbers the tooltip shows. Serialized inline
-/// into the page for `docs/theme/bench-charts.js` to plot with Vega-Lite.
+/// into the page for `docs/.vitepress/theme/bench-charts.js` to plot with Vega-Lite.
 #[derive(Serialize)]
 struct ChartPoint {
     document: String,
@@ -315,28 +149,8 @@ struct ChartPoint {
 /// with tables rendered from the committed `benches/benchmark_results.json`. The
 /// JSON is read but never regenerated here, so the benchmark is only ever run
 /// manually (via `task bench`), not at site-build time.
-fn insert_benchmarks(book: &mut Book) {
-    const MARKERS: [&str; 5] = [
-        BENCH_META_MARKER,
-        BENCH_RESULTS_MARKER,
-        BENCH_PROJECT_RESULTS_MARKER,
-        LINT_META_MARKER,
-        LINT_RESULTS_MARKER,
-    ];
-    let needs_render = {
-        let mut found = false;
-        book.for_each_chapter_mut(|ch| {
-            if MARKERS.iter().any(|m| ch.content.contains(m)) {
-                found = true;
-            }
-        });
-        found
-    };
-    if !needs_render {
-        return;
-    }
-
-    let path = project_root().join("benches/benchmark_results.json");
+fn insert_benchmarks(fragments: &mut Fragments, root: &Path) {
+    let path = root.join("benches/benchmark_results.json");
     let rendered = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str::<Benchmarks>(&s).ok())
@@ -381,27 +195,15 @@ fn insert_benchmarks(book: &mut Book) {
             }
         });
 
-    book.for_each_chapter_mut(|ch| {
-        if ch.content.contains(BENCH_META_MARKER) {
-            ch.content = ch.content.replace(BENCH_META_MARKER, &rendered.meta);
-        }
-        if ch.content.contains(BENCH_RESULTS_MARKER) {
-            ch.content = ch.content.replace(BENCH_RESULTS_MARKER, &rendered.results);
-        }
-        if ch.content.contains(BENCH_PROJECT_RESULTS_MARKER) {
-            ch.content = ch
-                .content
-                .replace(BENCH_PROJECT_RESULTS_MARKER, &rendered.project_results);
-        }
-        if ch.content.contains(LINT_META_MARKER) {
-            ch.content = ch.content.replace(LINT_META_MARKER, &rendered.lint_meta);
-        }
-        if ch.content.contains(LINT_RESULTS_MARKER) {
-            ch.content = ch
-                .content
-                .replace(LINT_RESULTS_MARKER, &rendered.lint_results);
-        }
-    });
+    for (marker, content) in [
+        (BENCH_META_MARKER, rendered.meta),
+        (BENCH_RESULTS_MARKER, rendered.results),
+        (BENCH_PROJECT_RESULTS_MARKER, rendered.project_results),
+        (LINT_META_MARKER, rendered.lint_meta),
+        (LINT_RESULTS_MARKER, rendered.lint_results),
+    ] {
+        fragments.insert(marker.into(), content);
+    }
 }
 
 /// The five rendered fragments substituted into the benchmarks page: the two
@@ -490,10 +292,10 @@ fn push_host_meta(out: &mut String, meta: &Meta) {
 }
 
 /// The results marker becomes an interactive dot plot (Vega-Lite, driven by
-/// `docs/theme/bench-charts.js` and wired via `book.toml`'s `additional-js`)
-/// plus a collapsed HTML table with the same numbers as a no-JS/print fallback.
+/// `docs/.vitepress/theme/bench-charts.js` and initialized by the VitePress theme)
+/// plus an HTML table with the same numbers as a no-JS/print fallback.
 ///
-/// The chart data rides inline in a `<script type="application/json">`; the JS
+/// The chart data rides in an escaped HTML attribute; the JS
 /// plots time-relative-to-badness on a log axis, one dot per (document,
 /// formatter). Kept as raw HTML (not a Markdown pipe table) so the fallback
 /// renders inside `<details>`.
@@ -502,15 +304,15 @@ fn render_results(documents: &[Document], results: &[BenchResult], caption: &str
     let data_json = serde_json::to_string(&points).unwrap_or_else(|_| "[]".to_string());
 
     let mut out = String::new();
-    out.push_str("<div class=\"bench-chart-block\">\n");
+    out.push_str(&format!(
+        "<div class=\"bench-chart-block\" data-bench=\"{}\">\n",
+        html_escape::encode_double_quoted_attribute(&data_json)
+    ));
     // The chart and its caption form the <figure>; the caption must be the
     // figure's first or last child, so the no-JS/table fallback lives as a
     // sibling below it, not inside the figure.
     out.push_str("<figure class=\"bench-figure\">\n");
     out.push_str("<div class=\"bench-chart\"></div>\n");
-    out.push_str("<script type=\"application/json\" class=\"bench-data\">");
-    out.push_str(&data_json);
-    out.push_str("</script>\n");
     out.push_str("<figcaption>");
     out.push_str(caption);
     out.push_str("</figcaption>\n");
@@ -519,7 +321,7 @@ fn render_results(documents: &[Document], results: &[BenchResult], caption: &str
         "<noscript>Enable JavaScript for the interactive chart; \
          the data table below has the same numbers.</noscript>\n",
     );
-    out.push_str("<details class=\"bench-table\">\n<summary>Data table</summary>\n");
+    out.push_str("<details class=\"bench-table\" open>\n<summary>Data table</summary>\n");
     out.push_str(&render_results_tables_html(documents, results));
     out.push_str("</details>\n");
     out.push_str("</div>\n");

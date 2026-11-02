@@ -129,7 +129,7 @@ for (const [source, target] of [
   );
 assert.ok(existsSync(join(distRoot, "playground/pkg/badness_wasm_bg.wasm")));
 const sitemap = readFileSync(join(distRoot, "sitemap.xml"), "utf8");
-for (const path of [...chapters(), "playground/index.md"]) {
+for (const path of chapters()) {
   assert.ok(
     sitemap.includes(`<loc>${origin + pageUrl(path)}</loc>`),
     `sitemap entry for ${path}`,

@@ -55,7 +55,7 @@ linter, and language server.
 
 Explore the [architecture](/development/architecture), see the [performance
 comparisons](/guide/performance), or try your own document in the
-[playground](/playground/){target="_self"}.
+[playground](/playground/).
 
 ## Funding
 

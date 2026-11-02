@@ -66,7 +66,7 @@ filesystem access and passes resolved inputs to the libraries.
 wrappers, and semantic models. Its `data/` directory holds signature data, which
 `build.rs` turns into PHF tables. `badness-formatter` depends on that crate and
 provides the layout engine and both formatters. `badness-wasm` is an unpublished
-wasm-bindgen wrapper that powers the [playground](/playground/){target="_self"}.
+wasm-bindgen wrapper that powers the [playground](/playground/).
 
 Both library crates build for `wasm32-unknown-unknown`, so their runtime code
 cannot use the filesystem, threads, or child processes. The formatter also runs

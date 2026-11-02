@@ -1,6 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { load } from "cheerio";
 import { createMarkdownRenderer } from "vitepress";
 import {
   chapters,
@@ -10,17 +9,16 @@ import {
   pageUrl,
   sourceRoot,
 } from "./content.mjs";
-import { metadata } from "./metadata.mjs";
 
 const fragments = JSON.parse(
   readFileSync(join(docsRoot, ".vitepress/generated/fragments.json"), "utf8"),
 );
 const routes = { pages: {}, redirects: {} };
 const renderer = await createMarkdownRenderer(sourceRoot);
-for (const path of [...chapters(), "playground/index.md"]) {
+for (const path of chapters()) {
   const content =
     path === "playground/index.md"
-      ? "# Playground\n\nTry Badness formatting and linting in the [interactive playground](https://badness.dev/playground/).\n"
+      ? "# Playground\n\nTry Badness on LaTeX or BibTeX in the [interactive playground](https://badness.dev/playground/). Your code stays in your browser.\n"
       : markdownFor(path, fragments);
   let markdown = content;
   if (path === "guide/performance.md") {
@@ -60,13 +58,3 @@ writeFileSync(
   JSON.stringify(routes, null, 2) + "\n",
 );
 writeFileSync(join(distRoot, ".assetsignore"), "markdown-routes.json\n");
-
-const playgroundPath = join(distRoot, "playground/index.html");
-const $ = load(readFileSync(playgroundPath, "utf8"));
-for (const [tag, attributes] of metadata(
-  "playground/index.md",
-  $("title").text(),
-  $("meta[name=description]").attr("content"),
-))
-  $("head").append($(`<${tag}>`).attr(attributes));
-writeFileSync(playgroundPath, $.html());

@@ -204,9 +204,9 @@ reference and benchmark results are generated; regenerate them with
 the site reads the committed benchmark data without running benchmarks.
 
 The documentation build publishes canonical and social metadata, the sitemap,
-processed Markdown, installers, the configuration schema, and the standalone
-WASM playground. The benchmark renderer loads the vendored Vega scripts only on
-pages with charts. `docs/doc-utils` renders generated content shared by
+processed Markdown, installers, the configuration schema, and the WASM playground
+inside the VitePress site. The benchmark renderer loads the vendored Vega scripts
+only on pages with charts. `docs/doc-utils` renders generated content shared by
 VitePress and Markdown exports.
 
 GitHub Actions validates pull requests and main pushes. Release tags and manual

@@ -1,5 +1,4 @@
-// The docs playground: two CodeMirror editors over the badness-wasm formatter,
-// on the standalone page playground/index.html. Everything runs client-side.
+// The docs playground: two CodeMirror editors over the badness-wasm formatter.
 // Positions from the wasm side are UTF-16 code units, which are exactly
 // CodeMirror document positions — no conversion here.
 
@@ -55,36 +54,27 @@ title={The {\\TeX}book}, publisher = {Addison-Wesley}, year = {1984}
 `;
 
 const DEBOUNCE_MS = 200;
+let wasmReady;
 
-main().catch((e) => {
-  const status = document.getElementById("pg-status");
-  if (status) {
-    status.textContent = `Failed to load the playground: ${e.message ?? e}`;
-  }
-});
-
-async function main() {
+export async function mountPlayground(root, signal) {
   const els = {
-    filetype: document.getElementById("pg-filetype"),
-    lineWidth: document.getElementById("pg-line-width"),
-    indentWidth: document.getElementById("pg-indent-width"),
-    wrap: document.getElementById("pg-wrap"),
-    mathWrap: document.getElementById("pg-math-wrap"),
-    share: document.getElementById("pg-share"),
-    copy: document.getElementById("pg-copy"),
-    theme: document.getElementById("pg-theme"),
-    status: document.getElementById("pg-status"),
-    errors: document.getElementById("pg-errors"),
-    input: document.getElementById("pg-input"),
-    output: document.getElementById("pg-output"),
+    filetype: root.querySelector("#pg-filetype"),
+    lineWidth: root.querySelector("#pg-line-width"),
+    indentWidth: root.querySelector("#pg-indent-width"),
+    wrap: root.querySelector("#pg-wrap"),
+    mathWrap: root.querySelector("#pg-math-wrap"),
+    share: root.querySelector("#pg-share"),
+    copy: root.querySelector("#pg-copy"),
+    status: root.querySelector("#pg-status"),
+    errors: root.querySelector("#pg-errors"),
+    input: root.querySelector("#pg-input"),
+    output: root.querySelector("#pg-output"),
   };
-  if (Object.values(els).some((el) => !el)) return;
 
-  await initWasm();
+  // VitePress can navigate away while the shared wasm module is still loading.
+  await (wasmReady ??= initWasm());
+  if (signal.aborted) return;
 
-  // The head script in index.html resolves the initial theme into a `dark`
-  // class on <html>; the toggle button flips it, and a Compartment swaps the
-  // editor theme live.
   const isDark = () => document.documentElement.classList.contains("dark");
   const themeExt = () =>
     isDark()
@@ -142,16 +132,17 @@ async function main() {
     }),
   });
 
-  new MutationObserver(() => {
+  const themeObserver = new MutationObserver(() => {
     inputView.dispatch({ effects: inputTheme.reconfigure(themeExt()) });
     outputView.dispatch({ effects: outputTheme.reconfigure(themeExt()) });
-  }).observe(document.documentElement, {
+  });
+  themeObserver.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["class"],
   });
 
   const setStatus = (text) => {
-    els.status.textContent = text;
+    if (!signal.aborted) els.status.textContent = text;
   };
 
   const options = () => ({
@@ -287,43 +278,48 @@ async function main() {
     for (const { key, el } of PARAMS) {
       if (el.value !== "" && !el.disabled) params.set(key, el.value);
     }
-    const query = params.toString();
+    const url = new URL(window.location.href);
+    url.search = params.toString();
     // NB: `history` is CodeMirror's history extension here; qualify the global.
-    window.history.replaceState(
-      null,
-      "",
-      query ? `?${query}` : window.location.pathname,
-    );
+    window.history.replaceState(window.history.state, "", url);
   }
 
   let previousFt = els.filetype.value;
   for (const { el } of PARAMS) {
-    el.addEventListener("change", () => {
-      if (el === els.filetype) {
-        swapSampleIfPristine(previousFt, els.filetype.value);
-        previousFt = els.filetype.value;
-        els.wrap.value = defaultWrapFor(els.filetype.value);
-        inputView.dispatch({ effects: inputLang.reconfigure(langExt()) });
-        outputView.dispatch({ effects: outputLang.reconfigure(langExt()) });
-      }
-      syncControls();
-      updateQueryString();
-      run();
-    });
+    el.addEventListener(
+      "change",
+      () => {
+        if (el === els.filetype) {
+          swapSampleIfPristine(previousFt, els.filetype.value);
+          previousFt = els.filetype.value;
+          els.wrap.value = defaultWrapFor(els.filetype.value);
+          inputView.dispatch({ effects: inputLang.reconfigure(langExt()) });
+          outputView.dispatch({ effects: outputLang.reconfigure(langExt()) });
+        }
+        syncControls();
+        updateQueryString();
+        run();
+      },
+      { signal },
+    );
   }
 
-  els.copy.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(outputView.state.doc.toString());
-    setStatus("Output copied to clipboard.");
-  });
-  els.share.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(window.location.href);
-    setStatus("Link copied to clipboard.");
-  });
-  els.theme.addEventListener("click", () => {
-    const dark = document.documentElement.classList.toggle("dark");
-    localStorage.setItem("badness-playground-theme", dark ? "dark" : "light");
-  });
+  els.copy.addEventListener(
+    "click",
+    async () => {
+      await navigator.clipboard.writeText(outputView.state.doc.toString());
+      setStatus("Output copied to clipboard.");
+    },
+    { signal },
+  );
+  els.share.addEventListener(
+    "click",
+    async () => {
+      await navigator.clipboard.writeText(window.location.href);
+      setStatus("Link copied to clipboard.");
+    },
+    { signal },
+  );
 
   applyQueryString();
   if (els.filetype.value !== previousFt) {
@@ -339,4 +335,11 @@ async function main() {
   }
   syncControls();
   run();
+
+  return () => {
+    clearTimeout(debounce);
+    themeObserver.disconnect();
+    inputView.destroy();
+    outputView.destroy();
+  };
 }

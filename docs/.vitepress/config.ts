@@ -86,14 +86,11 @@ export default defineConfig({
   sitemap: {
     hostname: origin,
     transformItems(items) {
-      items.push({ url: "playground/" });
       return items.map((item) => {
         const path =
-          item.url === "playground/"
-            ? "public/playground/index.html"
-            : item.url === ""
-              ? "index.md"
-              : item.url.replace(/\.html$/, "") + ".md";
+          item.url === "" || item.url.endsWith("/")
+            ? item.url + "index.md"
+            : item.url.replace(/\.html$/, "") + ".md";
         try {
           const date = execFileSync(
             "git",
@@ -114,7 +111,7 @@ export default defineConfig({
     nav: [
       { text: "Guide", link: "/guide/getting-started" },
       { text: "Reference", link: "/reference/cli" },
-      { text: "Playground", link: "/playground/", target: "_self" },
+      { text: "Playground", link: "/playground/" },
     ],
     sidebar: [
       {

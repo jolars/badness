@@ -2,7 +2,6 @@
 layout: home
 hero:
   name: Badness
-  text: LaTeX tools that keep up.
   tagline: A fast formatter, linter, and language server for LaTeX and BibTeX.
     Keep your source tidy and get feedback as you write.
   image:
@@ -34,16 +33,31 @@ features:
 
 ## Quick start {#where-to-go-next}
 
-Install Badness, then format and lint your first file:
+Install Badness for your platform, then format and lint a file:
 
-```sh
-npm install -g badness
-badness format paper.tex
-badness lint paper.tex
+::: code-group
+
+```sh [macOS/Linux]
+curl --proto '=https' --tlsv1.2 -sSf https://badness.dev/install | sh
 ```
 
-The [installation guide](/guide/installation) also covers Homebrew, Python,
-Cargo, Nix, and prebuilt binaries. For feedback as you write, follow the [editor
+```powershell [Windows]
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://badness.dev/install.ps1 | iex"
+```
+
+:::
+
+See the [installation guide](/guide/installation) for Homebrew, npm, uv, Cargo,
+and other installation options.
+
+```sh
+badness format paper.tex
+badness lint bibliography.bib
+```
+
+Using VS Code? Install the [Badness
+extension](https://marketplace.visualstudio.com/items?itemName=jolars.badness),
+which includes Badness. For other editors and configuration, see the [editor
 setup guide](/guide/editor-setup).
 
 ## Built on your source {#the-architecture}
@@ -53,9 +67,8 @@ as you type. The formatter preserves non-trivia content, and formatting an
 already-formatted file changes nothing. The same parser powers the formatter,
 linter, and language server.
 
-Explore the [architecture](/development/architecture), see the [performance
-comparisons](/guide/performance), or try your own document in the
-[playground](/playground/).
+See the [performance comparisons](/guide/performance) or try your own document
+in the [playground](/playground/).
 
 ## Funding
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.29.1](https://github.com/jolars/badness/compare/badness-code-v0.29.0...badness-code-v0.29.1) (2026-11-06)
+
+### Bug Fixes
+
+- **lsp:** preserve editor widths with global config ([`37cd611`](https://github.com/jolars/badness/commit/37cd6111d3030290ad6cee2453ef25728a7c645e)), fixes [#224](https://github.com/jolars/badness/issues/224)
+
+### Dependencies
+
+- updated badness to v0.29.1
+
 ## [0.29.0](https://github.com/jolars/badness/compare/badness-code-v0.28.0...badness-code-v0.29.0) (2026-11-02)
 
 ### Bug Fixes

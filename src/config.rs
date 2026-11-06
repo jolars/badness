@@ -1,7 +1,7 @@
 //! `badness.toml` configuration: schema, file loading, ancestor-walk
 //! discovery, and the `BADNESS_CONFIG`/global user-config fallbacks.
 //!
-//! The CLI is the only consumer; the library API (`format_with_style`,
+//! The CLI and language server resolve config here; the library API (`format_with_style`,
 //! `check_paths_with_style`, the linter) continues to take a fully-resolved
 //! [`FormatStyle`] / [`ExcludeFilter`](crate::file_discovery::ExcludeFilter) /
 //! rule selection.
@@ -14,8 +14,9 @@
 //! - **`[format]` carries `wrap`, not `line-ending`** (the LaTeX paragraph
 //!   line-break policy). `wrap` is optional: when omitted every file kind uses
 //!   [`WrapMode::default`] (`reflow`). It stays an `Option` here so the LSP can
-//!   tell "unset" from "set" when merging editor settings over project config,
-//!   not because the fallback depends on the file.
+//!   tell "unset" from "set". Widths also stay optional so global configs
+//!   override editor widths only for keys they set; project configs use built-in
+//!   defaults for omitted widths.
 //!
 //! There is no `[index]` section (badness has no R-package index) and no
 //! `[lint]`-driven network egress key.
@@ -154,16 +155,24 @@ impl Config {
 }
 
 /// The `[format]` section of `badness.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct FormatConfig {
     /// Width used for layout decisions; zero disables width-based wrapping.
-    #[serde(default = "default_line_width")]
-    #[schemars(range(min = 0, max = 1000))]
-    pub line_width: u32,
-    #[serde(default = "default_indent_width")]
-    #[schemars(range(min = 1, max = 1000))]
-    pub indent_width: u32,
+    #[serde(default)]
+    #[schemars(
+        with = "u32",
+        default = "default_line_width",
+        range(min = 0, max = 1000)
+    )]
+    pub line_width: Option<u32>,
+    #[serde(default)]
+    #[schemars(
+        with = "u32",
+        default = "default_indent_width",
+        range(min = 1, max = 1000)
+    )]
+    pub indent_width: Option<u32>,
     /// How continuation lines in list items are indented from the `\item`
     /// column. See [`ItemIndentConfig`].
     #[serde(default)]
@@ -196,21 +205,6 @@ pub struct FormatConfig {
     /// not broken after it. Merged on top of the built-in per-language lists.
     #[serde(default)]
     pub no_break_abbreviations: BTreeMap<String, Vec<String>>,
-}
-
-impl Default for FormatConfig {
-    fn default() -> Self {
-        Self {
-            line_width: DEFAULT_LINE_WIDTH,
-            indent_width: DEFAULT_INDENT_WIDTH,
-            item_indent: ItemIndentConfig::default(),
-            wrap: None,
-            math_wrap: None,
-            line_ending: None,
-            lang: None,
-            no_break_abbreviations: BTreeMap::new(),
-        }
-    }
 }
 
 /// The `item-indent` key under `[format]`. A serde-named mirror of
@@ -330,8 +324,12 @@ impl FormatConfig {
     /// Validate values, returning a [`ConfigError::InvalidValue`] with the
     /// originating file path (when known) for diagnostics.
     pub fn validate(&self, path: Option<&Path>) -> Result<(), ConfigError> {
-        validate_width("line-width", self.line_width, 0, path)?;
-        validate_width("indent-width", self.indent_width, MIN_WIDTH, path)?;
+        if let Some(width) = self.line_width {
+            validate_width("line-width", width, 0, path)?;
+        }
+        if let Some(width) = self.indent_width {
+            validate_width("indent-width", width, MIN_WIDTH, path)?;
+        }
         Ok(())
     }
 }
@@ -423,8 +421,8 @@ impl From<&FormatConfig> for FormatStyle {
     /// overwritten before the style reaches the formatter.
     fn from(config: &FormatConfig) -> Self {
         FormatStyle {
-            line_width: config.line_width as usize,
-            indent_width: config.indent_width as usize,
+            line_width: config.line_width.unwrap_or(DEFAULT_LINE_WIDTH) as usize,
+            indent_width: config.indent_width.unwrap_or(DEFAULT_INDENT_WIDTH) as usize,
             item_indent: config.item_indent.into(),
             wrap: WrapMode::default(),
             // Unlike `wrap`, `math-wrap` has no per-file-kind default: the
@@ -909,7 +907,7 @@ mod tests {
             Some(["child/".to_owned()].as_slice())
         );
         assert_eq!(config.extend_exclude, ["one/", "two/"]);
-        assert_eq!(config.format.line_width, 90);
+        assert_eq!(config.format.line_width, Some(90));
         assert_eq!(config.format.wrap, Some(WrapModeConfig::Preserve));
         assert_eq!(config.lint.select, Some(vec!["duplicate-label".to_owned()]));
         assert_eq!(config.lint.ignore, ["duplicate-label"]);
@@ -930,7 +928,7 @@ mod tests {
         let child = dir.path().join("badness.toml");
         fs::write(&child, "extend = 'b.toml'\n").unwrap();
         let (config, paths) = Config::load_from_with_paths(&child).unwrap();
-        assert_eq!(config.format.line_width, 42);
+        assert_eq!(config.format.line_width, Some(42));
         assert_eq!(config.format.wrap, Some(WrapModeConfig::Stable));
         assert_eq!(
             paths,
@@ -1030,6 +1028,18 @@ mod tests {
         let style = FormatStyle::from(&config.format);
         assert_eq!(style.indent_width, 4);
         assert_eq!(style.line_width, 80);
+    }
+
+    #[test]
+    fn widths_distinguish_omitted_keys_from_explicit_defaults() {
+        for text in ["", "[format]\n", "[lint]\nignore = []\n"] {
+            let config = parse(text).unwrap();
+            assert_eq!(config.format.line_width, None);
+            assert_eq!(config.format.indent_width, None);
+        }
+        let config = parse("[format]\nline-width = 80\nindent-width = 2\n").unwrap();
+        assert_eq!(config.format.line_width, Some(80));
+        assert_eq!(config.format.indent_width, Some(2));
     }
 
     #[test]
@@ -1249,7 +1259,7 @@ mod tests {
     #[test]
     fn accepts_unlimited_line_width() {
         let config = parse("[format]\nline-width = 0\n").expect("unlimited width");
-        assert_eq!(config.format.line_width, 0);
+        assert_eq!(config.format.line_width, Some(0));
         assert_eq!(FormatStyle::from(&config.format).line_width, 0);
     }
 
@@ -1393,7 +1403,7 @@ mod tests {
             path,
             dir.path().canonicalize().unwrap().join(CONFIG_FILE_NAME)
         );
-        assert_eq!(config.format.line_width, 70);
+        assert_eq!(config.format.line_width, Some(70));
     }
 
     #[test]
@@ -1428,7 +1438,7 @@ mod tests {
 
         let (path, config) = Config::discover(&nested).expect("discover").expect("found");
         assert_eq!(path, repo.canonicalize().unwrap().join(CONFIG_FILE_NAME));
-        assert_eq!(config.format.line_width, 70);
+        assert_eq!(config.format.line_width, Some(70));
     }
 
     #[test]
@@ -1457,7 +1467,7 @@ mod tests {
 
         let (config, source) =
             Config::resolve(Some(&explicit), false, dir.path()).expect("resolve");
-        assert_eq!(config.format.line_width, 40);
+        assert_eq!(config.format.line_width, Some(40));
         assert_eq!(source, ConfigSource::Explicit(explicit.clone()));
     }
 
@@ -1470,7 +1480,7 @@ mod tests {
         )
         .unwrap();
         let (config, source) = Config::resolve(None, false, dir.path()).expect("resolve");
-        assert_eq!(config.format.line_width, 50);
+        assert_eq!(config.format.line_width, Some(50));
         assert!(matches!(source, ConfigSource::Discovered(_)));
     }
 
@@ -1498,7 +1508,7 @@ mod tests {
         let (config, source) =
             Config::resolve_with_fallbacks(None, false, &repo, None, Some(&global))
                 .expect("resolve");
-        assert_eq!(config.format.line_width, 66);
+        assert_eq!(config.format.line_width, Some(66));
         assert_eq!(source, ConfigSource::Global(global.clone()));
         // Global config has no project location: excludes anchor at the caller.
         assert_eq!(source.exclude_root(&repo), repo.as_path());
@@ -1513,7 +1523,7 @@ mod tests {
         let (config, source) =
             Config::resolve_with_fallbacks(None, false, &repo, None, Some(&global))
                 .expect("resolve");
-        assert_eq!(config.format.line_width, 50);
+        assert_eq!(config.format.line_width, Some(50));
         assert!(matches!(source, ConfigSource::Discovered(_)));
     }
 
@@ -1561,7 +1571,7 @@ mod tests {
         let (config, source) =
             Config::resolve_with_fallbacks(None, false, &repo, Some(&env), Some(&global))
                 .expect("resolve");
-        assert_eq!(config.format.line_width, 44);
+        assert_eq!(config.format.line_width, Some(44));
         assert_eq!(source, ConfigSource::Env(env.clone()));
         // Env config has no project location: excludes anchor at the caller.
         assert_eq!(source.exclude_root(&repo), repo.as_path());
@@ -1575,7 +1585,7 @@ mod tests {
 
         let (config, source) =
             Config::resolve_with_fallbacks(None, false, &repo, Some(&env), None).expect("resolve");
-        assert_eq!(config.format.line_width, 50);
+        assert_eq!(config.format.line_width, Some(50));
         assert!(matches!(source, ConfigSource::Discovered(_)));
     }
 
@@ -1589,7 +1599,7 @@ mod tests {
         let (config, source) =
             Config::resolve_with_fallbacks(Some(&explicit), false, &repo, Some(&env), None)
                 .expect("resolve");
-        assert_eq!(config.format.line_width, 40);
+        assert_eq!(config.format.line_width, Some(40));
         assert_eq!(source, ConfigSource::Explicit(explicit.clone()));
     }
 

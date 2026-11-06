@@ -11,6 +11,9 @@
 // so this is sound — allow it test-wide, as `src/lsp.rs` does module-wide.
 #![allow(clippy::mutable_key_type)]
 
+#[path = "lsp/config.rs"]
+mod config;
+
 use std::time::Duration;
 
 use badness::formatter::{FormatStyle, format_with_style};

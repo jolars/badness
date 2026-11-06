@@ -102,7 +102,7 @@ use lsp_types::{
     DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbol,
     DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandOptions, ExecuteCommandParams,
     FileChangeType, FileSystemWatcher, FoldingRange, FoldingRangeParams,
-    FoldingRangeProviderCapability, FullDocumentDiagnosticReport, GlobPattern,
+    FoldingRangeProviderCapability, FormattingOptions, FullDocumentDiagnosticReport, GlobPattern,
     GotoDefinitionParams, GotoDefinitionResponse, HoverParams, HoverProviderCapability,
     InsertTextFormat, Location, NumberOrString, OneOf, Position, PositionEncodingKind,
     PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, Registration,
@@ -128,7 +128,7 @@ use crate::bib::{
     format_node as bib_format_node, format_with_style as bib_format_with_style, parse as bib_parse,
 };
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
-use crate::config::{BuildConfig, Config, LintConfig};
+use crate::config::{BuildConfig, Config, ConfigSource, LintConfig};
 use crate::declarations::ResolvedDeclarations;
 use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
 use crate::formatter::sentence::{SentenceLanguage, resolve_owned};
@@ -492,9 +492,9 @@ impl EditorSettings {
 }
 
 /// A document's resolved configuration: the formatter [`FormatStyle`] (with `wrap`
-/// still a placeholder — the file kind decides it per request) plus the lint
-/// selection. Built from a discovered `badness.toml` (file-wins) or, absent one,
-/// from the editor settings. Cached per anchor dir in [`GlobalState::config_cache`].
+/// still a placeholder) plus the lint selection. Project configs win outright;
+/// global configs override editor widths only for keys they set. Cached per
+/// anchor dir in [`GlobalState::config_cache`].
 #[derive(Debug, Clone)]
 struct ResolvedSettings {
     /// Width knobs and `math_wrap` set; `wrap` is the [`WrapMode::default`]
@@ -503,9 +503,9 @@ struct ResolvedSettings {
     style: FormatStyle,
     /// Configured paragraph wrap, if any. `None` ⇒ the file-kind default applies.
     wrap_override: Option<WrapMode>,
-    /// Whether a `badness.toml` governed this resolution. When `true` the file
-    /// config wins outright and a request's `tab_size` is ignored.
-    config_present: bool,
+    /// A project config or an explicit global indent width overrides the
+    /// request's `tab_size`.
+    indent_from_config: bool,
     /// The `[lint]` rule selection (the default-enabled rules when
     /// no file has resolved settings).
     lint: LintConfig,
@@ -667,22 +667,36 @@ impl CachedSettings {
 }
 
 impl ResolvedSettings {
-    /// Resolution from a discovered config (when `present`), else from the editor
-    /// settings, applying the file-wins rule. The `exclude` filter is left
+    /// Resolve project configs outright and overlay explicitly configured global
+    /// widths on editor settings. The `exclude` filter is left
     /// exclude-nothing here; [`resolve_settings`] compiles and installs the real
     /// one (it holds the config's root directory).
     ///
     /// [`resolve_settings`]: GlobalState::resolve_settings
-    fn from_config(config: &Config, present: bool, editor: &EditorSettings) -> Self {
-        if present {
+    fn from_config(config: &Config, source: &ConfigSource, editor: &EditorSettings) -> Self {
+        if source.path().is_some() {
+            let project = matches!(
+                source,
+                ConfigSource::Explicit(_) | ConfigSource::Discovered(_)
+            );
+            let mut style = FormatStyle::from(&config.format);
+            if !project {
+                let editor_style = editor.to_format_style();
+                if config.format.line_width.is_none() {
+                    style.line_width = editor_style.line_width;
+                }
+                if config.format.indent_width.is_none() {
+                    style.indent_width = editor_style.indent_width;
+                }
+            }
             let (sentence_lang, sentence_no_break) = resolve_owned(
                 config.format.lang.as_deref(),
                 &config.format.no_break_abbreviations,
             );
             Self {
-                style: FormatStyle::from(&config.format),
+                style,
                 wrap_override: config.format.wrap.map(Into::into),
-                config_present: true,
+                indent_from_config: project || config.format.indent_width.is_some(),
                 lint: config.lint.clone(),
                 exclude: ExcludeFilter::none(),
                 sentence_lang,
@@ -701,7 +715,7 @@ impl ResolvedSettings {
         Self {
             style: editor.to_format_style(),
             wrap_override: None,
-            config_present: false,
+            indent_from_config: false,
             lint: LintConfig::default(),
             exclude: ExcludeFilter::none(),
             sentence_lang: SentenceLanguage::default(),
@@ -709,6 +723,17 @@ impl ResolvedSettings {
             build: BuildConfig::default(),
             declarations: Arc::new(ResolvedDeclarations::default()),
         }
+    }
+
+    /// Apply request options after resolving widths so all formatting handlers
+    /// honor the same precedence.
+    fn format_style(&self, options: &FormattingOptions) -> FormatStyle {
+        let mut style = self.style;
+        if !self.indent_from_config && options.tab_size > 0 {
+            style.indent_width = options.tab_size as usize;
+        }
+        style.wrap = self.wrap_override.unwrap_or_default();
+        style
     }
 
     /// The active lint-rule set this config implies (unknown ids are dropped; the
@@ -750,7 +775,7 @@ impl GlobalState {
             Ok((config, source, paths)) => {
                 let present = source.path().is_some();
                 let mut resolved =
-                    ResolvedSettings::from_config(&config, present, &self.editor_settings);
+                    ResolvedSettings::from_config(&config, &source, &self.editor_settings);
                 if present {
                     // Compile the sibling-discovery exclude filter, rooted at the
                     // config's directory — or at the document's directory for the
@@ -1908,17 +1933,9 @@ fn on_formatting(
         return;
     }
     let resolved = state.resolve_settings(&uri);
-    let mut style = resolved.style;
-    // A discovered `badness.toml` wins outright; only when none
-    // governs does the request's `tab_size` override the indent width.
-    if !resolved.config_present && params.options.tab_size > 0 {
-        style.indent_width = params.options.tab_size as usize;
-    }
+    let style = resolved.format_style(&params.options);
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    // `wrap` is decided per request: a configured `wrap` wins, else the default
-    // (`reflow`, the same for every file kind).
-    style.wrap = resolved.wrap_override.unwrap_or_default();
     let text = state.documents[&uri].text.clone();
     let _ = job_tx.send(WorkerJob::Format {
         id,
@@ -1965,13 +1982,9 @@ fn on_range_formatting(
         return;
     }
     let resolved = state.resolve_settings(&uri);
-    let mut style = resolved.style;
-    if !resolved.config_present && params.options.tab_size > 0 {
-        style.indent_width = params.options.tab_size as usize;
-    }
+    let style = resolved.format_style(&params.options);
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    style.wrap = resolved.wrap_override.unwrap_or_default();
     let text = state.documents[&uri].text.clone();
     let _ = job_tx.send(WorkerJob::RangeFormat {
         id,
@@ -2019,13 +2032,9 @@ fn on_type_formatting(
         return;
     }
     let resolved = state.resolve_settings(&uri);
-    let mut style = resolved.style;
-    if !resolved.config_present && params.options.tab_size > 0 {
-        style.indent_width = params.options.tab_size as usize;
-    }
+    let style = resolved.format_style(&params.options);
     let path = uri_to_path(&uri);
     let kind = file_kind_for(&path);
-    style.wrap = resolved.wrap_override.unwrap_or_default();
     let text = state.documents[&uri].text.clone();
     let _ = job_tx.send(WorkerJob::OnTypeFormat {
         id,
@@ -8354,7 +8363,7 @@ mod tests {
             ..Default::default()
         });
         let resolved = state.resolve_settings(&file_uri_in(dir.path()));
-        assert!(resolved.config_present);
+        assert!(resolved.indent_from_config);
         assert_eq!(resolved.style.line_width, 100);
         assert_eq!(resolved.style.indent_width, 8);
     }
@@ -8368,7 +8377,7 @@ mod tests {
             ..Default::default()
         });
         let resolved = state.resolve_settings(&file_uri_in(dir.path()));
-        assert!(!resolved.config_present);
+        assert!(!resolved.indent_from_config);
         assert_eq!(resolved.style.line_width, 40);
         // Unset editor knob keeps the built-in default.
         assert_eq!(
@@ -8485,7 +8494,7 @@ mod tests {
 
         let mut state = state_with_editor(EditorSettings::default());
         let resolved = state.resolve_settings(&file_uri_in(dir.path()));
-        assert!(!resolved.config_present);
+        assert!(!resolved.indent_from_config);
 
         let files =
             collect_lint_files(&[dir.path().to_path_buf()], &resolved.exclude).expect("collect");
@@ -8730,7 +8739,7 @@ mod tests {
             ..Default::default()
         });
         let resolved = state.resolve_settings(&uri("untitled:Untitled-1"));
-        assert!(!resolved.config_present);
+        assert!(!resolved.indent_from_config);
         assert_eq!(resolved.style.line_width, 55);
         // A non-file buffer never joins the anchor-dir cache.
         assert!(state.config_cache.is_empty());

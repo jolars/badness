@@ -57,11 +57,11 @@
         },
         "badness.lineWidth": {
           "type": "number",
-          "markdownDescription": "Maximum line width before the formatter breaks a line. A fallback only: a discovered `badness.toml` always wins. Unset by default."
+          "markdownDescription": "Maximum line width before wrapping. Used when no config determines the width. Unset by default. See [width precedence](https://badness.dev/reference/editor-configuration#supplying-settings)."
         },
         "badness.indentWidth": {
           "type": "number",
-          "markdownDescription": "Spaces per indent step. A fallback only: a discovered `badness.toml` wins outright, and absent one your editor's tab size wins. Unset by default."
+          "markdownDescription": "Spaces per indent step. Used when neither a config nor your editor's tab size determines the width. Unset by default. See [width precedence](https://badness.dev/reference/editor-configuration#supplying-settings)."
         },
         "badness.texmf": {
           "type": "object",

@@ -12,8 +12,13 @@ Supply settings as `initializationOptions` at startup or through
 key.
 
 **Formatter widths**: `lineWidth` and `indentWidth` serve as fallbacks. A
-discovered `badness.toml` takes precedence over both. Without one, your editor's
-tab size, sent with each formatting request, overrides the indent width.
+discovered project `badness.toml` takes precedence over both, using built-in
+defaults for widths it omits. Without a project config, a global or
+`BADNESS_CONFIG` file overrides only the widths it explicitly sets, including
+values inherited through `extend`. If that file omits `indent-width`, your
+editor's tab size, sent with each formatting request, overrides `indentWidth`.
+Omitted widths otherwise fall back to these editor settings, then built-in
+defaults.
 
 The language server is also the sole consumer of the `[build]` section of
 `badness.toml`, which locates the `.aux` files produced by compilation; see the

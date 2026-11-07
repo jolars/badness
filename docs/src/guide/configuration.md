@@ -60,9 +60,9 @@ The `BADNESS_CONFIG` and global files use the same schema as a project
 Relative `exclude` patterns in them resolve against the working directory (CLI)
 or the document's directory (language server) rather than the config's own
 directory. The language server also uses these files for editor-wide defaults
-such as `wrap = "preserve"`. See
-[Editor configuration](../reference/editor-configuration.md#supplying-settings)
-for width precedence.
+such as `wrap = "preserve"`. See [Editor
+configuration](../reference/editor-configuration.md#supplying-settings) for
+width precedence.
 
 Two global CLI flags override discovery:
 

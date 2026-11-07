@@ -92,6 +92,11 @@ they do not fit. Opaque braced environment arguments keep values such as
 comments retain their binding; the formatter does not insert `%` markers to
 create new break opportunities.
 
+Label and reference keys stay together, even when they exceed the configured
+line width. This includes an entire comma-separated `\cref` key list. Plain
+wrapped keys join onto one line; arguments containing comments or nested syntax
+retain their contents.
+
 Known key-value lists discard padding around their top-level entries. Package
 name lists also discard padding, so
 `\usepackage[ letterpaper , scale=0.8 ]{ geometry }` formats as

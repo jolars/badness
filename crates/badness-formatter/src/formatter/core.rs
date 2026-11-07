@@ -8808,7 +8808,7 @@ fn is_segment_separator(ir: &Ir) -> bool {
 
 /// Whether `command`'s signature marks any argument the [`lower_command`] path
 /// must handle specially — a non-[`Opaque`](ContentKind::Opaque) content kind
-/// ([`Prose`](ContentKind::Prose) or a [`TokenList`](ContentKind::TokenList)).
+/// (such as [`Prose`](ContentKind::Prose) or [`Identifier`](ContentKind::Identifier)).
 /// The cheap guard that gates the
 /// [`lower_command`] path in [`lower_node`]: a command with no such argument (the
 /// overwhelming common case) lowers generically, so nothing regresses.
@@ -9399,6 +9399,9 @@ fn lower_command_with_math_spacing(
                     continue;
                 }
                 match spec.map(|s| s.content) {
+                    Some(ContentKind::Identifier) => {
+                        out.push(lower_identifier_group(&child));
+                    }
                     Some(ContentKind::Algorithm2e) => {
                         out.push(lower_prose_group_kind(
                             &child,
@@ -9617,6 +9620,38 @@ fn lower_token_list_group(
         Ir::concat(parts.into_iter().filter(|part| !is_segment_separator(part))),
         close,
     ]))
+}
+
+/// Keep keys searchable as one source line. Only a flat literal admits gap
+/// normalization; nested syntax may carry whitespace-sensitive macro arguments,
+/// and comments must retain the line endings they consume. The preserved form
+/// is its own fixed point, independent of width or authored newline shape.
+fn lower_identifier_group(node: &SyntaxNode) -> Ir {
+    let preserve = || Ir::verbatim(node.text().to_string());
+    let mut parts = Vec::new();
+    let mut iter = node.children_with_tokens().peekable();
+    while let Some(element) = iter.next() {
+        match element {
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
+                let gap = consume_gap(&token, &mut iter);
+                if gap == Gap::Blank {
+                    return preserve();
+                }
+                parts.push(Ir::verbatim(gap.flat()));
+            }
+            SyntaxElement::Token(token)
+                if matches!(
+                    token.kind(),
+                    SyntaxKind::COMMENT | SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD
+                ) =>
+            {
+                return preserve();
+            }
+            SyntaxElement::Token(token) => parts.push(Ir::verbatim(token.text())),
+            SyntaxElement::Node(_) => return preserve(),
+        }
+    }
+    Ir::concat(parts)
 }
 
 /// Collapse top-level argument gaps without exposing word-wrap opportunities.

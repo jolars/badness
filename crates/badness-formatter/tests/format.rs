@@ -522,6 +522,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     ("protected_verbatim", WrapMode::Preserve, 80),
     ("preserve_prose_spacing", WrapMode::Preserve, 80),
     ("issue_193_algorithm_spacing", WrapMode::Sentence, 80),
+    ("issue_222_label_keys", WrapMode::Reflow, 80),
     ("final_newline_added", WrapMode::Preserve, 80),
     // Environment indentation.
     ("environment_indents_body", WrapMode::Preserve, 80),
@@ -3907,6 +3908,112 @@ fn cite_key_list_layout_is_deterministic() {
         "stable wrapping must also repair a segmentable cite overflow"
     );
     assert_format_invariants_with_style(long_glued, stable);
+}
+
+#[test]
+fn label_and_reference_keys_do_not_wrap() {
+    let key = "sec:a long label key with several spaces";
+    for name in [
+        "label",
+        "ref",
+        "eqref",
+        "cref",
+        "Cref",
+        "autoref",
+        "nameref",
+        "pageref",
+        "vref",
+        "Vref",
+        "labelcref",
+        "cpageref",
+    ] {
+        let argument = if matches!(name, "cref" | "Cref" | "labelcref" | "cpageref") {
+            format!("{key},sec:another long label key")
+        } else {
+            key.to_string()
+        };
+        let command = format!("\\{name}{{{argument}}}");
+        let input = format!("See {command}.\n");
+        let style = FormatStyle {
+            line_width: 24,
+            ..FormatStyle::default()
+        };
+        let output = format_with_style(&input, style).unwrap();
+        assert!(
+            output.contains(&command),
+            "\\{name} split its key: {output}"
+        );
+        assert_format_invariants_with_style(&input, style);
+    }
+
+    for name in ["crefrange", "Crefrange"] {
+        let command = format!("\\{name}{{{key}}}{{sec:another long label key}}");
+        let input = format!("See {command}.\n");
+        let style = FormatStyle {
+            line_width: 24,
+            ..FormatStyle::default()
+        };
+        let output = format_with_style(&input, style).unwrap();
+        assert!(
+            output.contains(&command),
+            "\\{name} split its keys: {output}"
+        );
+        assert_format_invariants_with_style(&input, style);
+    }
+}
+
+#[test]
+fn wrapped_literal_keys_join_without_changing_spaces_or_commas() {
+    let inline = "See \\cref{sec:a long key,sec:another  long key}.\n";
+    let wrapped = "See \\cref{sec:a long\n    key,sec:another  long\n  key}.\n";
+    let style = FormatStyle {
+        line_width: 24,
+        ..FormatStyle::default()
+    };
+    let output = format_with_style(inline, style).unwrap();
+    assert!(output.contains("\\cref{sec:a long key,sec:another  long key}"));
+    assert_eq!(format_with_style(wrapped, style).unwrap(), output);
+    assert_format_invariants_with_style(wrapped, style);
+}
+
+#[test]
+fn identifier_comments_and_nested_syntax_retain_their_contents() {
+    let style = FormatStyle {
+        line_width: 24,
+        ..FormatStyle::default()
+    };
+    for key in [
+        "a long key % keep this comment\n  and its continuation",
+        "a long key\n\nwith a blank line",
+        "a long key {with nested words that overflow} suffix",
+        "a long key \\custom{with nested\n  whitespace-sensitive words}",
+        " a  long  key with surrounding spaces ",
+    ] {
+        let command = format!("\\ref{{{key}}}");
+        let input = format!("See {command}.\n");
+        let output = format_with_style(&input, style).unwrap();
+        assert!(output.contains(&command), "identifier changed: {output}");
+        assert_format_invariants_with_style(&input, style);
+    }
+}
+
+#[test]
+fn identifier_layout_respects_signature_slots_and_overrides() {
+    let style = FormatStyle {
+        line_width: 24,
+        ..FormatStyle::default()
+    };
+    for input in [
+        "See \\ref{a long label key}{an ordinary group with many words}.\n",
+        "\\renewcommand{\\ref}[1]{#1}\nSee \\ref{an ordinary group with many words}.\n",
+    ] {
+        let output = format_with_style(input, style).unwrap();
+        assert!(
+            !output.contains("{an ordinary group with many words}"),
+            "generic argument should still wrap: {output}"
+        );
+        assert_format_invariants_with_style(input, style);
+    }
 }
 
 /// A multi-line brace group whose opener is glued to its first body token

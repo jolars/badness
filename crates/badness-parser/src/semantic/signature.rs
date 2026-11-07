@@ -77,12 +77,15 @@ pub enum ArgumentDomain {
 /// policy. This metadata is for formatter consumers; the parser ignores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContentKind {
-    /// Left exactly as authored: names, identifiers, code, or option lists
-    /// (`\label`, the `\newcommand` body). The default, so an unmarked argument
-    /// never reflows — for most arguments interior whitespace can matter (a
-    /// `minipage`/`\parbox` body, a label key).
+    /// Generic content, such as macro code or an unknown argument. The default
+    /// structural layout applies without a content-specific whitespace policy.
     #[default]
     Opaque,
+    /// An identifier or reference-key list that stays together even when it
+    /// exceeds the line width. Plain literal bodies collapse source newlines
+    /// to spaces without adding break opportunities. Comments and nested syntax
+    /// retain their authored contents.
+    Identifier,
     /// Running prose the formatter may reflow to the line width (e.g. a
     /// `\footnote`/`\caption` body, a sectioning title).
     Prose,
@@ -1056,12 +1059,14 @@ impl RawArgKind {
 }
 
 /// An argument's content kind as written in the JSON: `"opaque"` (default),
-/// `"prose"`, `"algorithm2e"`, `"tokenList"`, or `"keyval"`. Mirrors [`ContentKind`].
+/// `"identifier"`, `"prose"`, `"algorithm2e"`, `"tokenList"`, or `"keyval"`.
+/// Mirrors [`ContentKind`].
 #[derive(Deserialize, Clone, Copy, Default)]
 #[serde(rename_all = "camelCase")]
 enum RawContentKind {
     #[default]
     Opaque,
+    Identifier,
     Prose,
     Algorithm2e,
     TokenList,
@@ -1109,6 +1114,7 @@ impl From<RawContentKind> for ContentKind {
     fn from(raw: RawContentKind) -> Self {
         match raw {
             RawContentKind::Opaque => ContentKind::Opaque,
+            RawContentKind::Identifier => ContentKind::Identifier,
             RawContentKind::Prose => ContentKind::Prose,
             RawContentKind::Algorithm2e => ContentKind::Algorithm2e,
             RawContentKind::TokenList => ContentKind::TokenList,
@@ -1709,7 +1715,8 @@ mod tests {
                 "short": { "args": ["req"] },
                 "full":  { "args": ["opt", { "kind": "req", "content": "prose" }] },
                 "kv":    { "args": [{ "kind": "opt", "content": "keyval" }, "req"] },
-                "list":  { "args": [{ "kind": "req", "content": "tokenList" }] }
+                "list":  { "args": [{ "kind": "req", "content": "tokenList" }] },
+                "key":   { "args": [{ "kind": "req", "content": "identifier" }] }
             } }"#,
         )
         .expect("valid content schema");
@@ -1726,6 +1733,8 @@ mod tests {
         assert_eq!(kv[1].content, ContentKind::Opaque);
         let list = &db.command("list").unwrap().args;
         assert_eq!(list[0].content, ContentKind::TokenList);
+        let key = &db.command("key").unwrap().args;
+        assert_eq!(key[0].content, ContentKind::Identifier);
     }
 
     #[test]
@@ -1910,7 +1919,7 @@ mod tests {
                 .all(|argument| argument.domain == ArgumentDomain::Text)
         );
         let label = &builtin().command("label").unwrap().args;
-        assert!(label.iter().all(|a| a.content == ContentKind::Opaque));
+        assert!(label.iter().all(|a| a.content == ContentKind::Identifier));
     }
 
     #[test]

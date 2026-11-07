@@ -218,9 +218,8 @@ impl Declarations {
                 .ok_or_else(|| error(DeclarationErrorKind::EmptyCommandEntry))?;
             // The family tables alone decide what `like` copies, so they are the
             // whole test. Requiring a `signatures.json` entry too would reject the
-            // targets a wrapper most needs: that file carries layout data and omits
-            // most of the ref/cite families, `\cpageref` — the only list-valued page
-            // reference — among them.
+            // targets a wrapper may need: that file carries layout data and omits
+            // citation commands such as `\supercite` and `\Textcite`.
             if ref_command(target).is_none() && cite_command(target).is_none() {
                 return Err(DeclarationError {
                     key: dotted_key(["commands", name, "like"]),
@@ -495,11 +494,11 @@ pub enum DeclarationErrorKind {
 /// Whether the curated data already knows `name` as a command.
 ///
 /// All three sources have to be asked, because `signatures.json` is not a
-/// superset of the ref/cite family tables: it carries layout data, and most of
-/// the families (`\cpageref`, `\supercite`, `\Textcite`, …) have no entry there.
+/// superset of the ref/cite family tables: it carries layout data, and citation
+/// commands such as `\supercite` and `\Textcite` have no entry there.
 /// Asking it alone would let a declaration reclassify one of them: `like = "ref"`
-/// on `\cpageref` would demote a list-valued page reference to a single-key
-/// `\ref`, which is exactly what this gate exists to prevent.
+/// on `\supercite` would turn a citation into a label reference, which is exactly
+/// what this gate exists to prevent.
 fn is_builtin_command(name: &str) -> bool {
     builtin().command(name).is_some() || ref_command(name).is_some() || cite_command(name).is_some()
 }
@@ -787,7 +786,7 @@ mod tests {
 
     #[test]
     fn like_may_name_a_family_command_absent_from_the_signature_database() {
-        for target in ["cpageref", "supercite", "Textcite", "fnotecite"] {
+        for target in ["supercite", "Textcite", "fnotecite"] {
             assert!(
                 builtin().command(target).is_none(),
                 "{target} is in signatures.json; pick another for this test"
@@ -800,7 +799,7 @@ mod tests {
 
     #[test]
     fn a_family_command_absent_from_the_signature_database_may_not_be_redeclared() {
-        for name in ["cpageref", "supercite", "Textcite", "fnotecite"] {
+        for name in ["supercite", "Textcite", "fnotecite"] {
             let json = format!(r#"{{"commands": {{"{name}": {{"like": "ref"}}}}}}"#);
             let err = resolve_err(&json);
             assert_eq!(err.key, format!("commands.{name}"), "{err}");

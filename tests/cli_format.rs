@@ -56,6 +56,43 @@ fn format(dir: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
+fn formatting_does_not_create_label_diagnostics() {
+    let dir = repo_dir();
+    let path = dir.path().join("doc.tex");
+    let input = include_str!(
+        "../crates/badness-formatter/tests/fixtures/formatter/issue_222_label_keys/input.tex"
+    );
+    std::fs::write(&path, input).unwrap();
+    for formatted in [false, true] {
+        if formatted {
+            let output = format(
+                dir.path(),
+                &["--no-config", "--indent-width", "4", "doc.tex"],
+            );
+            assert!(output.status.success(), "{output:?}");
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_badness"))
+            .current_dir(dir.path())
+            .args([
+                "lint",
+                "--no-config",
+                "--select",
+                "undefined-ref",
+                "--select",
+                "unreferenced-label",
+                "--output",
+                "json",
+                "doc.tex",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "formatted={formatted}: {output:?}");
+        let diagnostics: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(diagnostics, serde_json::json!([]));
+    }
+}
+
+#[test]
 fn semantic_line_width_config_and_overrides() {
     let dir = repo_dir();
     let input = "Alpha beta gamma delta epsilon. Next sentence.\n";

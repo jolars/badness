@@ -6818,7 +6818,11 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
             || grid_intertext(&e, body_cx).is_some()
     });
 
-    let body = if is_grid {
+    let body = if let Some(body) =
+        lower_tikzcd_arrow_body(node, &body_elements, lifted.as_ref(), body_cx)
+    {
+        body
+    } else if is_grid {
         match build_alignment_grid(&body_elements, body_cx, true, false, lifted.as_ref()) {
             Some(items) if items.iter().any(|item| matches!(item, GridItem::Row(_))) => {
                 let aligns = column_alignments(node, cx).unwrap_or_default();
@@ -6867,6 +6871,149 @@ fn lower_math_environment(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         Ir::hard_line(),
         end,
     ])
+}
+
+/// Explicit endpoints distinguish a diagram's trailing arrow declarations from
+/// its cell-relative arrows. The suffix is content-derived, so inline and
+/// multiline spellings produce the same layout without moving any row breaks.
+fn lower_tikzcd_arrow_body(
+    node: &SyntaxNode,
+    body: &[SyntaxElement],
+    lifted: Option<&SyntaxToken>,
+    cx: LowerCtx<'_>,
+) -> Option<Ir> {
+    if Environment::cast(node.clone())?.name().as_deref() != Some("tikzcd") {
+        return None;
+    }
+    let mut inline = flatten_alignment_body(body, cx, true)?;
+    inline.retain(|element| !is_lifted_comment(element, lifted));
+    let mut start = None;
+    for (idx, element) in inline.iter().enumerate().rev() {
+        if is_collapsible_trivia_element(element) || element.kind() == SyntaxKind::COMMENT {
+            continue;
+        }
+        let Some(command) = element
+            .as_node()
+            .and_then(|node| Command::cast(node.clone()))
+        else {
+            break;
+        };
+        if !matches!(command.name().as_deref(), Some("arrow" | "ar"))
+            || cx.suppressed(command.syntax().text_range())
+            || command.groups().next().is_some()
+        {
+            break;
+        }
+        let mut optionals = command.optionals();
+        let Some(optional) = optionals.next() else {
+            break;
+        };
+        if optionals.next().is_some() || !tikzcd_arrow_has_endpoints(optional.syntax()) {
+            break;
+        }
+        start = Some(idx);
+    }
+    let start = start?;
+    let items = build_alignment_grid_inline(inline[..start].to_vec(), cx, true, false)?;
+    let aligns = column_alignments(node, cx).unwrap_or_default();
+    let mut parts = Vec::new();
+    if !items.is_empty() {
+        parts.extend([render_alignment_rows(&items, &aligns), Ir::hard_line()]);
+    }
+    let mut own_line = false;
+    for element in &inline[start..] {
+        match element {
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => {
+                own_line |= token.kind() == SyntaxKind::NEWLINE;
+            }
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::COMMENT => {
+                parts.push(if own_line {
+                    Ir::hard_line()
+                } else {
+                    Ir::text(" ")
+                });
+                parts.push(Ir::verbatim(token.text().trim_end()));
+                own_line = false;
+            }
+            SyntaxElement::Node(command) => {
+                if element != &inline[start] {
+                    parts.push(Ir::hard_line());
+                }
+                for child in command.children_with_tokens() {
+                    if let Some(comment) = child
+                        .as_node()
+                        .filter(|n| n.kind() == SyntaxKind::DOC_COMMENT)
+                    {
+                        parts.push(Ir::join(
+                            Ir::hard_line(),
+                            comment
+                                .children_with_tokens()
+                                .filter_map(SyntaxElement::into_token)
+                                .filter(|token| token.kind() == SyntaxKind::COMMENT)
+                                .map(|token| Ir::verbatim(token.text().trim_end())),
+                        ));
+                        parts.push(Ir::hard_line());
+                    } else {
+                        // Arrow options can contain quoted labels and nested TeX.
+                        // Keep their bytes rather than applying math spacing or
+                        // assuming a generic key-value argument's semantics.
+                        parts.push(Ir::verbatim(child.to_string()));
+                    }
+                }
+                own_line = false;
+            }
+            _ => unreachable!("the suffix contains only arrows, comments, and trivia"),
+        }
+    }
+    Some(Ir::concat(parts))
+}
+
+/// Read only literal top-level keys. Braced values and commands remain opaque,
+/// and commas inside quoted labels cannot introduce endpoint keys.
+fn tikzcd_arrow_has_endpoints(optional: &SyntaxNode) -> bool {
+    let children: Vec<_> = optional.children_with_tokens().collect();
+    let mut entry = String::new();
+    let mut quoted = false;
+    let mut from = false;
+    let mut to = false;
+    let mut finish_entry = |entry: &str| {
+        if let Some((key, value)) = entry.split_once('=') {
+            match key.trim() {
+                "from" => from = !value.trim().is_empty(),
+                "to" => to = !value.trim().is_empty(),
+                _ => {}
+            }
+        }
+    };
+    for child in &children[1..children.len() - 1] {
+        match child {
+            SyntaxElement::Token(token) if token.kind() == SyntaxKind::WORD => {
+                for ch in token.text().chars() {
+                    if ch == '"' {
+                        quoted = !quoted;
+                    }
+                    if ch == ',' && !quoted {
+                        finish_entry(&entry);
+                        entry.clear();
+                    } else {
+                        entry.push(ch);
+                    }
+                }
+            }
+            SyntaxElement::Token(token) if is_collapsible_trivia(token.kind()) => entry.push(' '),
+            SyntaxElement::Token(token)
+                if matches!(
+                    token.kind(),
+                    SyntaxKind::COMMENT | SyntaxKind::L_BRACKET | SyntaxKind::R_BRACKET
+                ) =>
+            {
+                return false;
+            }
+            _ => entry.push('\0'),
+        }
+    }
+    finish_entry(&entry);
+    !quoted && from && to
 }
 
 /// Split an alignment environment body into a sequence of grid items (rows and
@@ -6921,6 +7068,15 @@ fn build_alignment_grid(
     // ([`split_environment`]); drop it here so it is not re-emitted as a
     // passthrough line of its own.
     inline.retain(|e| !is_lifted_comment(e, lifted));
+    build_alignment_grid_inline(inline, cx, math, soften_nested_newlines)
+}
+
+fn build_alignment_grid_inline(
+    mut inline: Vec<SyntaxElement>,
+    cx: LowerCtx<'_>,
+    math: bool,
+    soften_nested_newlines: bool,
+) -> Option<Vec<GridItem>> {
     let printer = Printer::new(FormatStyle::default());
     let cell_cx = LowerCtx {
         in_alignment_cell: soften_nested_newlines,

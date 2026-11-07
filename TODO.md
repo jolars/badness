@@ -33,6 +33,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   a width ceiling or layout-badness assertion using a long aligned display from
   `13_interval.qmd` in the RwR corpus.
 
+- [ ] **Recognize explicit ampersand replacement in diagram grids.** A
+  `tikzcd` with `ampersand replacement=\&` currently treats each row as one
+  cell, so it aligns row terminators but not the individual columns (noticed
+  while investigating issue #223). Recognize a replacement only when the
+  environment options prove it, and retain the original separator spelling;
+  `\&` elsewhere remains ordinary content.
+
 - [ ] **Widen mandatory-keyval admission (follow-up to the `{…}` segmentation).**
   `ContentKind::Keyval` on a *mandatory* group is now consumed
   (`lower_segmented_group`; fixture `keyval_group_splits_entries`), so the setters

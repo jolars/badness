@@ -1207,6 +1207,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // the cell) falls back to the plain indented body — while a nested alignment
     // environment is still aligned in its own right.
     ("align_columns_basic", WrapMode::Preserve, 80),
+    ("issue_223_tikzcd_trailing_arrows", WrapMode::Reflow, 80),
     ("issue_201_align_leading_label", WrapMode::Sentence, 80),
     ("issue_202_math_intertext", WrapMode::Preserve, 80),
     // A user-defined (unclassified) environment with a top-level `&` grid-aligns
@@ -2974,6 +2975,145 @@ fn assert_fixture(name: &str, style: FormatStyle) {
         formatted,
         "fixture {name} formatted output must round-trip"
     );
+}
+
+#[test]
+fn tikzcd_trailing_arrows_have_structural_line_breaks() {
+    for (options, separator) in [("", "&"), (r"[ampersand replacement=\&]", r"\&")] {
+        for rows in [
+            format!("A {separator} B"),
+            format!("A {separator} B \\\\\n  C {separator} D"),
+        ] {
+            let expected = format!(
+                "\\begin{{tikzcd}}{options}\n  {rows}\n  \\arrow[\"f\", from=1-1, to=1-2]\n  \\ar[from=1-1, to=1-2, bend left]\n\\end{{tikzcd}}\n"
+            );
+            for input in [expected.clone(), expected.replace('\n', " ")] {
+                for wrap in [
+                    WrapMode::Reflow,
+                    WrapMode::Stable,
+                    WrapMode::Sentence,
+                    WrapMode::Semantic,
+                    WrapMode::Preserve,
+                ] {
+                    for math_wrap in [MathWrap::Auto, MathWrap::Break, MathWrap::Preserve] {
+                        let style = FormatStyle {
+                            wrap,
+                            math_wrap,
+                            ..FormatStyle::default()
+                        };
+                        assert_eq!(format_with_style(&input, style).unwrap(), expected);
+                        assert_format_invariants_with_style(&input, style);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn tikzcd_trailing_arrows_preserve_labels_and_comments() {
+    let input = r#"\begin{tikzcd}% diagram
+A & B \\
+C & D % cells
+% first arrow
+\arrow["{f,g}_{x}", from={1-1}, to=1-2] % f
+% second arrow
+\ar[from=1-1, to={2-1}]
+% final comment
+\end{tikzcd}
+"#;
+    let expected = r#"\begin{tikzcd}% diagram
+  A & B \\
+  C & D % cells
+  % first arrow
+  \arrow["{f,g}_{x}", from={1-1}, to=1-2] % f
+  % second arrow
+  \ar[from=1-1, to={2-1}]
+  % final comment
+\end{tikzcd}
+"#;
+    assert_eq!(format(input).unwrap(), expected);
+    assert_format_invariants(input);
+}
+
+#[test]
+fn tikzcd_long_trailing_arrows_do_not_widen_rows() {
+    let arrow = r#"\arrow["a deliberately long label with {nested, content} that exceeds the line width", from=1-1, to=1-2]"#;
+    for (rows, formatted_rows) in [
+        (r"A & BBB \\ CCC & D", "    A   & BBB \\\\\n    CCC & D"),
+        (r"A & B \\ C &", "    A & B \\\\\n    C & "),
+        (r"A \\", r"    A \\"),
+    ] {
+        let input = format!("\\begin{{tikzcd}}{rows} {arrow}\\end{{tikzcd}}");
+        let expected =
+            format!("\\begin{{tikzcd}}\n{formatted_rows}\n    {arrow}\n\\end{{tikzcd}}\n");
+        let style = FormatStyle {
+            line_width: 40,
+            indent_width: 4,
+            ..FormatStyle::default()
+        };
+        assert_eq!(format_with_style(&input, style).unwrap(), expected);
+        assert_format_invariants_with_style(&input, style);
+    }
+}
+
+#[test]
+fn tikzcd_cell_relative_arrows_keep_their_grid_alignment() {
+    let input = r"\begin{tikzcd}
+A \arrow[r] & BBB \\
+CCC \arrow[r] & D
+\end{tikzcd}
+";
+    let expected = r"\begin{tikzcd}
+  A \arrow[r]   & BBB \\
+  CCC \arrow[r] & D
+\end{tikzcd}
+";
+    assert_eq!(format(input).unwrap(), expected);
+    assert_format_invariants(input);
+
+    let input = input.replace("\\end{tikzcd}", "\\arrow[from=1-1, to=1-2]\n\\end{tikzcd}");
+    let expected = expected.replace(
+        "\\end{tikzcd}",
+        "  \\arrow[from=1-1, to=1-2]\n\\end{tikzcd}",
+    );
+    assert_eq!(format(&input).unwrap(), expected);
+    assert_format_invariants(&input);
+}
+
+#[test]
+fn tikzcd_arrow_suffix_requires_explicit_top_level_endpoints() {
+    for arrow in [
+        r#"\arrow["f,from=1-1,to=1-2"]"#,
+        r"\arrow[label={from=1-1,to=1-2}]",
+        r"\arrow[from=1-1]",
+        r"\arrow[to=1-2]",
+        r"\arrow[from=,to=1-2]",
+        r"\arrow[from=1-1,to=1-2,from=]",
+        r"\arrow[from=1-1,to=1-2]{r}",
+        r"\arrow[from=1-1,to=1-2][extra]",
+        r"\other[from=1-1,to=1-2]",
+        r"{\arrow[from=1-1,to=1-2]}",
+        r"\arrow[from=1-1,to=1-2] X",
+    ] {
+        let input = format!("\\begin{{tikzcd}}\nA & B \\\\\nC & D {arrow}\n\\end{{tikzcd}}\n");
+        let formatted = format(&input).unwrap();
+        assert!(
+            formatted.contains(&format!("\n  C & D {arrow}\n")),
+            "{formatted}"
+        );
+        assert_format_invariants(&input);
+    }
+    let input = "\\begin{align}\nA & B \\\\\nC & D \\arrow[from=1-1,to=1-2]\n\\end{align}\n";
+    assert!(format(input).unwrap().contains("\n  C & D \\arrow["));
+    assert_format_invariants(input);
+}
+
+#[test]
+fn tikzcd_trailing_arrows_respect_format_suppression() {
+    let input = "% badness-format skip\n\\begin{tikzcd}\nA & B \\\\\nC & D \\arrow[from=1-1,to=1-2] \\arrow[from=1-1,to=2-1]\n\\end{tikzcd}\n";
+    assert_eq!(format(input).unwrap(), input);
+    assert_format_invariants(input);
 }
 
 #[test]

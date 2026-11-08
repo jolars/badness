@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.12.1](https://github.com/jolars/badness/compare/badness-formatter-v0.12.0...badness-formatter-v0.12.1) (2026-11-08)
+
+### Bug Fixes
+
+- **formatter:** separate trailing `tikzcd` arrows ([`d27cd4a`](https://github.com/jolars/badness/commit/d27cd4a6c16e007e41d89f434c4327ad1ed91467)), fixes [#223](https://github.com/jolars/badness/issues/223)
+- **formatter:** keep label and reference keys unbroken ([`2d39d5b`](https://github.com/jolars/badness/commit/2d39d5b7d1ea11fc9dba070a9401535acf28d745)), fixes [#222](https://github.com/jolars/badness/issues/222)
+
+### Dependencies
+
+- updated crates/badness-parser to v0.12.1
+
 ## [0.12.0](https://github.com/jolars/badness/compare/badness-formatter-v0.11.0...badness-formatter-v0.12.0) (2026-11-02)
 
 ### Features

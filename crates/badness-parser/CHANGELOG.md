@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.1](https://github.com/jolars/badness/compare/badness-parser-v0.12.0...badness-parser-v0.12.1) (2026-11-08)
+
+### Bug Fixes
+
+- **formatter:** keep label and reference keys unbroken ([`2d39d5b`](https://github.com/jolars/badness/commit/2d39d5b7d1ea11fc9dba070a9401535acf28d745)), fixes [#222](https://github.com/jolars/badness/issues/222)
+
 ## [0.12.0](https://github.com/jolars/badness/compare/badness-parser-v0.11.2...badness-parser-v0.12.0) (2026-11-02)
 
 ### Features

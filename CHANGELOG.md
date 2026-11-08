@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.29.1](https://github.com/jolars/badness/compare/v0.29.0...v0.29.1) (2026-11-08)
+
+### Bug Fixes
+
+- **formatter:** separate trailing `tikzcd` arrows ([`d27cd4a`](https://github.com/jolars/badness/commit/d27cd4a6c16e007e41d89f434c4327ad1ed91467)), fixes [#223](https://github.com/jolars/badness/issues/223)
+- **formatter:** keep label and reference keys unbroken ([`2d39d5b`](https://github.com/jolars/badness/commit/2d39d5b7d1ea11fc9dba070a9401535acf28d745)), fixes [#222](https://github.com/jolars/badness/issues/222)
+- **lsp:** preserve editor widths with global config ([`37cd611`](https://github.com/jolars/badness/commit/37cd6111d3030290ad6cee2453ef25728a7c645e)), fixes [#224](https://github.com/jolars/badness/issues/224)
+
+### Dependencies
+
+- updated crates/badness-formatter to v0.12.1
+- updated crates/badness-parser to v0.12.1
+
 ## [0.29.0](https://github.com/jolars/badness/compare/v0.28.0...v0.29.0) (2026-11-02)
 
 ### Features

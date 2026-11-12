@@ -41,12 +41,15 @@ fn format_stdin(dir: &Path, args: &[&str], input: Option<&str>) -> Output {
         .stderr(Stdio::piped());
     let mut child = cmd.spawn().expect("run badness");
     if let Some(input) = input {
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
+        let result = child.stdin.take().unwrap().write_all(input.as_bytes());
+        if let Err(error) = result {
+            // Rejected arguments can close stdin before this write finishes.
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "failed to write stdin: {error}"
+            );
+        }
     }
     child.wait_with_output().expect("wait for badness")
 }
@@ -327,6 +330,21 @@ fn check_rejects_stdin() {
             .unwrap()
             .contains("cannot read from stdin"),
         "`--check` reports on files it leaves on disk"
+    );
+}
+
+#[test]
+fn check_rejects_large_stdin() {
+    let dir = repo_dir();
+    // Exceed the pipe capacity so rejection closes stdin during the write.
+    let input = UNFORMATTED.repeat(64 * 1024);
+    let output = format_stdin(dir.path(), &["--check", "-"], Some(&input));
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot read from stdin"),
+        "stderr: {stderr}"
     );
 }
 

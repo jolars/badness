@@ -104,6 +104,9 @@ pub struct Directive {
     /// The rule the directive selects; `None` means every rule. Only ever `Some`
     /// on [`Axis::Lint`] — the other two axes have nothing to select.
     pub rule: Option<String>,
+    /// Whether the optional `: <reason>` tail contains non-whitespace text.
+    /// The explanation does not affect suppression resolution.
+    pub has_reason: bool,
     /// Written in the retired `% badness-ignore` spelling. Behaves identically —
     /// this exists so a lint rule can report the retired spelling and offer the
     /// rewrite, without having to re-parse the comment.
@@ -156,6 +159,7 @@ pub fn parse_directive(comment: &str) -> Option<Directive> {
             axis: Axis::Lint,
             verb: Verb::SkipFile,
             rule: parse_rule(rest),
+            has_reason: has_reason(rest),
             deprecated: true,
         });
     }
@@ -167,6 +171,7 @@ pub fn parse_directive(comment: &str) -> Option<Directive> {
             axis: Axis::Lint,
             verb: Verb::Skip,
             rule: Some(parse_rule(rest)?),
+            has_reason: has_reason(rest),
             deprecated: true,
         });
     }
@@ -202,8 +207,14 @@ pub fn parse_directive(comment: &str) -> Option<Directive> {
         axis,
         verb,
         rule,
+        has_reason: has_reason(&rest[end..]),
         deprecated: false,
     })
+}
+
+fn has_reason(tail: &str) -> bool {
+    tail.split_once(':')
+        .is_some_and(|(_, reason)| !reason.trim().is_empty())
 }
 
 /// The leading `<rule>` word of a `<rule>: <reason>` tail, or `None` when the
@@ -658,6 +669,7 @@ mod tests {
             axis,
             verb,
             rule: None,
+            has_reason: false,
             deprecated: false,
         }
     }
@@ -693,6 +705,7 @@ mod tests {
                 axis: Axis::Lint,
                 verb: Verb::Skip,
                 rule: Some("deprecated-command".into()),
+                has_reason: true,
                 deprecated: false,
             })
         );
@@ -710,20 +723,49 @@ mod tests {
     fn lint_rule_is_optional_and_means_every_rule() {
         assert_eq!(
             parse_directive("% badness-lint skip-file: generated"),
-            Some(directive(Axis::Lint, Verb::SkipFile))
+            Some(Directive {
+                has_reason: true,
+                ..directive(Axis::Lint, Verb::SkipFile)
+            })
         );
     }
 
     #[test]
-    fn reason_is_optional_and_ignored() {
+    fn reason_is_optional_and_retained() {
         assert_eq!(
             parse_directive("% badness-format skip: hand-aligned by eye"),
-            Some(directive(Axis::Format, Verb::Skip))
+            Some(Directive {
+                has_reason: true,
+                ..directive(Axis::Format, Verb::Skip)
+            })
         );
         assert_eq!(
             parse_directive("%badness skip-file:generated"),
-            Some(directive(Axis::Both, Verb::SkipFile))
+            Some(Directive {
+                has_reason: true,
+                ..directive(Axis::Both, Verb::SkipFile)
+            })
         );
+    }
+
+    #[test]
+    fn empty_reasons_do_not_count_as_explanations() {
+        for head in [
+            "% badness-lint skip rule",
+            "% badness-format off",
+            "% badness skip-file",
+            "% badness-ignore rule",
+            "% badness-ignore-file",
+        ] {
+            for tail in ["", ":", ": \t", ":\u{2003}"] {
+                let text = format!("{head}{tail}");
+                assert!(!parse_directive(&text).unwrap().has_reason, "{text:?}");
+            }
+            for tail in [":explanation", ": why: details", ": éclair"] {
+                let text = format!("{head}{tail}");
+                assert!(parse_directive(&text).unwrap().has_reason, "{text:?}");
+            }
+        }
     }
 
     #[test]
@@ -742,6 +784,7 @@ mod tests {
                 axis: Axis::Lint,
                 verb: Verb::Skip,
                 rule: Some("deprecated-command".into()),
+                has_reason: true,
                 deprecated: true,
             })
         );
@@ -751,6 +794,7 @@ mod tests {
                 axis: Axis::Lint,
                 verb: Verb::SkipFile,
                 rule: Some("deprecated-command".into()),
+                has_reason: true,
                 deprecated: true,
             })
         );
@@ -760,6 +804,7 @@ mod tests {
                 axis: Axis::Lint,
                 verb: Verb::SkipFile,
                 rule: None,
+                has_reason: true,
                 deprecated: true,
             })
         );

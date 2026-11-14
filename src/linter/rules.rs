@@ -56,6 +56,7 @@ pub mod times_variable;
 pub mod unclosed_math_delimiter;
 pub mod undefined_citation;
 pub mod undefined_ref;
+pub mod unexplained_suppression;
 pub mod unknown_option;
 pub mod unreferenced_label;
 pub mod verbatim_trailing_text;
@@ -96,6 +97,7 @@ pub use times_variable::TimesVariable;
 pub use unclosed_math_delimiter::UnclosedMathDelimiter;
 pub use undefined_citation::UndefinedCitation;
 pub use undefined_ref::UndefinedRef;
+pub use unexplained_suppression::UnexplainedSuppression;
 pub use unknown_option::UnknownOption;
 pub use unreferenced_label::UnreferencedLabel;
 pub use verbatim_trailing_text::VerbatimTrailingText;
@@ -760,6 +762,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(HardCodedReference),
         Box::new(IndentedDocstripGuard),
         Box::new(InertSuppression),
+        Box::new(UnexplainedSuppression),
         Box::new(InvalidMacrocodeFrame),
         Box::new(StraightQuotes),
         Box::new(SwallowedSpace),
@@ -857,6 +860,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "hard-coded-reference",
     "indented-docstrip-guard",
     "inert-suppression",
+    "unexplained-suppression",
     "invalid-macrocode-frame",
     "straight-quotes",
     "swallowed-space",
@@ -934,7 +938,10 @@ pub fn all_known_rule_ids() -> impl Iterator<Item = &'static str> {
 /// suppress it would make the failure silent by construction. Configuration
 /// `ignore` remains the deliberate opt-out.
 pub(crate) fn is_unsuppressible_suppression_meta_rule(id: &str) -> bool {
-    matches!(id, "deprecated-suppression-syntax" | "inert-suppression")
+    matches!(
+        id,
+        "deprecated-suppression-syntax" | "inert-suppression" | "unexplained-suppression"
+    )
 }
 
 /// The pseudo-rule id parse diagnostics carry. It is never a lint rule, so

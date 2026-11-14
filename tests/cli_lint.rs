@@ -275,6 +275,55 @@ fn dash_length_is_disabled_by_default_and_selectable() {
 }
 
 #[test]
+fn unexplained_suppression_is_opt_in_for_tex_and_bib() {
+    let dir = repo_dir();
+    for (file, source) in [
+        ("doc.tex", "% badness-lint skip-file\nText.\n"),
+        ("refs.bib", "@comment{badness-lint skip-file}\n@book{k}\n"),
+    ] {
+        std::fs::write(dir.path().join(file), source).unwrap();
+        let default = lint(dir.path(), &["--output=json", file], None);
+        assert!(default.status.success());
+        assert_eq!(default.stdout, b"[]\n");
+
+        for flag in ["--select", "--extend-select"] {
+            let selected = lint(
+                dir.path(),
+                &["--output=json", flag, "unexplained-suppression", file],
+                None,
+            );
+            assert_eq!(selected.status.code(), Some(1));
+            assert!(selected.stderr.is_empty());
+            let findings: serde_json::Value = serde_json::from_slice(&selected.stdout).unwrap();
+            let findings = findings.as_array().unwrap();
+            assert_eq!(findings.len(), 1, "{file} {flag}: {findings:?}");
+            let finding = &findings[0];
+            assert_eq!(finding["rule"], "unexplained-suppression");
+            assert_eq!(finding["severity"], "warning");
+            let start = finding["start"].as_u64().unwrap() as usize;
+            let end = finding["end"].as_u64().unwrap() as usize;
+            assert_eq!(&source[start..end], source.lines().next().unwrap());
+            assert!(finding.get("fix").is_none());
+        }
+
+        let ignored = lint(
+            dir.path(),
+            &[
+                "--output=json",
+                "--extend-select",
+                "unexplained-suppression",
+                "--ignore",
+                "unexplained-suppression",
+                file,
+            ],
+            None,
+        );
+        assert!(ignored.status.success());
+        assert_eq!(ignored.stdout, b"[]\n");
+    }
+}
+
+#[test]
 fn encoding_hints_is_disabled_by_default_and_selectable() {
     let dir = repo_dir();
     let source = "@misc{k, author = {Schölkopf, Bernhard}, title = {Example}, year = {2026}}\n";

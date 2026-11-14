@@ -573,6 +573,27 @@ warning: inert-suppression
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `on` has no matching `off`, so this directive closes no region
 ```
 
+## `unexplained-suppression`
+
+Require a nonempty `: <reason>` on `skip`, `off`, and `skip-file` suppression directives, including format-only, combined, and retired spellings. Closing `on` directives need no explanation. This rule is opt-in because requiring explanations is a project convention. Enable it with `extend-select = ["unexplained-suppression"]` under `[lint]`. No autofix is offered because the explanation must come from the author. Inline suppressions cannot hide this meta diagnostic; use `[lint].ignore` to disable the rule deliberately.
+
+This rule is **disabled by default**; enable it with `select`.
+
+Explain why a check is suppressed with `: <reason>`:
+
+```tex
+% badness-lint skip deprecated-command
+{\bf text}
+```
+
+```text
+warning: unexplained-suppression
+ --> example.tex:1:1
+  |
+1 | % badness-lint skip deprecated-command
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ suppression directive has no explanation; add `: <reason>`
+```
+
 ## `invalid-macrocode-frame`
 
 Flag a `.dtx` `macrocode` or `macrocode*` closing frame unless exactly four spaces separate its column-one `%` from `\end{…}`. The `doc` package scans for that literal physical delimiter, so a near match does not close the code chunk even though it looks like an ordinary environment to Badness. The safe autofix replaces only the malformed horizontal space with the required four spaces.

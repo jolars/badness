@@ -90,6 +90,27 @@ warning: inert-suppression
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the BibTeX formatter does not support format suppression, so this directive does nothing
 ```
 
+## `unexplained-suppression`
+
+Require a nonempty `: <reason>` on `skip`, `off`, and `skip-file` suppression directives in `@comment{...}` or `@comment(...)` entries, including format-only, combined, and retired spellings. Closing `on` directives need no explanation. This rule is opt-in because requiring explanations is a project convention. Enable it with `extend-select = ["unexplained-suppression"]` under `[lint]`. No autofix is offered because the explanation must come from the author. Inline suppressions cannot hide this meta diagnostic; use `[lint].ignore` to disable the rule deliberately.
+
+This rule is **disabled by default**; enable it with `select`.
+
+Explain why an entry's diagnostics are suppressed:
+
+```bib
+@comment{badness-lint skip missing-required-field}
+@book{key}
+```
+
+```text
+warning: unexplained-suppression
+ --> references.bib:1:1
+  |
+1 | @comment{badness-lint skip missing-required-field}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ suppression directive has no explanation; add `: <reason>`
+```
+
 ## `missing-required-field`
 
 Flag an entry lacking a field its type requires under the biblatex data model. An alternative such as `date` *or* `year` is satisfied by either field, and classic BibTeX aliases count (`journal` satisfies `journaltitle`). Entry types unknown to the built-in database have no signature and are not flagged. No autofix is offered because the rule cannot supply the missing content.

@@ -68,6 +68,12 @@ The `<rule>` is optional. Omitting it suppresses every rule over the same span.
 An `off` with no matching `on` runs to the end of the file. The `: <reason>`
 tail is optional everywhere and is never interpreted.
 
+To require explanations for suppressions, add
+`extend-select = ["unexplained-suppression"]` under `[lint]`. This opt-in rule
+requires a nonempty `: <reason>` on `skip`, `off`, and `skip-file`, including
+format-only and combined directives. Closing `on` directives need no reason.
+Inline suppressions cannot hide this check once enabled.
+
 Each has a bare counterpart that turns off the **formatter** at the same time:
 `% badness skip`, `% badness off` / `% badness on`, and `% badness skip-file`.
 For layout only, use the `% badness-format` spellings described in

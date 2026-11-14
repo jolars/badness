@@ -529,11 +529,6 @@ a file and a line, never a coordinate.
 
 ## BibTeX/BibLaTeX
 
-- [ ] **`unexplained-suppression`.** Report a suppression directive with no
-  `: <reason>`. Requiring reasons is a project convention rather than a defect,
-  while badness currently enables every registered rule by default; either
-  accept the default-on policy or first add explicit opt-in rule metadata.
-
 - [ ] **Format suppression in `.bib`.** The `% badness-format` axis parses in a
   `.bib` `@comment{…}` and deliberately does nothing. The bib formatter is a
   canonical re-emitter rather than a trivia-only pass, so "reproduce this span

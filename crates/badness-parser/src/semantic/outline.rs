@@ -217,7 +217,7 @@ fn collect_environment(env: &SyntaxNode, out: &mut Vec<Raw>) {
         .map(|b| b.syntax().text_range())
         .unwrap_or_else(|| env.text_range());
     let (display_name, symbol, selection) = match kind {
-        OutlineKind::Float => (name, OutlineSymbol::Float, begin_selection),
+        OutlineKind::Float | OutlineKind::Subfloat => (name, OutlineSymbol::Float, begin_selection),
         OutlineKind::Theorem => (name, OutlineSymbol::Theorem, begin_selection),
         OutlineKind::Frame => {
             let Some((title, selection)) = frame_title(env, begin.as_ref()) else {
@@ -369,7 +369,13 @@ pub fn label_context(root: &SyntaxNode, offset: TextSize) -> Option<LabelContext
                     match sig.outline {
                         Some(OutlineKind::Float) => {
                             return Some(LabelContext::Float {
-                                caption: caption_text(&current),
+                                caption: caption_text(&current, false),
+                                env: name,
+                            });
+                        }
+                        Some(OutlineKind::Subfloat) => {
+                            return Some(LabelContext::Float {
+                                caption: caption_text(&current, true),
                                 env: name,
                             });
                         }
@@ -421,13 +427,60 @@ pub fn label_context(root: &SyntaxNode, offset: TextSize) -> Option<LabelContext
     Some(LabelContext::Section { title })
 }
 
-/// The text of the first `\caption` inside `env`, via the same first-group
-/// extraction as [`section_title`].
-fn caption_text(env: &SyntaxNode) -> Option<String> {
-    env.descendants()
-        .filter(|n| n.kind() == SyntaxKind::COMMAND)
-        .find(|c| command_name(c).as_deref() == Some("caption"))
-        .and_then(|caption| section_title(&caption))
+/// The text of the first caption command belonging to `env`'s own caption
+/// scope, via the same first-group extraction as [`section_title`].
+///
+/// Layout wrappers (`PARAGRAPH`, `GROUP`, `center`, `minipage`, …) are
+/// transparent, whereas nested floats, sub-float panels (`subfigure`,
+/// `subtable`, `subcaptionblock`), and `subcaptiongroup` environments own their
+/// own captions and are not entered. Sub-float panels accept `\subcaption` in
+/// addition to `\caption`; outer floats accept `\caption` only so a
+/// `\subcaption` inside a plain `minipage` is never mistaken for the outer
+/// float's caption.
+fn caption_text(env: &SyntaxNode, allow_subcaption: bool) -> Option<String> {
+    first_scoped_caption(env, allow_subcaption).and_then(|caption| section_title(&caption))
+}
+
+fn first_scoped_caption(node: &SyntaxNode, allow_subcaption: bool) -> Option<SyntaxNode> {
+    for child in node.children() {
+        match child.kind() {
+            SyntaxKind::NAME_GROUP | SyntaxKind::END => continue,
+            SyntaxKind::ENVIRONMENT if owns_caption_scope(&child) => continue,
+            SyntaxKind::COMMAND => {
+                let matches_scope = match command_name(&child).as_deref() {
+                    Some("caption") => true,
+                    Some("subcaption") => allow_subcaption,
+                    _ => false,
+                };
+                if matches_scope {
+                    return Some(child);
+                }
+            }
+            _ => {}
+        }
+        if let Some(found) = first_scoped_caption(&child, allow_subcaption) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn owns_caption_scope(env: &SyntaxNode) -> bool {
+    let Some(name) = Environment::cast(env.clone())
+        .and_then(|e| e.begin())
+        .and_then(|begin| begin.name())
+    else {
+        return false;
+    };
+    if matches!(name.as_str(), "subcaptiongroup" | "subcaptiongroup*") {
+        return true;
+    }
+    signature::builtin().environment(&name).is_some_and(|sig| {
+        matches!(
+            sig.outline,
+            Some(OutlineKind::Float | OutlineKind::Subfloat)
+        )
+    })
 }
 
 /// The inner text of a `\begin{…}[…]` optional argument (its `OPTIONAL` child,
@@ -644,6 +697,13 @@ mod tests {
         label_context(&root, TextSize::new(offset as u32))
     }
 
+    fn context_of_key(src: &str, key: &str) -> Option<LabelContext> {
+        let needle = format!("\\label{{{key}}}");
+        let offset = src.find(&needle).expect("label present") + "\\label{".len();
+        let root = SyntaxNode::new_root(parse(src).green);
+        label_context(&root, TextSize::new(offset as u32))
+    }
+
     #[test]
     fn label_after_section_is_section_context() {
         let ctx = context_of("\\section{Intro}\ntext\n\\label{sec:a}\nmore\n");
@@ -678,6 +738,163 @@ mod tests {
                 caption: None
             })
         );
+    }
+
+    #[test]
+    fn outer_float_label_skips_nested_subfloat_captions() {
+        let src = "\\begin{figure}\n\
+            \\begin{subfigure}{.45\\linewidth}\n\
+            \\caption{Left panel}\n\
+            \\label{fig:left}\n\
+            \\end{subfigure}\n\
+            \\begin{subfigure}[b][3cm][t]{.45\\linewidth}\n\
+            \\subcaption{Right panel}\n\
+            \\label{fig:right}\n\
+            \\end{subfigure}\n\
+            \\caption{Overall figure caption}\n\
+            \\label{fig:whole}\n\
+            \\end{figure}\n";
+
+        assert_eq!(
+            context_of_key(src, "fig:whole"),
+            Some(LabelContext::Float {
+                env: "figure".to_owned(),
+                caption: Some("Overall figure caption".to_owned()),
+            })
+        );
+        assert_eq!(
+            context_of_key(src, "fig:left"),
+            Some(LabelContext::Float {
+                env: "subfigure".to_owned(),
+                caption: Some("Left panel".to_owned()),
+            })
+        );
+        assert_eq!(
+            context_of_key(src, "fig:right"),
+            Some(LabelContext::Float {
+                env: "subfigure".to_owned(),
+                caption: Some("Right panel".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn captionless_outer_float_does_not_borrow_nested_subfloat_caption() {
+        for (outer, inner) in [
+            ("figure", "subfigure"),
+            ("figure*", "subcaptionblock"),
+            ("table", "subtable"),
+            ("table*", "subcaptionblock"),
+        ] {
+            let src = format!(
+                "\\begin{{{outer}}}\n\
+                 \\begin{{{inner}}}{{.45\\linewidth}}\n\
+                 \\caption{{Panel caption}}\n\
+                 \\label{{sub:a}}\n\
+                 \\end{{{inner}}}\n\
+                 \\label{{outer:x}}\n\
+                 \\end{{{outer}}}\n"
+            );
+            assert_eq!(
+                context_of_key(&src, "outer:x"),
+                Some(LabelContext::Float {
+                    env: outer.to_owned(),
+                    caption: None,
+                }),
+                "{outer}/{inner}"
+            );
+            assert_eq!(
+                context_of_key(&src, "sub:a"),
+                Some(LabelContext::Float {
+                    env: inner.to_owned(),
+                    caption: Some("Panel caption".to_owned()),
+                }),
+                "{outer}/{inner}"
+            );
+        }
+    }
+
+    #[test]
+    fn outer_float_skips_subcaptiongroup_and_minipage_subcaption() {
+        let grouped = "\\begin{figure}\n\
+            \\begin{subcaptiongroup}\n\
+            \\caption{Grouped panel}\n\
+            \\end{subcaptiongroup}\n\
+            \\caption{Overall}\n\
+            \\label{fig:whole}\n\
+            \\end{figure}\n";
+        assert_eq!(
+            context_of(grouped),
+            Some(LabelContext::Float {
+                env: "figure".to_owned(),
+                caption: Some("Overall".to_owned()),
+            })
+        );
+
+        let minipage_sub = "\\begin{figure}\n\
+            \\begin{minipage}{.45\\linewidth}\n\
+            \\subcaption{Sub in minipage}\n\
+            \\end{minipage}\n\
+            \\caption{Overall}\n\
+            \\label{fig:whole}\n\
+            \\end{figure}\n";
+        assert_eq!(
+            context_of(minipage_sub),
+            Some(LabelContext::Float {
+                env: "figure".to_owned(),
+                caption: Some("Overall".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn outer_float_finds_caption_inside_layout_wrappers_and_groups() {
+        for (src, expected) in [
+            (
+                "\\begin{figure}\n\\begin{center}\n\\caption{Centered}\n\\end{center}\n\\label{fig:x}\n\\end{figure}\n",
+                "Centered",
+            ),
+            (
+                "\\begin{figure}\n\\begin{minipage}{\\textwidth}\n\\caption{Boxed}\n\\label{fig:x}\n\\end{minipage}\n\\end{figure}\n",
+                "Boxed",
+            ),
+            (
+                "\\begin{figure}\n{\\centering \\caption{Grouped}\\label{fig:x}}\n\\end{figure}\n",
+                "Grouped",
+            ),
+        ] {
+            assert_eq!(
+                context_of(src),
+                Some(LabelContext::Float {
+                    env: "figure".to_owned(),
+                    caption: Some(expected.to_owned()),
+                }),
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn subfigures_nest_inside_figure_in_outline() {
+        let src = "\\begin{figure}\n\
+            \\begin{subfigure}{.45\\linewidth}\n\
+            \\caption{Left}\n\
+            \\label{fig:left}\n\
+            \\end{subfigure}\n\
+            \\caption{Main}\n\
+            \\label{fig:whole}\n\
+            \\end{figure}\n";
+        let items = outline_of(src);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "figure");
+        assert_eq!(items[0].kind, OutlineSymbol::Float);
+        assert_eq!(items[0].children.len(), 2);
+        assert_eq!(items[0].children[0].name, "subfigure");
+        assert_eq!(items[0].children[0].kind, OutlineSymbol::Float);
+        assert_eq!(items[0].children[0].children.len(), 1);
+        assert_eq!(items[0].children[0].children[0].name, "fig:left");
+        assert_eq!(items[0].children[1].name, "fig:whole");
+        assert_eq!(items[0].children[1].kind, OutlineSymbol::Label);
     }
 
     #[test]

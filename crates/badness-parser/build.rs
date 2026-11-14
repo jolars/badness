@@ -218,6 +218,7 @@ impl RawCommand {
 #[serde(rename_all = "lowercase")]
 enum RawOutlineKind {
     Float,
+    Subfloat,
     Theorem,
     Frame,
 }
@@ -251,6 +252,7 @@ impl RawEnvironment {
     fn render(&self) -> String {
         let outline = match self.outline {
             Some(RawOutlineKind::Float) => "Some(OutlineKind::Float)",
+            Some(RawOutlineKind::Subfloat) => "Some(OutlineKind::Subfloat)",
             Some(RawOutlineKind::Theorem) => "Some(OutlineKind::Theorem)",
             Some(RawOutlineKind::Frame) => "Some(OutlineKind::Frame)",
             None => "None",

@@ -5054,3 +5054,24 @@ fn table_captions_do_not_set_column_widths() {
         }
     }
 }
+
+#[test]
+fn subcaption_environments_preserve_optional_headers_and_side_by_side_seams() {
+    for env in ["subfigure", "subtable", "subcaptionblock"] {
+        for header in [
+            "{.45\\linewidth}",
+            "[b]{.45\\linewidth}",
+            "[c][3cm]{.45\\linewidth}",
+            "[c][3cm][t]{.45\\linewidth}",
+        ] {
+            let input = format!(
+                "\\begin{{figure}}\n\\begin{{{env}}}{header}\n\\caption{{Left}}\n\\end{{{env}}}%\n\\begin{{{env}}}\n{{.45\\linewidth}}\n{{\\centering x}}\n\\caption{{Right}}\n\\end{{{env}}}\n\\end{{figure}}\n"
+            );
+            let expected = format!(
+                "\\begin{{figure}}\n  \\begin{{{env}}}{header}\n    \\caption{{Left}}\n  \\end{{{env}}}%\n  \\begin{{{env}}}{{.45\\linewidth}}\n    {{\\centering x}}\n    \\caption{{Right}}\n  \\end{{{env}}}\n\\end{{figure}}\n"
+            );
+            assert_eq!(format(&input).unwrap(), expected, "{env}{header}");
+            check_format_invariants(&input, FormatStyle::default(), LexConfig::default()).unwrap();
+        }
+    }
+}

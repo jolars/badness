@@ -275,14 +275,16 @@ pub struct CommandSig {
 }
 
 /// How an environment appears in the document-symbol outline, if at all. A small
-/// curated category over the `block` environments: floats, theorem-likes, and
-/// titled Beamer frames earn outline entries, while ordinary layout environments
-/// (`center`, `quote`, …) stay out of the symbol tree. Drives `SymbolKind`
-/// selection in the LSP layer.
+/// curated category over the `block` environments: floats, sub-float panels,
+/// theorem-likes, and titled Beamer frames earn outline entries, while ordinary
+/// layout environments (`center`, `quote`, …) stay out of the symbol tree. Drives
+/// `SymbolKind` selection in the LSP layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutlineKind {
     /// A float (`figure`, `table`, and their starred forms).
     Float,
+    /// A sub-float panel (`subfigure`, `subtable`, `subcaptionblock`).
+    Subfloat,
     /// A theorem-like environment (`theorem`, `lemma`, `proof`, …).
     Theorem,
     /// A Beamer `frame`; it earns an entry only when its source supplies a title.
@@ -1208,11 +1210,12 @@ impl From<RawCommand> for CommandSig {
 }
 
 /// An environment's outline category as written in the JSON: `"float"`,
-/// `"theorem"`, or `"frame"` (absent → `None`, no outline entry).
+/// `"subfloat"`, `"theorem"`, or `"frame"` (absent → `None`, no outline entry).
 #[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 enum RawOutlineKind {
     Float,
+    Subfloat,
     Theorem,
     Frame,
 }
@@ -1221,6 +1224,7 @@ impl From<RawOutlineKind> for OutlineKind {
     fn from(raw: RawOutlineKind) -> Self {
         match raw {
             RawOutlineKind::Float => OutlineKind::Float,
+            RawOutlineKind::Subfloat => OutlineKind::Subfloat,
             RawOutlineKind::Theorem => OutlineKind::Theorem,
             RawOutlineKind::Frame => OutlineKind::Frame,
         }
@@ -1503,6 +1507,41 @@ mod tests {
             db.environment("table*").unwrap().outline,
             Some(OutlineKind::Float)
         );
+        for name in ["subfigure", "subtable", "subcaptionblock"] {
+            let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
+            assert_eq!(env.outline, Some(OutlineKind::Subfloat), "{name} outline");
+            assert!(env.block(), "{name} is a block env");
+            assert_eq!(
+                env.args.len(),
+                4,
+                "{name} takes [pos][height][inner-pos]{{width}}"
+            );
+            for opt in &env.args[..3] {
+                assert_eq!(opt.kind, ArgKind::Bracket);
+                assert!(!opt.required);
+            }
+            assert_eq!(env.args[3].kind, ArgKind::Brace);
+            assert!(env.args[3].required);
+
+            // `0..=3` leading `[opt]` brackets followed by `{width}` all align to
+            // the mandatory width slot without leaving a required slot pending.
+            for n_opts in 0..=3 {
+                let mut slot = 0;
+                for _ in 0..n_opts {
+                    assert!(match_arg_slot(&env.args, &mut slot, ArgKind::Bracket).is_some());
+                }
+                let matched = match_arg_slot(&env.args, &mut slot, ArgKind::Brace)
+                    .expect("mandatory width slot matches");
+                assert!(matched.required);
+                assert_eq!(slot, 4);
+            }
+        }
+        for name in ["subcaptiongroup", "subcaptiongroup*"] {
+            let env = db.environment(name).unwrap_or_else(|| panic!("{name} env"));
+            assert!(env.block(), "{name} is a block env");
+            assert_eq!(env.outline, None, "{name} is transparent in outline");
+            assert!(env.args.is_empty());
+        }
         assert_eq!(
             db.environment("theorem").unwrap().outline,
             Some(OutlineKind::Theorem)

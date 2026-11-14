@@ -589,6 +589,7 @@ pub(super) fn render_environment(
     let mut facts = vec![provenance_label(provenance, "environment")];
     match sig.outline {
         Some(OutlineKind::Float) => facts.push("float".to_string()),
+        Some(OutlineKind::Subfloat) => facts.push("subfloat".to_string()),
         Some(OutlineKind::Theorem) => facts.push("theorem-like".to_string()),
         Some(OutlineKind::Frame) => facts.push("Beamer frame".to_string()),
         None => {}
@@ -1112,6 +1113,51 @@ mod tests {
         db.upsert_file(path, src.to_string());
         let md = markdown_at(&db, path, src, offset).expect("hover for \\label key");
         assert_eq!(md, "Figure: A chart");
+    }
+
+    #[test]
+    fn figure_ref_with_nested_subfigures_uses_outer_caption() {
+        // Regression test for issue #230: hovering `\ref{fig:whole}` must use the
+        // enclosing figure's own `\caption`, not an earlier nested `subfigure`'s.
+        let src = "\\documentclass{article}\n\
+            \\usepackage{subcaption}\n\
+            \\begin{document}\n\
+            See \\ref{fig:whole} and \\ref{fig:left}.\n\
+            \\begin{figure}\n\
+              \\begin{subfigure}{.45\\linewidth}\n\
+                \\caption{Left panel}\n\
+                \\label{fig:left}\n\
+              \\end{subfigure}\n\
+              \\begin{subfigure}{.45\\linewidth}\n\
+                \\caption{Right panel}\n\
+              \\end{subfigure}\n\
+              \\caption{Overall figure caption}\n\
+              \\label{fig:whole}\n\
+            \\end{figure}\n\
+            \\end{document}\n";
+        let path = Path::new("/p/main.tex");
+        let mut db = IncrementalDatabase::default();
+        db.upsert_file(path, src.to_string());
+
+        let whole_offset = src.find("fig:whole").expect("ref key");
+        assert_eq!(
+            markdown_at(&db, path, src, whole_offset).as_deref(),
+            Some("Figure: Overall figure caption")
+        );
+
+        let left_offset = src.find("fig:left").expect("subref key");
+        assert_eq!(
+            markdown_at(&db, path, src, left_offset).as_deref(),
+            Some("Subfigure: Left panel")
+        );
+
+        let env_offset = src.find("subfigure}").expect("subfigure begin");
+        let env_md = markdown_at(&db, path, src, env_offset).expect("hover for subfigure env");
+        assert!(env_md.contains("subfloat"), "facts: {env_md}");
+        assert!(
+            env_md.contains("1 required, 3 optional arguments"),
+            "arity: {env_md}"
+        );
     }
 
     #[test]

@@ -409,6 +409,19 @@ mod tests {
     }
 
     #[test]
+    fn subfigure_begin_skips_omitted_optionals_to_width_slot() {
+        for src in [
+            "\\begin{subfigure}{.45\\linewidth}\nx\n\\end{subfigure}\n",
+            "\\begin{subfigure}[b]{.45\\linewidth}\nx\n\\end{subfigure}\n",
+            "\\begin{subfigure}[c][3cm][t]{.45\\linewidth}\nx\n\\end{subfigure}\n",
+        ] {
+            let (label, active) = active_at(src, "{.45", 2).expect("help");
+            assert_eq!(label, "\\begin{subfigure}[#1][#2][#3]{#4}");
+            assert_eq!(active, 3, "{src}");
+        }
+    }
+
+    #[test]
     fn name_groups_suppress() {
         let src = "\\begin{tabular}{cc}\na & b\n\\end{tabular}\n";
         assert_eq!(active_at(src, "{tabular", 4), None);

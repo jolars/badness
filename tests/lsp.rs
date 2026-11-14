@@ -2167,6 +2167,78 @@ fn lsp_hover_command_signature_and_null() {
     shutdown(&client, server_thread);
 }
 
+#[test]
+fn lsp_hover_and_symbols_with_nested_subfigures() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let doc = "\\documentclass{article}\n\
+        \\usepackage{subcaption}\n\
+        \\begin{document}\n\
+        See~\\ref{fig:whole} and~\\ref{fig:left}.\n\
+        \\begin{figure}\n\
+          \\begin{subfigure}{.45\\linewidth}\n\
+            \\caption{Left panel}\n\
+            \\label{fig:left}\n\
+          \\end{subfigure}\n\
+          \\begin{subfigure}{.45\\linewidth}\n\
+            \\caption{Right panel}\n\
+          \\end{subfigure}\n\
+          \\caption{Overall figure caption}\n\
+          \\label{fig:whole}\n\
+        \\end{figure}\n\
+        \\end{document}\n";
+    let main_path = dir.path().join("main.tex");
+    std::fs::write(&main_path, doc).unwrap();
+    std::fs::write(
+        dir.path().join("main.aux"),
+        "\\newlabel{fig:left}{{1a}{1}{Left panel}{subfigure.1.1}{}}\n\
+         \\newlabel{fig:whole}{{1}{1}{Overall figure caption}{figure.1}{}}\n",
+    )
+    .unwrap();
+
+    let (client, server_thread) = start_server(None);
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, doc);
+    let diags = recv_diagnostics(&client);
+    assert!(diags.diagnostics.is_empty(), "{:?}", diags.diagnostics);
+
+    // Line 3: `See \ref{fig:whole} and \ref{fig:left}.`
+    let whole_md = hover_markdown(&client, 2, &uri, Position::new(3, 10)).expect("fig:whole hover");
+    assert_eq!(whole_md, "Figure 1: Overall figure caption");
+
+    let left_md = hover_markdown(&client, 3, &uri, Position::new(3, 30)).expect("fig:left hover");
+    assert_eq!(left_md, "Subfigure 1a: Left panel");
+
+    // `documentSymbol`: the outer figure keeps its own number ("1") rather than
+    // adopting the preceding subfigure label ("1a").
+    send_request(
+        &client,
+        4,
+        "textDocument/documentSymbol",
+        serde_json::to_value(DocumentSymbolParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let resp = recv_response(&client);
+    assert_eq!(resp.id, RequestId::from(4));
+    let DocumentSymbolResponse::Nested(symbols) =
+        serde_json::from_value(resp.result().unwrap()).expect("documentSymbol response")
+    else {
+        panic!("expected nested symbols");
+    };
+    assert_eq!(symbols.len(), 1);
+    let figure = &symbols[0];
+    assert_eq!(figure.name, "figure");
+    assert_eq!(figure.detail.as_deref(), Some("1"));
+    let kids = figure.children.as_deref().unwrap_or_default();
+    assert_eq!(kids[0].name, "subfigure");
+    assert_eq!(kids[0].detail.as_deref(), Some("1a"));
+
+    shutdown(&client, server_thread);
+}
+
 /// Send a `textDocument/signatureHelp` request and decode the reply (`None` for
 /// `null`).
 fn signature_help(

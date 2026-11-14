@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.29.2](https://github.com/jolars/badness/compare/v0.29.1...v0.29.2) (2026-11-14)
+
+### Bug Fixes
+
+- **lsp:** resolve captions within their owning float ([`3bc69ea`](https://github.com/jolars/badness/commit/3bc69eac885074ed17a4f3fa1692c49884bf58ef)), fixes [#230](https://github.com/jolars/badness/issues/230)
+- **deps:** update `rustix` to 1.1.6 ([`1cce2d1`](https://github.com/jolars/badness/commit/1cce2d10a3f8930d1e3b784ce25dcab8ae102823)), fixes [#228](https://github.com/jolars/badness/issues/228)
+
+### Dependencies
+
+- updated crates/badness-formatter to v0.12.2
+- updated crates/badness-parser to v0.12.2
+
 ## [0.29.1](https://github.com/jolars/badness/compare/v0.29.0...v0.29.1) (2026-11-08)
 
 ### Bug Fixes

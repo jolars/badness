@@ -1115,6 +1115,39 @@ mod tests {
     }
 
     #[test]
+    fn float_and_panel_references_hover_their_own_captions() {
+        for (outer, panel, title) in [
+            ("figure", "subfigure", "Figure"),
+            ("table", "subtable", "Table"),
+        ] {
+            let src = format!(
+                "\\documentclass{{article}}\n\\usepackage{{subcaption}}\n\
+                 \\begin{{document}}\n\
+                 See \\ref{{whole}}, \\ref{{left}}, and \\ref{{right}}.\n\
+                 \\begin{{{outer}}}\n\
+                 \\begin{{{panel}}}{{.45\\linewidth}}\n\
+                 \\caption{{Left panel}}\\label{{left}}\n\\end{{{panel}}}\n\
+                 \\begin{{{panel}}}{{.45\\linewidth}}\n\
+                 \\caption{{Right panel}}\\label{{right}}\n\\end{{{panel}}}\n\
+                 \\caption{{Overall caption}}\\label{{whole}}\n\
+                 \\end{{{outer}}}\n\\end{{document}}\n"
+            );
+            let path = Path::new("/p/main.tex");
+            let mut db = IncrementalDatabase::default();
+            let file = db.upsert_file(path, src.clone());
+            db.reparse_stage_edits(file, None);
+            for (key, expected) in [
+                ("whole", format!("{title}: Overall caption")),
+                ("left", format!("{}: Left panel", capitalize(panel))),
+                ("right", format!("{}: Right panel", capitalize(panel))),
+            ] {
+                let offset = src.find(key).expect("reference key");
+                assert_eq!(markdown_at(&db, path, &src, offset), Some(expected));
+            }
+        }
+    }
+
+    #[test]
     fn undefined_ref_without_aux_has_no_hover() {
         let src = "See \\ref{nowhere}.\n";
         let offset = src.find("nowhere").expect("ref key");

@@ -421,12 +421,26 @@ pub fn label_context(root: &SyntaxNode, offset: TextSize) -> Option<LabelContext
     Some(LabelContext::Section { title })
 }
 
-/// The text of the first `\caption` inside `env`, via the same first-group
-/// extraction as [`section_title`].
+/// The text of the first `\caption` belonging to `env`, via the same first-group
+/// extraction as [`section_title`]. Nested floats own their captions, while
+/// ordinary layout environments and groups remain transparent.
 fn caption_text(env: &SyntaxNode) -> Option<String> {
     env.descendants()
         .filter(|n| n.kind() == SyntaxKind::COMMAND)
-        .find(|c| command_name(c).as_deref() == Some("caption"))
+        .find(|c| {
+            command_name(c).as_deref() == Some("caption")
+                && !c
+                    .ancestors()
+                    .skip(1)
+                    .take_while(|ancestor| ancestor != env)
+                    .filter_map(Environment::cast)
+                    .filter_map(|ancestor| ancestor.begin()?.name())
+                    .any(|name| {
+                        signature::builtin()
+                            .environment(&name)
+                            .is_some_and(|sig| sig.outline == Some(OutlineKind::Float))
+                    })
+        })
         .and_then(|caption| section_title(&caption))
 }
 
@@ -525,6 +539,26 @@ mod tests {
         assert_eq!(items[0].children.len(), 1);
         assert_eq!(items[0].children[0].kind, OutlineSymbol::Label);
         assert_eq!(items[0].children[0].name, "fig:x");
+    }
+
+    #[test]
+    fn panel_outline_entries_own_their_labels() {
+        for (outer, panel) in [("figure", "subfigure"), ("table", "subtable")] {
+            let src = format!(
+                "\\begin{{{outer}}}\n\\begin{{{panel}}}{{.45\\linewidth}}\n\
+                 \\caption{{Panel}}\\label{{panel}}\n\\end{{{panel}}}\n\
+                 \\caption{{Overall}}\\label{{whole}}\n\\end{{{outer}}}\n"
+            );
+            let items = outline_of(&src);
+            assert_eq!(items.len(), 1);
+            let children = &items[0].children;
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0].kind, OutlineSymbol::Float);
+            assert_eq!(children[0].name, panel);
+            assert_eq!(children[0].children.len(), 1);
+            assert_eq!(children[0].children[0].name, "panel");
+            assert_eq!(children[1].name, "whole");
+        }
     }
 
     #[test]
@@ -641,6 +675,7 @@ mod tests {
     fn context_of(src: &str) -> Option<LabelContext> {
         let offset = src.find("\\label").expect("marker") + "\\label{".len();
         let root = SyntaxNode::new_root(parse(src).green);
+        assert_eq!(root.to_string(), src, "losslessness violated");
         label_context(&root, TextSize::new(offset as u32))
     }
 
@@ -664,6 +699,77 @@ mod tests {
             Some(LabelContext::Float {
                 env: "figure".to_owned(),
                 caption: Some("A chart".to_owned())
+            })
+        );
+    }
+
+    #[test]
+    fn float_label_ignores_nested_panel_captions() {
+        for (outer, panel) in [
+            ("figure", "subfigure"),
+            ("figure*", "subfigure"),
+            ("table", "subtable"),
+            ("table*", "subtable"),
+        ] {
+            let src = format!(
+                "\\begin{{{outer}}}\n\\begin{{{panel}}}{{.45\\linewidth}}\n\
+                 \\begin{{center}}\\caption{{Panel}}\\end{{center}}\n\
+                 \\end{{{panel}}}\n\\caption{{Overall}}\\label{{whole}}\n\
+                 \\end{{{outer}}}\n"
+            );
+            assert_eq!(
+                context_of(&src),
+                Some(LabelContext::Float {
+                    env: outer.to_owned(),
+                    caption: Some("Overall".to_owned()),
+                }),
+                "{outer} containing {panel}"
+            );
+        }
+    }
+
+    #[test]
+    fn panel_labels_keep_their_own_captions() {
+        for (outer, panel) in [("figure", "subfigure"), ("table", "subtable")] {
+            let src = format!(
+                "\\begin{{{outer}}}\n\\begin{{{panel}}}{{.45\\linewidth}}\n\
+                 \\caption{{First}}\\end{{{panel}}}\n\
+                 \\begin{{{panel}}}{{.45\\linewidth}}\n\
+                 \\caption{{Second}}\\label{{panel}}\\end{{{panel}}}\n\
+                 \\caption{{Overall}}\\end{{{outer}}}\n"
+            );
+            assert_eq!(
+                context_of(&src),
+                Some(LabelContext::Float {
+                    env: panel.to_owned(),
+                    caption: Some("Second".to_owned()),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn float_without_own_caption_does_not_borrow_panel_caption() {
+        let src = "\\begin{figure}\n\\begin{subfigure}{.45\\linewidth}\n\
+                   \\caption{Panel}\n\\end{subfigure}\n\\label{whole}\n\\end{figure}";
+        assert_eq!(
+            context_of(src),
+            Some(LabelContext::Float {
+                env: "figure".to_owned(),
+                caption: None,
+            })
+        );
+    }
+
+    #[test]
+    fn float_caption_can_be_wrapped_in_layout_and_grouping() {
+        let src = "\\begin{figure}\n\\begin{center}\n{\\caption{Overall}}\n\
+                   \\end{center}\n\\label{whole}\n\\end{figure}";
+        assert_eq!(
+            context_of(src),
+            Some(LabelContext::Float {
+                env: "figure".to_owned(),
+                caption: Some("Overall".to_owned()),
             })
         );
     }

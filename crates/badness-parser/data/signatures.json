@@ -480,6 +480,8 @@
     "figure*": { "block": true, "outline": "float" },
     "table": { "block": true, "outline": "float" },
     "table*": { "block": true, "outline": "float" },
+    "subfigure": { "args": ["req"], "outline": "float" },
+    "subtable": { "args": ["req"], "outline": "float" },
     "center": { "block": true },
     "flushleft": { "block": true },
     "flushright": { "block": true },

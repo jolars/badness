@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.2](https://github.com/jolars/badness/compare/badness-formatter-v0.12.1...badness-formatter-v0.12.2) (2026-11-14)
+
+### Dependencies
+
+- updated crates/badness-parser to v0.12.2
+
 ## [0.12.1](https://github.com/jolars/badness/compare/badness-formatter-v0.12.0...badness-formatter-v0.12.1) (2026-11-08)
 
 ### Bug Fixes

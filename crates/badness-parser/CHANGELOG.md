@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.2](https://github.com/jolars/badness/compare/badness-parser-v0.12.1...badness-parser-v0.12.2) (2026-11-14)
+
+### Bug Fixes
+
+- **lsp:** resolve captions within their owning float ([`3bc69ea`](https://github.com/jolars/badness/commit/3bc69eac885074ed17a4f3fa1692c49884bf58ef)), fixes [#230](https://github.com/jolars/badness/issues/230)
+
 ## [0.12.1](https://github.com/jolars/badness/compare/badness-parser-v0.12.0...badness-parser-v0.12.1) (2026-11-08)
 
 ### Bug Fixes

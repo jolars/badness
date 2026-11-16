@@ -13,6 +13,9 @@ hero:
       text: Get started
       link: /guide/getting-started
     - theme: alt
+      text: What is Badness?
+      link: /guide/what-is-badness
+    - theme: alt
       text: Try the playground
       link: /playground/
       target: _self

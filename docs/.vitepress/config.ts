@@ -117,6 +117,7 @@ export default defineConfig({
       {
         text: "Introduction",
         items: [
+          { text: "What is Badness?", link: "/guide/what-is-badness" },
           { text: "Getting started", link: "/guide/getting-started" },
           { text: "Installation", link: "/guide/installation" },
         ],

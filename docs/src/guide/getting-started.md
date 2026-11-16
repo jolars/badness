@@ -44,3 +44,9 @@ The command exits with a nonzero status when it reports a diagnostic. See
 See [Style options](formatting.md#style-options) for command-line overrides and
 [Configuration](configuration.md) for shared project settings. Continue with
 [Integrations](integrations.md) to automate the checks.
+
+## Funding
+
+I am grateful for the financial support offered by the [TeX Users
+Group](https://tug.org/) through the [TeX Development
+Fund](https://tug.org/tc/devfund/).

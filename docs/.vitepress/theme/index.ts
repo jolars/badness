@@ -28,9 +28,11 @@ export default {
       onUnmounted(unmountCharts);
       return () =>
         h(DefaultTheme.Layout, null, {
-          // Preserve links to the former homepage heading.
+          // Preserve published fragments for the removed homepage headings.
           "home-hero-before": () =>
-            h("span", { id: "badness", "aria-hidden": "true" }),
+            ["badness", "funding", "the-architecture", "where-to-go-next"].map(
+              (id) => h("span", { id, "aria-hidden": "true" }),
+            ),
         });
     },
   }),

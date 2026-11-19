@@ -45,14 +45,14 @@
 
 use std::collections::HashMap;
 
-use rowan::TextSize;
+use rowan::{TextRange, TextSize};
 
 use super::lint_directive_verb;
-use crate::bib::ast;
 use crate::bib::parse;
 use crate::bib::semantic::{BibFieldDb, FieldCategory, builtin};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
-use crate::directives::Verb;
+use crate::bib::{ast, comment_directive};
+use crate::directives::{Axis, Verb};
 use crate::formatter::ir::Ir;
 use crate::formatter::printer::Printer;
 use crate::formatter::style::{FormatStyle, LineEnding, apply_line_ending, detect_line_ending};
@@ -111,23 +111,7 @@ pub fn format_with_style(input: &str, style: FormatStyle) -> Result<String, Form
 pub fn format_node(root: &SyntaxNode, style: FormatStyle) -> Result<String, FormatError> {
     validate_supported_tokens(root)?;
 
-    let mut formatted = format_root(root, style);
-    // Normalize the document's trailing edge: drop trailing blank lines and
-    // per-line trailing whitespace at EOF, then guarantee exactly one final
-    // newline. Empty output stays empty. Copied verbatim from the LaTeX formatter
-    // (`crate::formatter::core::format_node`) for an identical EOF guarantee.
-    let trimmed_len = formatted.trim_end_matches([' ', '\t', '\n', '\r']).len();
-    formatted.truncate(trimmed_len);
-    if !formatted.is_empty() {
-        formatted.push('\n');
-    }
-    let ending = if style.line_ending == LineEnding::Auto {
-        style.line_ending.resolve(detect_line_ending(&root.text()))
-    } else {
-        style.line_ending.resolve(LineEnding::Lf)
-    };
-    apply_line_ending(&mut formatted, ending);
-    Ok(formatted)
+    Ok(format_root(root, style))
 }
 
 /// Refuse any `ERROR` token. The bib lexer is total (never emits `ERROR`), so this
@@ -148,10 +132,153 @@ fn validate_supported_tokens(root: &SyntaxNode) -> Result<(), FormatError> {
 }
 
 fn format_root(root: &SyntaxNode, style: FormatStyle) -> String {
+    let (protected, preserve_eof) = format_suppressions(root);
+    if protected == [root.text_range()] {
+        return root.to_string();
+    }
+    let source = (!protected.is_empty()).then(|| root.to_string());
+    let protection = |start| {
+        let index = protected.partition_point(|span| span.end() <= start);
+        protected.get(index).filter(|span| span.contains(start))
+    };
+    let blocks = super::sort::sorted_blocks(root, |block| {
+        protection(block.text_range().start()).is_some()
+    });
+    let ending = if style.line_ending == LineEnding::Auto {
+        let text = root.text();
+        // A leading protected span can supply the first output break before we
+        // emit any separators. Detect from that span so the next pass agrees.
+        let leading_protected = blocks
+            .first()
+            .and_then(|block| protection(block.text_range().start()))
+            .map(|span| text.slice(*span - root.text_range().start()))
+            .filter(|span| span.contains_char('\n'));
+        detect_line_ending(leading_protected.as_ref().unwrap_or(&text))
+    } else {
+        style.line_ending.resolve(LineEnding::Lf)
+    };
     let cx = Lower { db: builtin() };
-    // The printer's `Group` arm requires a `propagate_breaks`-saturated tree.
-    let ir = lower_root(root, cx).propagate_breaks();
-    Printer::new(style).print(&ir)
+    let printer = Printer::new(style);
+    let mut output = String::new();
+    let mut pending = Vec::new();
+    let mut previous_verb = None;
+    let mut verbatim_until = root.text_range().start();
+    let mut previous_raw_junk = false;
+    for (index, block) in blocks.iter().enumerate() {
+        let start = block.text_range().start();
+        let verb = lint_directive_verb(block);
+        if let Some(span) = protection(start) {
+            if start < verbatim_until {
+                previous_verb = verb;
+                continue;
+            }
+            append_formatted(&mut output, &mut pending, &printer, ending, false);
+            if index > 0 && !previous_raw_junk {
+                output.push_str(ending.as_str());
+                if !attached(previous_verb, verb) {
+                    output.push_str(ending.as_str());
+                }
+            }
+            let relative = *span - root.text_range().start();
+            let source = source
+                .as_deref()
+                .expect("protected spans carry source text");
+            output.push_str(&source[usize::from(relative.start())..usize::from(relative.end())]);
+            verbatim_until = span.end();
+            // A skipped junk block already owns the gap up to the next entry.
+            // A new separator would become part of its protected bytes on reformat.
+            previous_raw_junk = block.kind() == SyntaxKind::JUNK;
+        } else {
+            if index > 0 && !previous_raw_junk {
+                pending.push(if attached(previous_verb, verb) {
+                    Ir::hard_line()
+                } else {
+                    Ir::empty_line()
+                });
+            }
+            pending.push(lower_block(block, cx));
+            previous_raw_junk = false;
+        }
+        previous_verb = verb;
+    }
+    if !pending.is_empty() {
+        append_formatted(&mut output, &mut pending, &printer, ending, true);
+    } else if !preserve_eof && !previous_raw_junk && !output.is_empty() {
+        output.push_str(ending.as_str());
+    }
+    output
+}
+
+fn attached(previous: Option<Verb>, current: Option<Verb>) -> bool {
+    matches!(previous, Some(Verb::Skip | Verb::Off)) || current == Some(Verb::On)
+}
+
+fn append_formatted(
+    output: &mut String,
+    pending: &mut Vec<Ir>,
+    printer: &Printer,
+    ending: LineEnding,
+    eof: bool,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let mut formatted = printer.print(&Ir::concat(std::mem::take(pending)).propagate_breaks());
+    if eof {
+        let trimmed_len = formatted.trim_end_matches([' ', '\t', '\n', '\r']).len();
+        formatted.truncate(trimmed_len);
+        if !formatted.is_empty() {
+            formatted.push('\n');
+        }
+    }
+    apply_line_ending(&mut formatted, ending);
+    output.push_str(&formatted);
+}
+
+/// The markers and all bytes between them travel as one span. A standalone
+/// skip pins only its target. Open regions track the two directive families
+/// independently, so a layout-only closer cannot also close lint suppression.
+fn format_suppressions(root: &SyntaxNode) -> (Vec<TextRange>, bool) {
+    let mut spans = Vec::new();
+    let mut open = [None, None];
+    let mut skip = false;
+    for block in root.children() {
+        if block.kind() != SyntaxKind::COMMENT_ENTRY {
+            if std::mem::take(&mut skip) {
+                spans.push(block.text_range());
+            }
+            continue;
+        }
+        let Some(directive) = comment_directive(&block).filter(|d| d.axis.covers_format()) else {
+            continue;
+        };
+        let region = &mut open[usize::from(directive.axis == Axis::Both)];
+        match directive.verb {
+            Verb::SkipFile => return (vec![root.text_range()], true),
+            Verb::Skip => skip = true,
+            Verb::Off => {
+                region.get_or_insert(block.text_range().start());
+            }
+            Verb::On => {
+                if let Some(start) = region.take() {
+                    spans.push(TextRange::new(start, block.text_range().end()));
+                }
+            }
+        }
+    }
+    let preserve_eof = open.iter().any(Option::is_some);
+    for start in open.into_iter().flatten() {
+        spans.push(TextRange::new(start, root.text_range().end()));
+    }
+    spans.sort_unstable_by_key(|span| span.start());
+    let mut merged: Vec<TextRange> = Vec::new();
+    for span in spans {
+        match merged.last_mut() {
+            Some(previous) if span.start() < previous.end() => *previous = previous.cover(span),
+            _ => merged.push(span),
+        }
+    }
+    (merged, preserve_eof)
 }
 
 /// State threaded through the lowering: the built-in field/entry DB (consulted for
@@ -161,34 +288,6 @@ fn format_root(root: &SyntaxNode, style: FormatStyle) -> String {
 #[derive(Clone, Copy)]
 struct Lower {
     db: &'static BibFieldDb,
-}
-
-/// Lower the `ROOT`: each top-level block (entry / `@string` / `@preamble` /
-/// `@comment` / junk) on its own, normally separated by exactly one blank line.
-/// A lint directive that opens or closes a node/region stays adjacent to the entry it
-/// governs. Bare ROOT trivia tokens are discarded — separation is re-emitted
-/// deterministically.
-fn lower_root(root: &SyntaxNode, cx: Lower) -> Ir {
-    // Entries are sorted by cite key (within barrier-delimited segments); every other
-    // block stays pinned. See `super::sort::sorted_blocks`.
-    let blocks = super::sort::sorted_blocks(root);
-    let mut lowered = Vec::with_capacity(blocks.len().saturating_mul(2));
-    let mut previous_verb = None;
-    for (index, block) in blocks.iter().enumerate() {
-        let verb = lint_directive_verb(block);
-        if index > 0 {
-            let attached = matches!(previous_verb, Some(Verb::Skip | Verb::Off))
-                || matches!(verb, Some(Verb::On));
-            lowered.push(if attached {
-                Ir::hard_line()
-            } else {
-                Ir::empty_line()
-            });
-        }
-        lowered.push(lower_block(block, cx));
-        previous_verb = verb;
-    }
-    Ir::concat(lowered)
 }
 
 fn lower_block(node: &SyntaxNode, cx: Lower) -> Ir {
@@ -805,6 +904,93 @@ mod tests {
         assert_eq!(
             split_top_level_and("Knuth, Donald E."),
             ["Knuth, Donald E."]
+        );
+    }
+}
+
+#[cfg(test)]
+mod suppression_tests {
+    use super::*;
+
+    fn assert_format(source: &str, expected: &str) {
+        let style = FormatStyle {
+            line_ending: LineEnding::Lf,
+            ..FormatStyle::default()
+        };
+        assert_eq!(format_with_style(source, style).unwrap(), expected);
+        assert_eq!(format_with_style(expected, style).unwrap(), expected);
+    }
+
+    #[test]
+    fn skip_file_preserves_all_bytes_on_both_axes() {
+        for family in ["badness-format", "badness"] {
+            let source = format!("\r\n@MISC{{z}}\r\n@comment{{{family} skip-file}}  ");
+            assert_format(&source, &source);
+        }
+    }
+
+    #[test]
+    fn skip_file_reads_only_the_structured_comment_body() {
+        let source = "@comment % (note)\n{badness-format skip-file}\n@MISC{z}";
+        assert_format(source, source);
+        assert_format(
+            "@comment % {badness-format skip-file: example}\n(ordinary)\n@MISC{z}",
+            "@comment % {badness-format skip-file: example}\n(ordinary)\n\n@misc{z}\n",
+        );
+    }
+
+    #[test]
+    fn auto_uses_the_first_break_in_a_leading_protected_region() {
+        let protected = "@comment{badness-format off}\r\n@MISC{z}\r\n@comment{badness-format on}";
+        let source = format!("\n{protected}\n@MISC{{a}}");
+        let expected = format!("{protected}\r\n\r\n@misc{{a}}\r\n");
+        let style = FormatStyle {
+            line_ending: LineEnding::Auto,
+            ..FormatStyle::default()
+        };
+        let formatted = format_with_style(&source, style).unwrap();
+        assert_eq!(formatted, expected);
+        assert_eq!(format_with_style(&formatted, style).unwrap(), formatted);
+    }
+
+    #[test]
+    fn skip_pins_the_next_entry_through_stacked_comments() {
+        assert_format(
+            "@comment{badness-format skip}\n@comment{ordinary}\n@MISC{z}\n@MISC{b}\n@MISC{a}",
+            "@comment{badness-format skip}\n\n@comment{ordinary}\n\n@MISC{z}\n\n@misc{a}\n\n@misc{b}\n",
+        );
+    }
+
+    #[test]
+    fn regions_preserve_trivia_and_track_each_family() {
+        let protected = concat!(
+            "@comment{badness-format off}\r\n",
+            "@MISC{z}  \r\n\t",
+            "@comment{badness off}\r\n",
+            "@MISC{b} @comment{badness-format on}\r\n",
+            "@MISC{a}\r\n",
+            "@comment{badness on}",
+        );
+        assert_format(
+            &format!("@MISC{{before}}\n{protected}\n@MISC{{after}}"),
+            &format!("@misc{{before}}\n\n{protected}\n\n@misc{{after}}\n"),
+        );
+    }
+
+    #[test]
+    fn open_region_preserves_the_end_of_the_file() {
+        let protected = "@comment{badness-format off}\r\n@MISC{z}  ";
+        assert_format(
+            &format!("@MISC{{before}}\n{protected}"),
+            &format!("@misc{{before}}\n\n{protected}"),
+        );
+    }
+
+    #[test]
+    fn skip_preserves_junk_without_absorbing_new_separators() {
+        assert_format(
+            "@comment{badness-format skip}\nforeign text \r\n @MISC{z}",
+            "@comment{badness-format skip}\n\nforeign text \r\n @misc{z}\n",
         );
     }
 }

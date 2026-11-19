@@ -14,8 +14,8 @@ use crate::linter::diagnostic::Diagnostic;
 use super::{BibRule, BibRuleContext, Example};
 
 const EXAMPLES: &[Example] = &[Example {
-    caption: "BibTeX recognizes the directive grammar, but its formatter has no suppression mechanism:",
-    source: "@comment{badness-format skip-file: preserve this file}\n@book{key}\n",
+    caption: "A formatting region needs a matching opener:",
+    source: "@comment{badness-format on}\n@book{key}\n",
 }];
 
 pub struct InertSuppression;
@@ -27,9 +27,7 @@ impl BibRule for InertSuppression {
 
     fn description(&self) -> &'static str {
         "Flag a structured BibTeX suppression directive that cannot take effect: \
-         `skip` with no following entry, `on` with no matching `off`, or any \
-         `badness-format` directive, because the BibTeX formatter does not support \
-         format suppression. Also flag an `off` region left open at EOF; it \
+         `skip` with no following entry or `on` with no matching `off`. Also flag an `off` region left open at EOF; it \
          currently suppresses through the end of the file, but the missing closer \
          is usually accidental. Report-only: repairing the directive requires \
          knowing the entry, boundary, or formatting policy the author intended. \
@@ -59,10 +57,7 @@ impl BibRule for InertSuppression {
                 DirectiveOutcome::UnclosedOff => {
                     "`off` reaches the end of the file without a matching `on`"
                 }
-                DirectiveOutcome::Unsupported => {
-                    "the BibTeX formatter does not support format suppression, so this \
-                     directive does nothing"
-                }
+                DirectiveOutcome::Unsupported => continue,
             };
             sink.push(Diagnostic {
                 rule: self.id(),
@@ -120,8 +115,8 @@ mod tests {
                 "without a matching `on`",
             ),
             (
-                "@comment{badness-format skip-file}\n@book{a}\n",
-                "does not support format suppression",
+                "@comment{badness-format on}\n@book{a}\n",
+                "no matching `off`",
             ),
         ] {
             let out = findings(src);

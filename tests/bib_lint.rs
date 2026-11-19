@@ -178,10 +178,10 @@ fn retired_file_suppression_cannot_hide_its_own_deprecation() {
 }
 
 #[test]
-fn inert_suppression_reports_unsupported_format_directives() {
+fn valid_format_directives_do_not_trigger_inert_suppression() {
     let src = "@comment{badness-format skip-file: hand formatted}\n\
                @article{k, author={A}, title={T}, journaltitle={J}, year=2020}\n";
-    assert_eq!(rules(src), vec!["inert-suppression"]);
+    assert!(rules(src).is_empty());
 }
 
 #[test]

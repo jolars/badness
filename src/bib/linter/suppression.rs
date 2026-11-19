@@ -18,21 +18,15 @@
 //! `@comment{badness-ignore …}` and `@comment{badness-ignore-file …}` spellings
 //! still resolve through the same path and are no longer documented.
 //!
-//! **Only the lint axis acts here.** `badness-format` is accepted by the shared
-//! grammar but does nothing in a `.bib`: the bib formatter is a canonical
-//! re-emitter rather than a trivia-only pass, so "reproduce this span byte for
-//! byte" is a different mechanism there, not a matter of routing these ranges
-//! through. Such a directive is retained as [`DirectiveOutcome::Unsupported`]
-//! for the `inert-suppression` rule.
-//!
 //! [`COMMENT_ENTRY`]: crate::bib::syntax::SyntaxKind::COMMENT_ENTRY
 
 use std::collections::HashMap;
 
 use rowan::NodeOrToken;
 
+use crate::bib::comment_directive;
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
-use crate::directives::{Directive, DirectiveOutcome, Verb, parse_directive};
+use crate::directives::{Axis, Directive, DirectiveOutcome, Verb};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LocatedDirective {
@@ -53,6 +47,7 @@ pub struct BibSuppressionMap {
 
 /// A region opened by an `off` and waiting for its `on`.
 struct OpenRegion {
+    axis: Axis,
     rule: Option<String>,
     start: usize,
     directive_index: usize,
@@ -64,13 +59,7 @@ impl BibSuppressionMap {
         let mut open: Vec<OpenRegion> = Vec::new();
 
         for node in root.descendants() {
-            if node.kind() != SyntaxKind::COMMENT_ENTRY {
-                continue;
-            }
-            let Some(body) = comment_directive_text(&node) else {
-                continue;
-            };
-            let Some(directive) = parse_directive(body.trim()) else {
+            let Some(directive) = comment_directive(&node) else {
                 continue;
             };
             let text = node.to_string();
@@ -99,22 +88,15 @@ impl BibSuppressionMap {
                     rowan::TextSize::from(start as u32),
                     rowan::TextSize::from((start + family.len()) as u32),
                 ),
-                outcome: if directive.axis.covers_lint() {
-                    DirectiveOutcome::Honored
-                } else {
-                    DirectiveOutcome::Unsupported
-                },
+                outcome: DirectiveOutcome::Honored,
             });
-            if !directive.axis.covers_lint() {
-                continue;
-            }
             match directive.verb {
                 Verb::SkipFile => {
-                    map.record(span(root.text_range()), &directive.rule);
+                    map.record(directive.axis, span(root.text_range()), &directive.rule);
                 }
                 Verb::Skip => {
                     if let Some(target) = next_meaningful_sibling(&node) {
-                        map.record(target, &directive.rule);
+                        map.record(directive.axis, target, &directive.rule);
                     } else {
                         map.directives[directive_index].outcome = DirectiveOutcome::DanglingSkip;
                     }
@@ -124,12 +106,16 @@ impl BibSuppressionMap {
                 // reparented into the entry below it — so the region simply
                 // opens at the next meaningful sibling.
                 Verb::Off => {
-                    if !open.iter().any(|o| o.rule == directive.rule) {
+                    if !open
+                        .iter()
+                        .any(|o| o.axis == directive.axis && o.rule == directive.rule)
+                    {
                         map.directives[directive_index].outcome = DirectiveOutcome::UnclosedOff;
                         let start = next_meaningful_sibling(&node)
                             .map(|(s, _)| s)
                             .unwrap_or_else(|| usize::from(node.text_range().end()));
                         open.push(OpenRegion {
+                            axis: directive.axis,
                             rule: directive.rule.clone(),
                             start,
                             directive_index,
@@ -137,11 +123,14 @@ impl BibSuppressionMap {
                     }
                 }
                 Verb::On => {
-                    if let Some(i) = open.iter().position(|o| o.rule == directive.rule) {
+                    if let Some(i) = open
+                        .iter()
+                        .position(|o| o.axis == directive.axis && o.rule == directive.rule)
+                    {
                         let region = open.remove(i);
                         map.directives[region.directive_index].outcome = DirectiveOutcome::Honored;
                         let end = usize::from(node.text_range().start());
-                        map.record((region.start, end), &region.rule);
+                        map.record(region.axis, (region.start, end), &region.rule);
                     } else {
                         map.directives[directive_index].outcome = DirectiveOutcome::UnmatchedOn;
                     }
@@ -152,12 +141,15 @@ impl BibSuppressionMap {
         // Unclosed regions run to end of file.
         let eof = usize::from(root.text_range().end());
         for region in open {
-            map.record((region.start, eof), &region.rule);
+            map.record(region.axis, (region.start, eof), &region.rule);
         }
         map
     }
 
-    fn record(&mut self, range: (usize, usize), rule: &Option<String>) {
+    fn record(&mut self, axis: Axis, range: (usize, usize), rule: &Option<String>) {
+        if !axis.covers_lint() {
+            return;
+        }
         match rule {
             Some(rule) => self
                 .rule_ranges
@@ -178,20 +170,6 @@ impl BibSuppressionMap {
     pub(crate) fn directives(&self) -> &[LocatedDirective] {
         &self.directives
     }
-}
-
-/// The inner text of a `@comment{…}` / `@comment(…)` entry — everything between
-/// the opening and closing delimiter. Returns `None` if no delimiter pair is
-/// found. Used only to read a directive, so nested braces (which never occur in a
-/// directive line) need no special handling.
-fn comment_directive_text(node: &SyntaxNode) -> Option<String> {
-    let text = node.to_string();
-    let open = text.find(['{', '('])?;
-    let close = text.rfind(['}', ')'])?;
-    if close <= open {
-        return None;
-    }
-    Some(text[open + 1..close].to_string())
 }
 
 /// The byte range of the next non-trivia block after the directive entry,
@@ -249,7 +227,7 @@ mod tests {
             ),
             (
                 "@comment{badness-format skip-file}\n@book{a}\n",
-                DirectiveOutcome::Unsupported,
+                DirectiveOutcome::Honored,
             ),
         ] {
             let map = map_of(src);
@@ -328,7 +306,7 @@ mod tests {
         assert!(file.is_suppressed("anything", 0, 1));
     }
 
-    /// `badness-format` parses but has no bib meaning; it must not silence a
+    /// `badness-format` must not silence a
     /// diagnostic on its way through.
     #[test]
     fn format_family_does_not_suppress_lint() {

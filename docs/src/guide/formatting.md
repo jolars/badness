@@ -135,6 +135,18 @@ ordinary fallback. Top-level `\;` statements require a recognized control-flow
 call in the environment's direct body, since the separate `algorithm` package
 uses the same float name and can use `\;` for ordinary spacing.
 
+## BibTeX format suppression
+
+Use `@comment{badness-format skip: reason}` to preserve the next entry,
+`@comment{badness-format off: reason}` and `@comment{badness-format on}` to
+preserve a region, or `@comment{badness-format skip-file: reason}` to preserve
+the whole file. An unclosed `off` region runs to the end of the file.
+
+Protected text keeps its original bytes, including line endings. Protected
+entries stay in place during sorting. Use `badness` in place of `badness-format`
+to suppress both formatting and linting. Open and close a region with the
+same directive family.
+
 ## BibTeX field order
 
 BibTeX entries share one field order across all entry types, including custom

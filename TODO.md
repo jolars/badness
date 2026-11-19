@@ -529,13 +529,6 @@ a file and a line, never a coordinate.
 
 ## BibTeX/BibLaTeX
 
-- [ ] **Format suppression in `.bib`.** The `% badness-format` axis parses in a
-  `.bib` `@comment{…}` and deliberately does nothing. The bib formatter is a
-  canonical re-emitter rather than a trivia-only pass, so "reproduce this span
-  byte for byte" is a genuinely different mechanism there, not a matter of
-  routing the resolved ranges through. Until it exists, `inert-suppression`
-  reports the unsupported axis.
-
 - [ ] **A `%`-comment directive carrier inside a `.bib` entry.** Now that a `%`
   comment exists inside an entry, the LaTeX-side carrier could work there too;
   today only the `@comment{…}` entry form does (`bib/linter/suppression.rs`).

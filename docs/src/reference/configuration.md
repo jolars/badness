@@ -290,6 +290,9 @@ line endings.
   | `crlf`   | Always `\r\n`.                                                                                 |
   | `native` | The platform's convention: `\r\n` on Windows, `\n` elsewhere.                                  |
 
+In BibTeX, when the output begins with a formatter-suppressed region containing
+a line break, `auto` uses that region's first break for generated line endings.
+
 The default is `auto`, so formatting never rewrites a repository's line endings
 on its own. Set `lf` (or add a `.gitattributes` rule) if you want them
 normalized.

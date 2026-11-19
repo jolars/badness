@@ -23,3 +23,29 @@ pub(crate) mod tree_builder;
 
 pub use core::{Parse, SyntaxError, parse, reconstruct};
 pub use lexer::{Token, lex};
+
+/// Read a suppression directive carried by a structured BibTeX comment.
+pub fn comment_directive(node: &syntax::SyntaxNode) -> Option<crate::directives::Directive> {
+    if node.kind() != syntax::SyntaxKind::COMMENT_ENTRY {
+        return None;
+    }
+    use syntax::SyntaxKind::{L_BRACE, L_PAREN, R_BRACE, R_PAREN};
+
+    let open = node
+        .children_with_tokens()
+        .filter_map(|element| element.into_token())
+        .find(|token| matches!(token.kind(), L_BRACE | L_PAREN))?;
+    let close = node.last_child_or_token()?.into_token()?;
+    if !matches!(
+        (open.kind(), close.kind()),
+        (L_BRACE, R_BRACE) | (L_PAREN, R_PAREN)
+    ) {
+        return None;
+    }
+    let body = rowan::TextRange::new(open.text_range().end(), close.text_range().start());
+    let body = node
+        .text()
+        .slice(body - node.text_range().start())
+        .to_string();
+    crate::directives::parse_directive(body.trim())
+}

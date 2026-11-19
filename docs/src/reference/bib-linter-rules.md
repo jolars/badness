@@ -71,14 +71,14 @@ After applying the fix:
 
 ## `inert-suppression`
 
-Flag a structured BibTeX suppression directive that cannot take effect: `skip` with no following entry, `on` with no matching `off`, or any `badness-format` directive, because the BibTeX formatter does not support format suppression. Also flag an `off` region left open at EOF; it currently suppresses through the end of the file, but the missing closer is usually accidental. Report-only: repairing the directive requires knowing the entry, boundary, or formatting policy the author intended. Inline suppressions cannot hide this meta diagnostic; use `[lint].ignore` to disable the rule deliberately.
+Flag a structured BibTeX suppression directive that cannot take effect: `skip` with no following entry or `on` with no matching `off`. Also flag an `off` region left open at EOF; it currently suppresses through the end of the file, but the missing closer is usually accidental. Report-only: repairing the directive requires knowing the entry, boundary, or formatting policy the author intended. Inline suppressions cannot hide this meta diagnostic; use `[lint].ignore` to disable the rule deliberately.
 
 This rule is **enabled by default**.
 
-BibTeX recognizes the directive grammar, but its formatter has no suppression mechanism:
+A formatting region needs a matching opener:
 
 ```bib
-@comment{badness-format skip-file: preserve this file}
+@comment{badness-format on}
 @book{key}
 ```
 
@@ -86,8 +86,8 @@ BibTeX recognizes the directive grammar, but its formatter has no suppression me
 warning: inert-suppression
  --> references.bib:1:1
   |
-1 | @comment{badness-format skip-file: preserve this file}
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the BibTeX formatter does not support format suppression, so this directive does nothing
+1 | @comment{badness-format on}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `on` has no matching `off`, so this directive closes no region
 ```
 
 ## `unexplained-suppression`

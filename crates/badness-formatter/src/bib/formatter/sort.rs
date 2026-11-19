@@ -137,9 +137,15 @@ pub(super) fn canonical_fields(entry: &SyntaxNode) -> Vec<SyntaxNode> {
 ///
 /// A segment containing any `crossref`/`xdata` field is left in source order — the
 /// conservative crossref guard (see [`segment_in_order`]).
-pub(super) fn sorted_blocks(root: &SyntaxNode) -> Vec<SyntaxNode> {
+pub(super) fn sorted_blocks(
+    root: &SyntaxNode,
+    protected: impl Fn(&SyntaxNode) -> bool,
+) -> Vec<SyntaxNode> {
     let blocks: Vec<SyntaxNode> = root.children().collect();
-    let pinned = skip_targets(&blocks);
+    let mut pinned = skip_targets(&blocks);
+    for (block, pinned) in blocks.iter().zip(&mut pinned) {
+        *pinned |= protected(block);
+    }
     let mut result: Vec<SyntaxNode> = Vec::with_capacity(blocks.len());
 
     let mut i = 0;
@@ -237,7 +243,7 @@ mod tests {
 
     /// The cite keys of the sorted top-level blocks of `src` (entries only).
     fn ordered_keys(src: &str) -> Vec<String> {
-        sorted_blocks(&parse(src).syntax())
+        sorted_blocks(&parse(src).syntax(), |_| false)
             .iter()
             .filter_map(|b| ast::cite_key(b).map(|(k, _)| k))
             .collect()
@@ -300,8 +306,10 @@ mod tests {
     #[test]
     fn string_def_is_a_barrier() {
         // `apple` cannot migrate ahead of `zoo` across the `@string` barrier.
-        let blocks =
-            sorted_blocks(&parse("@misc{zoo}\n@string{m = \"x\"}\n@misc{apple}\n").syntax());
+        let blocks = sorted_blocks(
+            &parse("@misc{zoo}\n@string{m = \"x\"}\n@misc{apple}\n").syntax(),
+            |_| false,
+        );
         assert_eq!(ast::cite_key(&blocks[0]).unwrap().0, "zoo");
         assert_eq!(blocks[1].kind(), SyntaxKind::STRING_ENTRY);
         assert_eq!(ast::cite_key(&blocks[2]).unwrap().0, "apple");

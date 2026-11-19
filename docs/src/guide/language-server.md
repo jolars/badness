@@ -6,18 +6,6 @@ setup](editor-setup.md) to connect your editor and the [Editor configuration
 reference](../reference/editor-configuration.md) for shared settings and PDF
 search.
 
-  | Capability                   | Details                                                                                       |
-  | ---------------------------- | --------------------------------------------------------------------------------------------- |
-  | Formatting                   | [LaTeX and BibTeX formatting](formatting.md)                                                  |
-  | Diagnostics and fixes        | [Linting](linting.md)                                                                         |
-  | Command completion           | [Signatures and command kinds](#command-completion)                                           |
-  | LaTeX3 completion            | [Built-in and local expl3 names](#latex3-completion)                                          |
-  | Source-file rename           | [Workspace moves and reference updates](#renaming-source-files)                               |
-  | Inline input                 | [Insert a referenced file's contents](#inlining-an-input-file)                                |
-  | Table refactoring            | [Add a column](#table-refactoring)                                                            |
-  | Installed-package navigation | [TEXMF discovery](../reference/editor-configuration.md#texmf-discovery)                       |
-  | PDF search                   | [Forward and inverse search](../reference/editor-configuration.md#forward-and-inverse-search) |
-
 ## Command completion
 
 Command suggestions include short signatures, such as `\section[]{}` and

@@ -62,6 +62,49 @@ pub fn fields(entry: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
     children::<Field>(entry).map(|f| f.syntax().clone())
 }
 
+/// The source field associated with a `%` comment in a regular entry.
+pub enum FieldCommentPlacement {
+    /// A comment before or inside this field.
+    Leading(TextRange),
+    /// A comment following this field on the same line.
+    SameLine(TextRange),
+    /// A comment after the last field, on its own line or in a fieldless entry.
+    Trailing,
+}
+
+/// Pair comments with fields in source order. The formatter uses the placement
+/// when it sorts fields, and the linter uses the same field for a directive.
+pub fn field_comments(
+    entry: &SyntaxNode,
+) -> impl Iterator<Item = (SyntaxNode, FieldCommentPlacement)> {
+    let mut fields = fields(entry).map(|field| field.text_range()).peekable();
+    let mut previous = None;
+    let source = entry.text();
+    let base = entry.text_range().start();
+
+    entry
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::COMMENT)
+        .map(move |comment| {
+            let start = comment.text_range().start();
+            while fields.peek().is_some_and(|field| field.end() <= start) {
+                previous = fields.next();
+            }
+            let next = fields.peek().copied();
+            let same_line = previous.filter(|field| {
+                let gap = source.slice(TextRange::new(field.end() - base, start - base));
+                !gap.contains_char('\n') && !gap.contains_char('\r')
+            });
+            let placement = match (next, same_line) {
+                (Some(field), _) if field.contains(start) => FieldCommentPlacement::Leading(field),
+                (_, Some(field)) => FieldCommentPlacement::SameLine(field),
+                (Some(field), None) => FieldCommentPlacement::Leading(field),
+                (None, None) => FieldCommentPlacement::Trailing,
+            };
+            (comment, placement)
+        })
+}
+
 /// The name of a `FIELD` (the text of its `FIELD_NAME`), or `None` if absent.
 pub fn field_name(field: &SyntaxNode) -> Option<String> {
     child::<FieldName>(field).and_then(|n| n.text())

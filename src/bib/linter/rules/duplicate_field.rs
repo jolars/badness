@@ -54,9 +54,9 @@ impl BibRule for DuplicateField {
         "Flag a field name appearing more than once in an entry, comparing names \
          case-insensitively. BibTeX and Biber keep only one occurrence and silently \
          discard the rest. A duplicate is therefore almost always a merge or copy-paste \
-         mistake, and every occurrence after the first is flagged.\n\nWhen a repeated \
-         value is byte-identical to the retained value, a safe autofix deletes the \
-         redundant copy. When values differ, the retained value depends on the engine, \
+         mistake, and every occurrence after the first is flagged.\n\nA safe autofix \
+         can delete a byte-identical copy if the edit preserves suppression directives \
+         and their targets. When values differ, the retained value depends on the engine, \
          so the rule reports the finding without a fix."
     }
 
@@ -69,7 +69,7 @@ impl BibRule for DuplicateField {
         &[SyntaxKind::ENTRY]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &BibRuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &BibRuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(entry) = el.as_node() else {
             return;
         };
@@ -102,6 +102,7 @@ impl BibRule for DuplicateField {
                     super::edits::field_deletion_fix(
                         &field,
                         format!("remove duplicate field `{name}`"),
+                        ctx.suppressions,
                     )
                 })
                 .flatten();

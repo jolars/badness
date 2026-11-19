@@ -4,7 +4,7 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `deprecated-suppression-syntax`
 
-Flag the retired `@comment{badness-ignore <rule>}` and `@comment{badness-ignore-file [<rule>]}` suppression spellings, which remain accepted for compatibility but are no longer documented. The Safe autofix rewrites only the family and verb to `badness-lint skip` or `badness-lint skip-file`; the selector, reason, delimiters, and remaining entry text stay byte-for-byte unchanged. This meta diagnostic is not silenced by the retired directive it reports; use `[lint].ignore` to disable the rule deliberately.
+Flag the retired `@comment{badness-ignore <rule>}` and `@comment{badness-ignore-file [<rule>]}` spellings and the retired `% badness-ignore <rule>` spelling within an entry. The safe autofix replaces the family and verb with `badness-lint skip` or `badness-lint skip-file` and preserves the selector, reason, and enclosing comment. Inline suppressions cannot hide this diagnostic. Use `[lint].ignore` to disable it.
 
 This rule is **enabled by default**.
 

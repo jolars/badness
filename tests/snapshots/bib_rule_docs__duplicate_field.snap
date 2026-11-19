@@ -6,7 +6,7 @@ expression: render_rule_doc(rule.as_ref())
 
 Flag a field name appearing more than once in an entry, comparing names case-insensitively. BibTeX and Biber keep only one occurrence and silently discard the rest. A duplicate is therefore almost always a merge or copy-paste mistake, and every occurrence after the first is flagged.
 
-When a repeated value is byte-identical to the retained value, a safe autofix deletes the redundant copy. When values differ, the retained value depends on the engine, so the rule reports the finding without a fix.
+A safe autofix can delete a byte-identical copy if the edit preserves suppression directives and their targets. When values differ, the retained value depends on the engine, so the rule reports the finding without a fix.
 
 This rule is **enabled by default**.
 

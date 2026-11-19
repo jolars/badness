@@ -49,7 +49,8 @@ impl BibRule for EmptyField {
         "Flag a field whose value is empty or whitespace-only (`title = {}`, \
          `note = \"\"`). An empty field carries no data, and some styles still \
          emit punctuation around it. The safe autofix deletes the field along \
-         with its separating comma."
+         with its separating comma when the edit preserves suppression directives \
+         and their targets."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -60,7 +61,7 @@ impl BibRule for EmptyField {
         &[SyntaxKind::FIELD]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &BibRuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &BibRuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(field) = el.as_node() else {
             return;
         };
@@ -89,7 +90,11 @@ impl BibRule for EmptyField {
             start: usize::from(range.start()),
             end: usize::from(range.end()),
             message: format!("field `{name}` is empty"),
-            fix: super::edits::field_deletion_fix(field, format!("remove empty field `{name}`")),
+            fix: super::edits::field_deletion_fix(
+                field,
+                format!("remove empty field `{name}`"),
+                ctx.suppressions,
+            ),
             related: Vec::new(),
         });
     }

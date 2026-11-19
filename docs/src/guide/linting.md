@@ -79,18 +79,36 @@ Each has a bare counterpart that turns off the **formatter** at the same time:
 For layout only, use the `% badness-format` spellings described in
 [Formatting](formatting.md#turning-the-formatter-off).
 
-In `.bib` files, write the same directive inside an `@comment` entry, since
-BibTeX has no line-comment token:
+In `.bib` files, use an `@comment` entry to suppress lint for an entire entry,
+a region, or the whole file.
 
 ```bib
 @comment{badness-lint skip missing-required-field: publisher long gone}
 @book{oldbook, title = {An Orphaned Book}}
 ```
 
-The `inert-suppression` rule warns when a directive cannot act—for example, a
-dangling `skip`, an unmatched `on`, an unclosed `off`, a directive written as
-typeset prose on a `.dtx` documentation line, or a format-only directive in a
-`.bib` file.
+Inside a regular bibliography entry, use `% badness-lint skip` to suppress lint
+for one field. A comment above a field applies to that field, and a comment at
+the end of a field's line applies to the field on that line. A comment within
+an assignment applies to that assignment. The formatter keeps the comment
+with its field when it sorts fields.
+
+```bib
+@misc{example,
+  title = {An Example},
+  author = {Jane Doe},
+  year = 2020,
+  % badness-lint skip unknown-field: used by the bibliography exporter
+  localid = {123},
+  note = {}, % badness-lint skip empty-field: reserved for a later annotation
+}
+```
+
+Use `@comment` entries for `off`, `on`, `skip-file`, and directives that also
+affect formatting. The `inert-suppression` rule reports these directives when
+they appear in a `%` comment inside an entry. It also reports a `skip` with no
+target, an unmatched `on`, an unclosed `off`, and directives written as typeset
+prose on a `.dtx` documentation line.
 
 Some rules ship an **autofix**. `badness lint --fix` applies the
 meaning-preserving (Safe) ones; `--unsafe-fixes` also applies fixes that may

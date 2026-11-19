@@ -224,7 +224,8 @@ comparison, not a byte target.
   axis; `% badness <verb>` suppresses lint and formatting over the same region;
   `% badness-format` does not suppress lint.
 - Preserve compatibility with retired `% badness-ignore` spellings. BibTeX
-  directives use `@comment{...}`.
+  uses `@comment{...}` for entry, region, and file scopes. Use the formatter's
+  shared field attachment for `% badness-lint skip` inside a BibTeX entry.
 
 ## CLI, configuration, and project discovery
 

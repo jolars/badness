@@ -4,7 +4,7 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `empty-field`
 
-Flag a field whose value is empty or whitespace-only (`title = {}`, `note = ""`). An empty field carries no data, and some styles still emit punctuation around it. The safe autofix deletes the field along with its separating comma.
+Flag a field whose value is empty or whitespace-only (`title = {}`, `note = ""`). An empty field carries no data, and some styles still emit punctuation around it. The safe autofix deletes the field along with its separating comma when the edit preserves suppression directives and their targets.
 
 This rule is **enabled by default**.
 

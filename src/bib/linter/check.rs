@@ -2,7 +2,7 @@
 //! sort. The bib analog of [`crate::linter::check`], and the entry point the CLI
 //! calls for `.bib` inputs.
 //!
-//! BibTeX suppression directives live in structured `@comment{...}` entries.
+//! BibTeX suppression directives live in `@comment` entries or `%` comments.
 //! The shared driver shape is the same as LaTeX: build the map once, expose it
 //! to whole-file rules, and filter ordinary findings after dispatch.
 
@@ -80,7 +80,7 @@ pub fn lint_document(path: &Path, root: &SyntaxNode, model: &Model) -> Vec<Diagn
         rule.check_file(&ctx, &mut diagnostics);
     }
 
-    // Filter out findings suppressed by a `@comment{badness-lint …}` carrier.
+    // Filter out suppressed findings while retaining diagnostics about directives.
     diagnostics.retain(|d| {
         is_unsuppressible_suppression_meta_rule(d.rule)
             || !suppress.is_suppressed(d.rule, d.start, d.end)

@@ -1,4 +1,4 @@
-//! Opt-in explanations for structured BibTeX suppression directives. Reuse the
+//! Opt-in explanations for BibTeX suppression directives. Reuse the
 //! shared reason-presence fact and the LaTeX rule's diagnostic policy.
 
 use crate::linter::diagnostic::Diagnostic;
@@ -24,14 +24,13 @@ impl BibRule for UnexplainedSuppression {
 
     fn description(&self) -> &'static str {
         "Require a nonempty `: <reason>` on `skip`, `off`, and `skip-file` \
-         suppression directives in `@comment{...}` or `@comment(...)` entries, \
-         including format-only, combined, and retired spellings. Closing `on` \
+         suppression directives in `@comment` entries and `%` comments, including \
+         format-only, combined, and retired spellings. Closing `on` \
          directives need no explanation. This rule is opt-in because requiring \
          explanations is a project convention. Enable it with \
          `extend-select = [\"unexplained-suppression\"]` under `[lint]`. No autofix \
          is offered because the explanation must come from the author. Inline \
-         suppressions cannot hide this meta diagnostic; use `[lint].ignore` to \
-         disable the rule deliberately."
+         suppressions cannot hide this diagnostic. Use `[lint].ignore` to disable it."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -107,5 +106,15 @@ mod tests {
         ] {
             assert!(findings(src).is_empty(), "{src:?}");
         }
+    }
+
+    #[test]
+    fn field_suppressions_need_a_reason_when_enabled() {
+        let missing = "% badness-lint skip unknown-field";
+        let src = format!("@misc{{key,\n  {missing}\n  localid = {{123}}\n}}\n");
+        let out = findings(&src);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(&src[out[0].start..out[0].end], missing);
+        assert!(findings(&src.replace(missing, &format!("{missing}: custom field"))).is_empty());
     }
 }

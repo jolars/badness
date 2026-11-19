@@ -43,7 +43,7 @@ warning: duplicate-key
 
 ## `deprecated-suppression-syntax`
 
-Flag the retired `@comment{badness-ignore <rule>}` and `@comment{badness-ignore-file [<rule>]}` suppression spellings, which remain accepted for compatibility but are no longer documented. The Safe autofix rewrites only the family and verb to `badness-lint skip` or `badness-lint skip-file`; the selector, reason, delimiters, and remaining entry text stay byte-for-byte unchanged. This meta diagnostic is not silenced by the retired directive it reports; use `[lint].ignore` to disable the rule deliberately.
+Flag the retired `@comment{badness-ignore <rule>}` and `@comment{badness-ignore-file [<rule>]}` spellings and the retired `% badness-ignore <rule>` spelling within an entry. The safe autofix replaces the family and verb with `badness-lint skip` or `badness-lint skip-file` and preserves the selector, reason, and enclosing comment. Inline suppressions cannot hide this diagnostic. Use `[lint].ignore` to disable it.
 
 This rule is **enabled by default**.
 
@@ -71,7 +71,7 @@ After applying the fix:
 
 ## `inert-suppression`
 
-Flag a structured BibTeX suppression directive that cannot take effect: `skip` with no following entry or `on` with no matching `off`. Also flag an `off` region left open at EOF; it currently suppresses through the end of the file, but the missing closer is usually accidental. Report-only: repairing the directive requires knowing the entry, boundary, or formatting policy the author intended. Inline suppressions cannot hide this meta diagnostic; use `[lint].ignore` to disable the rule deliberately.
+Flag a BibTeX suppression directive that cannot take effect, such as `skip` without a target or `on` without a matching `off`. Within a regular entry, use `% badness-lint skip` to suppress lint on one field. Use an `@comment` entry for region, file-wide, and formatting directives. An `off` left open through the end of the file still suppresses that span and triggers this diagnostic. Inline suppressions cannot hide this diagnostic. Use `[lint].ignore` to disable it.
 
 This rule is **enabled by default**.
 
@@ -92,7 +92,7 @@ warning: inert-suppression
 
 ## `unexplained-suppression`
 
-Require a nonempty `: <reason>` on `skip`, `off`, and `skip-file` suppression directives in `@comment{...}` or `@comment(...)` entries, including format-only, combined, and retired spellings. Closing `on` directives need no explanation. This rule is opt-in because requiring explanations is a project convention. Enable it with `extend-select = ["unexplained-suppression"]` under `[lint]`. No autofix is offered because the explanation must come from the author. Inline suppressions cannot hide this meta diagnostic; use `[lint].ignore` to disable the rule deliberately.
+Require a nonempty `: <reason>` on `skip`, `off`, and `skip-file` suppression directives in `@comment` entries and `%` comments, including format-only, combined, and retired spellings. Closing `on` directives need no explanation. This rule is opt-in because requiring explanations is a project convention. Enable it with `extend-select = ["unexplained-suppression"]` under `[lint]`. No autofix is offered because the explanation must come from the author. Inline suppressions cannot hide this diagnostic. Use `[lint].ignore` to disable it.
 
 This rule is **disabled by default**; enable it with `select`.
 
@@ -162,7 +162,7 @@ warning: unknown-field
 
 ## `empty-field`
 
-Flag a field whose value is empty or whitespace-only (`title = {}`, `note = ""`). An empty field carries no data, and some styles still emit punctuation around it. The safe autofix deletes the field along with its separating comma.
+Flag a field whose value is empty or whitespace-only (`title = {}`, `note = ""`). An empty field carries no data, and some styles still emit punctuation around it. The safe autofix deletes the field along with its separating comma when the edit preserves suppression directives and their targets.
 
 This rule is **enabled by default**.
 
@@ -195,7 +195,7 @@ After applying the fix:
 
 Flag a field name appearing more than once in an entry, comparing names case-insensitively. BibTeX and Biber keep only one occurrence and silently discard the rest. A duplicate is therefore almost always a merge or copy-paste mistake, and every occurrence after the first is flagged.
 
-When a repeated value is byte-identical to the retained value, a safe autofix deletes the redundant copy. When values differ, the retained value depends on the engine, so the rule reports the finding without a fix.
+A safe autofix can delete a byte-identical copy if the edit preserves suppression directives and their targets. When values differ, the retained value depends on the engine, so the rule reports the finding without a fix.
 
 This rule is **enabled by default**.
 

@@ -147,6 +147,124 @@ fn formatting_preserves_comment_directive_target_during_sort() {
 }
 
 #[test]
+fn field_directives_follow_their_fields_through_sorting() {
+    let src = "\
+@misc{k,
+  unknownz = {visible},
+  % badness-lint skip unknown-field: custom field
+  unknownc = {},
+  unknownb = {custom}, % badness-lint skip unknown-field: custom field
+  unknownm = % badness-lint skip: placeholder field
+    {},
+  unknowna = {visible},
+}
+";
+    for ending in ["\n", "\r\n", "\r"] {
+        let src = src.replace('\n', ending);
+        let formatted = format(&src).expect("formats");
+        assert!(formatted.find("unknowna").unwrap() < formatted.find("unknownz").unwrap());
+        assert_eq!(format(&formatted).unwrap(), formatted);
+
+        for text in [&src, &formatted] {
+            let diags = check_document(Path::new("refs.bib"), text);
+            let mut findings: Vec<_> = diags
+                .iter()
+                .map(|d| {
+                    (
+                        d.rule,
+                        text[d.start..d.end].split_whitespace().next().unwrap(),
+                    )
+                })
+                .collect();
+            findings.sort_unstable();
+            assert_eq!(
+                findings,
+                [
+                    ("empty-field", "unknownc"),
+                    ("missing-required-field", "k"),
+                    ("missing-required-field", "k"),
+                    ("unknown-field", "unknowna"),
+                    ("unknown-field", "unknownz"),
+                ],
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn misplaced_field_directives_are_inert() {
+    let src = "\
+% badness-lint skip-file unknown-field
+@misc{k,
+  % badness-lint off unknown-field
+  unknowna = {visible},
+  % badness-lint on unknown-field
+  % badness-lint skip-file unknown-field
+  % badness-ignore-file unknown-field
+  % badness skip
+  % badness-format skip
+  unknownb = {visible},
+  note = {% badness-lint skip unknown-field},
+  % badness-lint skip unknown-field
+}
+";
+    let diags = check_document(Path::new("refs.bib"), src);
+    let inert: Vec<_> = diags
+        .iter()
+        .filter(|d| d.rule == "inert-suppression")
+        .map(|d| (&src[d.start..d.end], d.message.as_str()))
+        .collect();
+    let (dangling, unsupported) = inert.split_last().expect("has dangling directive");
+    assert_eq!(unsupported.len(), 6, "{diags:?}");
+    assert!(
+        unsupported
+            .iter()
+            .all(|(_, message)| message.contains("@comment"))
+    );
+    assert_eq!(dangling.0, "% badness-lint skip unknown-field");
+    assert!(dangling.1.contains("no field to suppress"));
+    assert!(
+        !diags
+            .iter()
+            .any(|d| d.rule == "deprecated-suppression-syntax")
+    );
+    let unknowns: Vec<_> = diags
+        .iter()
+        .filter(|d| d.rule == "unknown-field")
+        .map(|d| &src[d.start..d.end])
+        .collect();
+    assert_eq!(unknowns, ["unknowna", "unknownb"]);
+}
+
+#[test]
+fn field_deletion_fixes_preserve_directives_and_their_targets() {
+    let src = "\
+@misc{k,
+  note = {},
+  % badness-lint skip unknown-field: custom field
+  localid = {},
+  title = {},
+  year = 2020
+}
+";
+    let diags = check_document(Path::new("refs.bib"), src);
+    let fixable: Vec<_> = diags
+        .iter()
+        .filter(|d| d.rule == "empty-field")
+        .map(|d| (&src[d.start..d.end], d.fix.is_some()))
+        .collect();
+    assert_eq!(
+        fixable,
+        [
+            ("note = {}", false),
+            ("localid = {}", false),
+            ("title = {}", true)
+        ]
+    );
+}
+
+#[test]
 fn file_directive_suppresses_all() {
     let src = "\
 @comment{badness-lint skip-file: quiet}
@@ -169,6 +287,19 @@ fn retired_suppression_reports_and_fixes_end_to_end() {
         apply_fixes(src, &fixes, false).output,
         "@comment{badness-lint skip unused-string: intentional}\n@string{x = {X}}\n"
     );
+}
+
+#[test]
+fn retired_field_suppression_can_be_rewritten_in_place() {
+    let src = "@misc{k, title = {T}, author = {A}, year = 2020,\n\
+               % badness-ignore unknown-field: custom field\nlocalid = {123}}\n";
+    let diagnostics = check_document(Path::new("refs.bib"), src);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].rule, "deprecated-suppression-syntax");
+    let fix = diagnostics[0].fix.as_ref().expect("has fix");
+    let fixed = apply_fixes(src, std::slice::from_ref(fix), false).output;
+    assert_eq!(fixed, src.replace("badness-ignore", "badness-lint skip"));
+    assert!(rules(&fixed).is_empty(), "{fixed}");
 }
 
 #[test]

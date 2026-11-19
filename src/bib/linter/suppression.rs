@@ -1,9 +1,7 @@
-//! Comment-based suppression for `.bib`, carried inside `@comment{…}` entries.
+//! BibTeX suppression directives in `@comment{…}` entries and `%` line comments.
 //!
-//! A `%` line comment only exists *inside* an entry in BibTeX — free text between
-//! entries lexes as `JUNK`, with no comment token to hang a directive on — so
-//! unlike the LaTeX side the carrier is a structured `@comment` entry, a
-//! [`COMMENT_ENTRY`] node:
+//! An `@comment` entry can suppress the next entry, a region, or the whole file.
+//! Inside a regular entry, `% badness-lint skip` can suppress a single field.
 //!
 //! ```text
 //! @comment{badness-lint skip <rule>: <reason>}       the next entry, one rule
@@ -12,28 +10,55 @@
 //! @comment{badness-lint skip-file <rule>: <reason>}  the whole file
 //! ```
 //!
-//! The **grammar** is [`crate::directives::parse_directive`], shared with the
-//! LaTeX side and the formatter, so the two carriers cannot drift; only the
-//! carrier and the next-sibling attachment differ. The retired
-//! `@comment{badness-ignore …}` and `@comment{badness-ignore-file …}` spellings
-//! still resolve through the same path and are no longer documented.
-//!
-//! [`COMMENT_ENTRY`]: crate::bib::syntax::SyntaxKind::COMMENT_ENTRY
+//! Both forms use [`crate::directives::parse_directive`]. The field target comes
+//! from the same comment placement the formatter uses when sorting fields.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use rowan::NodeOrToken;
+use rowan::{NodeOrToken, TextRange, TextSize};
 
+use crate::bib::ast::{self, FieldCommentPlacement};
 use crate::bib::comment_directive;
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
-use crate::directives::{Axis, Directive, DirectiveOutcome, Verb};
+use crate::directives::{Axis, Directive, DirectiveOutcome, Verb, parse_directive};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LocatedDirective {
     pub directive: Directive,
-    pub range: rowan::TextRange,
-    pub family_range: rowan::TextRange,
+    pub range: TextRange,
+    pub family_range: TextRange,
     pub outcome: DirectiveOutcome,
+    pub is_line_comment: bool,
+}
+
+impl LocatedDirective {
+    fn new(node: &SyntaxNode, text: &str, directive: Directive, outcome: DirectiveOutcome) -> Self {
+        let family = if directive.deprecated {
+            match directive.verb {
+                Verb::Skip => "badness-ignore",
+                Verb::SkipFile => "badness-ignore-file",
+                Verb::Off | Verb::On => unreachable!("retired directives have no regions"),
+            }
+        } else {
+            match directive.axis {
+                Axis::Format => "badness-format",
+                Axis::Lint => "badness-lint",
+                Axis::Both => "badness",
+            }
+        };
+        let relative = text
+            .find(family)
+            .expect("parsed directive contains its family name");
+        let range = node.text_range();
+        let start = range.start() + TextSize::from(relative as u32);
+        Self {
+            directive,
+            range,
+            family_range: TextRange::at(start, TextSize::of(family)),
+            outcome,
+            is_line_comment: node.kind() == SyntaxKind::COMMENT,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -42,6 +67,8 @@ pub struct BibSuppressionMap {
     all_ranges: Vec<(usize, usize)>,
     /// `rule → byte ranges` for the rule-selective directives.
     rule_ranges: HashMap<String, Vec<(usize, usize)>>,
+    field_targets: HashSet<TextRange>,
+    /// Directives in source order, including unsupported forms.
     directives: Vec<LocatedDirective>,
 }
 
@@ -58,38 +85,21 @@ impl BibSuppressionMap {
         let mut map = Self::default();
         let mut open: Vec<OpenRegion> = Vec::new();
 
-        for node in root.descendants() {
+        for node in root.children() {
+            if node.kind() == SyntaxKind::ENTRY {
+                map.record_field_directives(&node);
+                continue;
+            }
             let Some(directive) = comment_directive(&node) else {
                 continue;
             };
-            let text = node.to_string();
-            let family = if directive.deprecated {
-                match directive.verb {
-                    Verb::Skip => "badness-ignore",
-                    Verb::SkipFile => "badness-ignore-file",
-                    Verb::Off | Verb::On => unreachable!("retired directives have no regions"),
-                }
-            } else {
-                match directive.axis {
-                    crate::directives::Axis::Format => "badness-format",
-                    crate::directives::Axis::Lint => "badness-lint",
-                    crate::directives::Axis::Both => "badness",
-                }
-            };
-            let relative = text
-                .find(family)
-                .expect("parsed directive contains its family name");
-            let start = usize::from(node.text_range().start()) + relative;
             let directive_index = map.directives.len();
-            map.directives.push(LocatedDirective {
-                directive: directive.clone(),
-                range: node.text_range(),
-                family_range: rowan::TextRange::new(
-                    rowan::TextSize::from(start as u32),
-                    rowan::TextSize::from((start + family.len()) as u32),
-                ),
-                outcome: DirectiveOutcome::Honored,
-            });
+            map.directives.push(LocatedDirective::new(
+                &node,
+                &node.to_string(),
+                directive.clone(),
+                DirectiveOutcome::Honored,
+            ));
             match directive.verb {
                 Verb::SkipFile => {
                     map.record(directive.axis, span(root.text_range()), &directive.rule);
@@ -146,6 +156,32 @@ impl BibSuppressionMap {
         map
     }
 
+    fn record_field_directives(&mut self, entry: &SyntaxNode) {
+        for (comment, placement) in ast::field_comments(entry) {
+            let text = comment.to_string();
+            let Some(directive) = parse_directive(&text) else {
+                continue;
+            };
+            let outcome = match (directive.axis, directive.verb, placement) {
+                (
+                    Axis::Lint,
+                    Verb::Skip,
+                    FieldCommentPlacement::Leading(field) | FieldCommentPlacement::SameLine(field),
+                ) => {
+                    self.record(directive.axis, span(field), &directive.rule);
+                    self.field_targets.insert(field);
+                    DirectiveOutcome::Honored
+                }
+                (Axis::Lint, Verb::Skip, FieldCommentPlacement::Trailing) => {
+                    DirectiveOutcome::DanglingSkip
+                }
+                _ => DirectiveOutcome::Unsupported,
+            };
+            self.directives
+                .push(LocatedDirective::new(&comment, &text, directive, outcome));
+        }
+    }
+
     fn record(&mut self, axis: Axis, range: (usize, usize), rule: &Option<String>) {
         if !axis.covers_lint() {
             return;
@@ -169,6 +205,20 @@ impl BibSuppressionMap {
 
     pub(crate) fn directives(&self) -> &[LocatedDirective] {
         &self.directives
+    }
+
+    /// Deleting a field must preserve directive comments and their targets.
+    pub(crate) fn blocks_field_deletion(&self, field: TextRange, deletion: TextRange) -> bool {
+        if self.field_targets.contains(&field) {
+            return true;
+        }
+        let first = self
+            .directives
+            .partition_point(|d| d.range.end() <= deletion.start());
+        self.directives[first..]
+            .iter()
+            .take_while(|d| d.range.start() < deletion.end())
+            .any(|d| d.is_line_comment)
     }
 }
 
@@ -196,7 +246,7 @@ fn next_meaningful_sibling(node: &SyntaxNode) -> Option<(usize, usize)> {
 }
 
 /// A rowan `TextRange` as the plain `(start, end)` offsets the map stores.
-fn span(range: rowan::TextRange) -> (usize, usize) {
+fn span(range: TextRange) -> (usize, usize) {
     (usize::from(range.start()), usize::from(range.end()))
 }
 

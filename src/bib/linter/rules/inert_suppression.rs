@@ -1,10 +1,8 @@
-//! `inert-suppression`: a structured BibTeX suppression directive that cannot
+//! `inert-suppression`: a BibTeX suppression directive that cannot
 //! take effect, or an `off` region that reaches EOF without its closer.
 //!
 //! The BibTeX suppression map retains the placement outcome while resolving
-//! ranges. This whole-file rule reports that fact without re-parsing the
-//! `@comment` body. It offers no fix because the intended entry, region boundary,
-//! or formatting policy must come from the author.
+//! ranges. This whole-file rule reports that fact without re-parsing comments.
 
 use std::path::PathBuf;
 
@@ -26,13 +24,13 @@ impl BibRule for InertSuppression {
     }
 
     fn description(&self) -> &'static str {
-        "Flag a structured BibTeX suppression directive that cannot take effect: \
-         `skip` with no following entry or `on` with no matching `off`. Also flag an `off` region left open at EOF; it \
-         currently suppresses through the end of the file, but the missing closer \
-         is usually accidental. Report-only: repairing the directive requires \
-         knowing the entry, boundary, or formatting policy the author intended. \
-         Inline suppressions cannot hide this meta diagnostic; use \
-         `[lint].ignore` to disable the rule deliberately."
+        "Flag a BibTeX suppression directive that cannot take effect, such as \
+         `skip` without a target or `on` without a matching `off`. Within a regular \
+         entry, use `% badness-lint skip` to suppress lint on one field. Use an \
+         `@comment` entry for region, file-wide, and formatting directives. An `off` \
+         left open through the end of the file still suppresses that span and \
+         triggers this diagnostic. Inline suppressions cannot hide this diagnostic. \
+         Use `[lint].ignore` to disable it."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -48,6 +46,9 @@ impl BibRule for InertSuppression {
         {
             let message = match located.outcome {
                 DirectiveOutcome::Honored => continue,
+                DirectiveOutcome::DanglingSkip if located.is_line_comment => {
+                    "`skip` has no field to suppress"
+                }
                 DirectiveOutcome::DanglingSkip => {
                     "`skip` has no following entry, so this directive does nothing"
                 }
@@ -57,7 +58,9 @@ impl BibRule for InertSuppression {
                 DirectiveOutcome::UnclosedOff => {
                     "`off` reaches the end of the file without a matching `on`"
                 }
-                DirectiveOutcome::Unsupported => continue,
+                DirectiveOutcome::Unsupported => {
+                    "use `% badness-lint skip` for a field or `@comment{…}` for other BibTeX directives"
+                }
             };
             sink.push(Diagnostic {
                 rule: self.id(),

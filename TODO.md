@@ -529,13 +529,6 @@ a file and a line, never a coordinate.
 
 ## BibTeX/BibLaTeX
 
-- [ ] **A `%`-comment directive carrier inside a `.bib` entry.** Now that a `%`
-  comment exists inside an entry, the LaTeX-side carrier could work there too;
-  today only the `@comment{…}` entry form does (`bib/linter/suppression.rs`).
-  The grammar is already shared, so this is only a decision about what an
-  in-entry comment attaches to (the field below it, presumably, matching the
-  formatter's forward bind).
-
 - [ ] **`task bib-error-compat`: biber as a `.bib` *error* oracle.** The gap the
   `%`-comment bug exposed — `bib-parse-compat` cannot see over-strictness at all,
   because texlab's bib parser has no error channel (the skill says so outright),

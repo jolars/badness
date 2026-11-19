@@ -29,10 +29,9 @@
 //!   *after* "and" so the next name starts the continuation line. Verbatim, date,
 //!   concatenated, bare literal, and unescaped-`%` values are not reflowed.
 //! - **Trailing comma:** none after the last field.
-//! - **`%` comments:** a comment inside an entry binds *forward* to the field that
-//!   follows it and is re-emitted byte-exact on its own line above that field —
-//!   so it travels with its field through the canonical sort. A comment with no
-//!   following field is *trailing* and prints just above the closing delimiter. A
+//! - **`%` comments:** an own-line comment travels with the field below it, and an
+//!   end-of-line comment travels with the field on its line. An own-line comment
+//!   past the last field prints just above the closing delimiter. A
 //!   `@string` / `@preamble` / field-less entry that carries a comment has nowhere
 //!   to hang it, so the whole block is emitted verbatim rather than losing it.
 //!
@@ -48,10 +47,11 @@ use std::collections::HashMap;
 use rowan::{TextRange, TextSize};
 
 use super::lint_directive_verb;
+use crate::bib::ast::{self, FieldCommentPlacement};
+use crate::bib::comment_directive;
 use crate::bib::parse;
 use crate::bib::semantic::{BibFieldDb, FieldCategory, builtin};
 use crate::bib::syntax::{SyntaxKind, SyntaxNode};
-use crate::bib::{ast, comment_directive};
 use crate::directives::{Axis, Verb};
 use crate::formatter::ir::Ir;
 use crate::formatter::printer::Printer;
@@ -402,56 +402,23 @@ struct CommentPlacement {
     trailing: Vec<String>,
 }
 
-/// Bind every `COMMENT` in `entry` to a field, so the comment travels with that field
-/// through the canonical sort instead of being pinned to a source position.
-///
-/// A comment that *shares a line* with the field before it stays a trailing comment on
-/// that field's line — the bib analog of the LaTeX rule that a trailing comment rides
-/// its line and is never relocated. Every other comment binds **forward** to the field
-/// it precedes, printing on its own line above it; one past the
-/// last field binds to nothing and becomes `trailing`.
-///
-/// Both rules key only on comment own-line-ness, which the formatter *preserves*
-/// (trivia-invariant layout): an own-line comment is re-emitted on its own line and a
-/// same-line one stays on its field's line, so the next pass binds identically.
 fn place_comments(entry: &SyntaxNode) -> CommentPlacement {
-    let fields: Vec<SyntaxNode> = ast::fields(entry).collect();
-    let base = entry.text_range().start();
-    let source = entry.to_string();
     let mut placement = CommentPlacement::default();
 
-    for comment in entry
-        .descendants()
-        .filter(|node| node.kind() == SyntaxKind::COMMENT)
-    {
-        let start = comment.text_range().start();
+    for (comment, attachment) in ast::field_comments(entry) {
         // Trailing whitespace is dropped so a re-read yields the identical text.
         let text = comment.to_string().trim_end().to_string();
 
-        let next = fields.iter().find(|field| field.text_range().end() > start);
-        // A comment *inside* a field (`title = % pick one` … ) has no preceding field
-        // on its line to ride, so it always hoists above that field's line.
-        let inside_next = next.is_some_and(|field| field.text_range().start() <= start);
-        let prev = fields
-            .iter()
-            .rev()
-            .find(|field| field.text_range().end() <= start);
-
-        let same_line = prev.filter(|field| {
-            !inside_next
-                && !source[usize::from(field.text_range().end() - base)..usize::from(start - base)]
-                    .contains('\n')
-        });
-        match (same_line, next) {
-            (Some(field), _) => {
-                placement.same_line.insert(field.text_range().start(), text);
+        match attachment {
+            FieldCommentPlacement::SameLine(field) => {
+                placement.same_line.insert(field.start(), text);
             }
-            (None, Some(field)) => placement
+            FieldCommentPlacement::Leading(field) => placement
                 .leading
-                .entry(field.text_range().start())
+                .entry(field.start())
                 .or_default()
                 .push(text),
-            (None, None) => placement.trailing.push(text),
+            FieldCommentPlacement::Trailing => placement.trailing.push(text),
         }
     }
     placement

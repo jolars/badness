@@ -1,5 +1,4 @@
-//! `deprecated-suppression-syntax`: retired suppression directives carried by
-//! structured BibTeX `@comment{…}` entries.
+//! `deprecated-suppression-syntax`: retired BibTeX suppression directives.
 //!
 //! The suppression pass retains the parsed directive and its family-name range.
 //! This whole-file rule reports that fact and safely replaces only the retired
@@ -8,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use crate::directives::Verb;
+use crate::directives::{DirectiveOutcome, Verb};
 use crate::linter::diagnostic::{Diagnostic, Fix, Severity};
 
 use super::{BibRule, BibRuleContext, Example};
@@ -27,13 +26,11 @@ impl BibRule for DeprecatedSuppressionSyntax {
 
     fn description(&self) -> &'static str {
         "Flag the retired `@comment{badness-ignore <rule>}` and \
-         `@comment{badness-ignore-file [<rule>]}` suppression spellings, which \
-         remain accepted for compatibility but are no longer documented. The \
-         Safe autofix rewrites only the family and verb to `badness-lint skip` or \
-         `badness-lint skip-file`; the selector, reason, delimiters, and remaining \
-         entry text stay byte-for-byte unchanged. This meta diagnostic is not \
-         silenced by the retired directive it reports; use `[lint].ignore` to \
-         disable the rule deliberately."
+         `@comment{badness-ignore-file [<rule>]}` spellings and the retired \
+         `% badness-ignore <rule>` spelling within an entry. The safe autofix \
+         replaces the family and verb with `badness-lint skip` or `badness-lint skip-file` \
+         and preserves the selector, reason, and enclosing comment. Inline \
+         suppressions cannot hide this diagnostic. Use `[lint].ignore` to disable it."
     }
 
     fn examples(&self) -> &'static [Example] {
@@ -41,12 +38,9 @@ impl BibRule for DeprecatedSuppressionSyntax {
     }
 
     fn check_file(&self, ctx: &BibRuleContext<'_>, sink: &mut Vec<Diagnostic>) {
-        for located in ctx
-            .suppressions
-            .directives()
-            .iter()
-            .filter(|located| located.directive.deprecated)
-        {
+        for located in ctx.suppressions.directives().iter().filter(|located| {
+            located.directive.deprecated && located.outcome != DirectiveOutcome::Unsupported
+        }) {
             let replacement = match located.directive.verb {
                 Verb::Skip => "badness-lint skip",
                 Verb::SkipFile => "badness-lint skip-file",
@@ -54,15 +48,18 @@ impl BibRule for DeprecatedSuppressionSyntax {
             };
             let start = usize::from(located.family_range.start());
             let end = usize::from(located.family_range.end());
+            let spelling = if located.is_line_comment {
+                format!("% {replacement}")
+            } else {
+                format!("@comment{{{replacement} …}}")
+            };
             sink.push(Diagnostic {
                 rule: self.id(),
                 severity: Severity::Warning,
                 path: PathBuf::new(),
                 start,
                 end,
-                message: format!(
-                    "retired suppression syntax; use `@comment{{{replacement} …}}` instead"
-                ),
+                message: format!("retired suppression syntax; use `{spelling}` instead"),
                 fix: Some(Fix::safe(
                     start,
                     end,

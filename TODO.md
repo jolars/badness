@@ -230,9 +230,12 @@ navigation and semantic resolution remain open.
   Variable checks cover recognized calls in the core collection, boolean, and
   numeric families. Scope warnings exempt top-level assignments.
 
-- [ ] **Consider expl3 argument and naming style checks.** Malformed names,
-  braced `N` arguments, and unbraced `n` arguments are lower-priority candidates.
-  The argument shapes can be valid TeX.
+- [x] **Report braced expl3 `N` arguments.** Added the opt-in
+  `expl3-braced-n-argument` warning (W303) for recognized calls.
+
+- [ ] **Consider expl3 argument and naming style checks.** Malformed names
+  and unbraced `n` arguments remain candidates. A bare token can be a valid
+  `n` argument in TeX.
 
 - [ ] **Index expl3 definitions and uses before adding resolution checks.**
   Cover functions, generated variants, variables, constants, and messages.

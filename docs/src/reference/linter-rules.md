@@ -340,6 +340,28 @@ warning: ellipsis
   |        ^^^ literal `...` ellipsis; use `\cdots` in math (`\ldots` for lists, `\cdots` for operator chains)
 ```
 
+## `expl3-braced-n-argument`
+
+Flag braced `N` arguments in recognized expl3 calls. The `N` convention calls for a bare token. TeX can accept a braced group here, and removing its braces can change which tokens the function receives.
+
+This rule is **disabled by default**; enable it with `select`.
+
+Braces around an expl3 token-list variable
+
+```tex
+\ExplSyntaxOn
+\tl_clear:N { \l_tmpa_tl }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-braced-n-argument
+ --> example.tex:2:13
+  |
+2 | \tl_clear:N { \l_tmpa_tl }
+  |             ^^^^^^^^^^^^^^ braced `N` argument to `\tl_clear:N`
+```
+
 ## `expl3-deprecated-command`
 
 Report literal references to deprecated control sequences in expl3 code, using the LaTeX3 kernel deprecation list pinned to the 2026-01-19 release. The warning includes the deprecation date.

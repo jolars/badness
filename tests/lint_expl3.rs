@@ -62,7 +62,12 @@ fn expl3_variant_lists_and_inherited_suffixes() {
         r"\cs_generate_variant:Nn \demo: { }",
         r"\cs_generate_variant:Nn \demo:nTF { V }",
     ] {
-        assert!(findings(good).is_empty(), "{good}");
+        assert!(
+            findings(good)
+                .iter()
+                .all(|d| d.rule != "expl3-variant-type"),
+            "{good}"
+        );
     }
     for bad in [
         r"\cs_generate_variant:Nn \demo:n { nn }",
@@ -494,4 +499,51 @@ fn expl3_deprecation_carries_explicit_docstrip_mode_across_macrocode() {
             source.find(r"\str_lower_case:n { explicit }").unwrap()
         );
     }
+}
+
+#[test]
+fn expl3_braced_n_reports_exact_operand_spans() {
+    let source = r"\ExplSyntaxOn
+\cs_set_eq:NN { \demo_a: } { \demo_b: }
+\cs_new:Nn \demo_outer: { \tl_clear:N { \l_tmpa_tl } }
+\ExplSyntaxOff";
+    let out = findings_at(source, "test.tex");
+    assert_eq!(
+        out.iter()
+            .map(|d| &source[d.start..d.end])
+            .collect::<Vec<_>>(),
+        [r"{ \demo_a: }", r"{ \demo_b: }", r"{ \l_tmpa_tl }"]
+    );
+    for d in out {
+        assert_eq!(d.rule, "expl3-braced-n-argument");
+        assert_eq!(d.severity, Severity::Warning);
+        assert!(d.fix.is_none());
+    }
+}
+
+#[test]
+fn expl3_braced_n_requires_a_recognized_n_operand() {
+    for source in [
+        r"\demo:N \l_tmpa_tl",
+        r"\demo:n { \l_tmpa_tl }",
+        r"\demo:V { \l_tmpa_tl }",
+        r"\demo:Nn { \l_tmpa_tl }",
+        r"\tl_set:Nn \l_tmpa_tl { \tl_clear:N { \l_tmpb_tl } }",
+        r"\exp_args:NN \demo:N { \l_tmpa_tl }",
+    ] {
+        assert!(findings(source).is_empty(), "{source}");
+    }
+}
+
+#[test]
+fn expl3_braced_n_checks_dtx_code() {
+    let source = r"%<@@=demo>
+% \tl_clear:N { \l_documented_tl }
+%    \begin{macrocode}
+\tl_clear:N { \l_executable_tl }
+% \tl_clear:N { \l_commented_tl }
+%    \end{macrocode}";
+    let out = findings_at(source, "demo.dtx");
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert_eq!(&source[out[0].start..out[0].end], r"{ \l_executable_tl }");
 }

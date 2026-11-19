@@ -498,6 +498,11 @@ impl Argument {
         Group::cast(self.elements[0].as_node()?.clone())
     }
 
+    /// Source range of this argument's complete brace group, including delimiters.
+    pub fn group_range(&self) -> Option<TextRange> {
+        Some(self.group()?.syntax().text_range())
+    }
+
     /// Literal `N` and `c` names have the same semantic value, but require
     /// different structural proofs. A command somewhere in a group is not
     /// enough to establish a single control-sequence argument.

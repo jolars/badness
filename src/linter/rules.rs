@@ -29,6 +29,7 @@ pub mod dollar_display_math;
 pub mod duplicate_label;
 pub mod duplicate_package;
 pub mod ellipsis;
+pub mod expl3_braced_n_argument;
 pub mod expl3_deprecated_command;
 pub mod expl3_invalid_message_parameter;
 pub mod expl3_protected_predicate;
@@ -74,6 +75,7 @@ pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
 pub use duplicate_package::DuplicatePackage;
 pub use ellipsis::Ellipsis;
+pub use expl3_braced_n_argument::Expl3BracedNArgument;
 pub use expl3_deprecated_command::Expl3DeprecatedCommand;
 pub use expl3_invalid_message_parameter::Expl3InvalidMessageParameter;
 pub use expl3_protected_predicate::Expl3ProtectedPredicate;
@@ -793,6 +795,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(PrimitiveCommand),
         Box::new(DollarDisplayMath),
         Box::new(Ellipsis),
+        Box::new(Expl3BracedNArgument),
         Box::new(Expl3DeprecatedCommand),
         Box::new(Expl3InvalidMessageParameter),
         Box::new(Expl3ProtectedPredicate),
@@ -895,6 +898,7 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "primitive-command",
     "dollar-display-math",
     "ellipsis",
+    "expl3-braced-n-argument",
     "expl3-deprecated-command",
     "expl3-invalid-message-parameter",
     "expl3-protected-predicate",

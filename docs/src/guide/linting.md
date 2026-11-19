@@ -40,7 +40,7 @@ rules while keeping the defaults:
 
 ```toml
 [lint]
-extend-select = ["dash-length"]
+extend-select = ["dash-length", "expl3-braced-n-argument"]
 ```
 
 The CLI flag `--extend-select` adds to the configured list and can be repeated.

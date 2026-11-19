@@ -802,3 +802,35 @@ fn undefined_citation_follows_symlinked_bibliography() {
             .contains("missing")
     );
 }
+
+#[test]
+fn expl3_braced_n_argument_is_opt_in_and_suppressible() {
+    let dir = repo_dir();
+    let file = dir.path().join("demo.tex");
+    let source = "\\ExplSyntaxOn\n\\tl_clear:N { \\l_tmpa_tl }\n\\ExplSyntaxOff\n";
+    let rule = "expl3-braced-n-argument";
+    std::fs::write(&file, source).unwrap();
+
+    let default = lint(dir.path(), &["--output=json", "demo.tex"], None);
+    assert!(default.status.success());
+    assert_eq!(default.stdout, b"[]\n");
+
+    let args = ["--output=json", "--extend-select", rule, "demo.tex"];
+    let selected = lint(dir.path(), &args, None);
+    assert_eq!(selected.status.code(), Some(1));
+    let findings: Vec<serde_json::Value> = serde_json::from_slice(&selected.stdout).unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["rule"], rule);
+
+    std::fs::write(
+        file,
+        source.replace(
+            "\\tl_clear:N",
+            &format!("% badness-lint skip {rule}\n\\tl_clear:N"),
+        ),
+    )
+    .unwrap();
+    let suppressed = lint(dir.path(), &args, None);
+    assert!(suppressed.status.success());
+    assert_eq!(suppressed.stdout, b"[]\n");
+}

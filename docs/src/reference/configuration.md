@@ -411,7 +411,7 @@ The locations of the TeX compiler's artifacts and the file it compiled. Only the
 **language server** reads these settings. It uses `.aux` files to supply
 resolved label and section numbers for hover and document symbols, and locates
 the compiled PDF for [forward
-search](editor-configuration.md#forward-and-inverse-search). The formatter and
+search](../guide/language-server.md#forward-and-inverse-search). The formatter and
 linter do not read this section.
 
 ### `aux-dir`

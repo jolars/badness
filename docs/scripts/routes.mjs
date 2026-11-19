@@ -1,5 +1,9 @@
 export const redirects = {
   "/reference/benchmarks.html": "/guide/performance",
+  "/reference/editor-configuration.html": "/guide/editor-setup",
+  "/reference/editor-configuration.md": "/guide/editor-setup.md",
+  "/agent-markdown/reference/editor-configuration.md":
+    "/agent-markdown/guide/editor-setup.md",
   "/guide/pre-commit.html": "/guide/integrations#pre-commit",
   "/reference/wrap-modes.html": "/reference/configuration#wrap",
   "/playground.html": "/playground/",

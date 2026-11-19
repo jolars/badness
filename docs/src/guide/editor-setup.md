@@ -17,13 +17,6 @@ files.
 
 See [Language server](language-server.md) for capabilities and feature behavior.
 
-<span id="texmf-discovery"></span> <span id="forward-and-inverse-search"></span>
-<span id="configuring-the-viewer"></span>
-<span id="triggering-forward-search"></span> <span id="inverse-search"></span>
-
-See the [Editor configuration reference](../reference/editor-configuration.md)
-for shared settings, their precedence, TEXMF discovery, and PDF search.
-
 ## Neovim
 
 Badness is included in
@@ -57,10 +50,9 @@ vim.lsp.config.badness = {
 vim.lsp.enable("badness")
 ```
 
-See the [Editor configuration
-reference](../reference/editor-configuration.md#supplying-settings) for shared
-settings and their precedence. The `init_options` block is optional; omit it to
-use the defaults or a `badness.toml`.
+The `init_options` block is optional. Omit it to use the defaults or a
+`badness.toml`. See [Supplying settings](#supplying-settings) for shared
+settings and their precedence.
 
 ## VS Code
 
@@ -167,10 +159,8 @@ Zed's `settings.json`:
 To retain Texlab alongside Badness for LaTeX files, list `"texlab"` after
 `"badness-language-server"` in the `LaTeX` settings.
 
-Shared [editor
-settings](../reference/editor-configuration.md#supplying-settings) go under the
-server ID. For example, these formatting settings apply when the project has no
-`badness.toml`:
+Shared editor settings go under the server ID. This example sets formatting
+widths for projects without a `badness.toml`.
 
 ```json
 {
@@ -185,6 +175,8 @@ server ID. For example, these formatting settings apply when the project has no
 }
 ```
 
+See [Supplying settings](#supplying-settings) for width precedence.
+
 For a custom binary, set `binary.path` under `lsp.badness-language-server`. If
 you also set `binary.arguments`, use `["lsp"]`: the arguments replace the
 default command line.
@@ -194,3 +186,125 @@ default command line.
 Any editor with an LSP client can run Badness. Configure it to use `badness lsp`
 over stdio for LaTeX documents. Consult your editor's LSP client documentation
 for the exact configuration syntax.
+
+<span id="editor-configuration"></span>
+
+## Supplying settings
+
+Supply settings as `initializationOptions` at startup or through
+`workspace/didChangeConfiguration`, either as a bare object or under a `badness`
+key.
+
+`lineWidth` and `indentWidth` serve as fallbacks. A discovered project
+`badness.toml` takes precedence over both, using built-in defaults for widths
+it omits. Without a project config, a global or `BADNESS_CONFIG` file overrides
+only the widths it explicitly sets, including values inherited through
+`extend`. If that file omits `indent-width`, your editor's tab size, sent with
+each formatting request, overrides `indentWidth`. Omitted widths otherwise
+fall back to these editor settings, then built-in defaults.
+
+The language server also reads the `[build]` section of `badness.toml` to
+locate the `.aux` files and PDF produced by compilation. See the [Configuration
+reference](../reference/configuration.md#build).
+
+### TEXMF discovery
+
+The language server discovers the installed TeX tree to resolve packages for
+document links, package hover, go-to-definition, and completion of installed
+package names. The TeX installation's location depends on the machine, so these
+settings come from the editor and apply only to language-server features.
+
+The `texmf` object has three optional keys.
+
+- `enabled` is a boolean and defaults to `true`. Set it to `false` to keep
+  package resolution local to the document's directory.
+- `roots` is an array of paths and defaults to `[]`. It adds TEXMF directories
+  ahead of the discovered ones. Use it for an installation that `kpsewhich`
+  can't see.
+- `useKpsewhich` is a boolean and defaults to `true`. Set it to `false` to
+  discover TEXMF roots using default paths only.
+
+```json
+{ "texmf": { "enabled": true, "roots": ["/opt/texmf"], "useKpsewhich": true } }
+```
+
+## Forward and inverse search
+
+Build your PDF with SyncTeX enabled. Run `latexmk -pdf -synctex=1`, or pass
+`-synctex=1` directly to `pdflatex` or `lualatex`. Use your existing build setup
+or an extension such as LaTeX Workshop.
+
+### Configuring the viewer
+
+Configure your PDF viewer through your editor's LSP settings. If your build
+places the PDF in a custom location, configure that path in
+[`[build]`](../reference/configuration.md#build).
+
+The `forwardSearch` object has these keys.
+
+- `executable` is the viewer program name or path. Badness spawns it directly,
+  so put flags and arguments in `args`.
+- `args` is a required array of strings. Each viewer uses its own arguments
+  for forward search.
+- `ipcDir` is an optional directory where inverse-search servers advertise
+  themselves. See [Inverse search in the language server guide](language-server.md#inverse-search).
+
+Each argument may contain these placeholders.
+
+| Placeholder | Expands to                       |
+| ----------- | -------------------------------- |
+| `%f`        | the `.tex` file the cursor is in |
+| `%p`        | the root document's PDF          |
+| `%l`        | the line number, counting from 1 |
+| `%%f`       | a literal `%f`                   |
+
+To pass an argument through without substitution, wrap the entire argument in
+double quotes. Badness strips the enclosing quotes before passing it on.
+
+Badness uses the same viewer settings as Texlab.
+
+| Viewer     | `executable`     | `args`                                                     |
+| ---------- | ---------------- | ---------------------------------------------------------- |
+| zathura    | `zathura`        | `["--synctex-forward", "%l:1:%f", "%p"]`                   |
+| Okular     | `okular`         | `["--unique", "file:%p#src:%l%f"]`                         |
+| SumatraPDF | `SumatraPDF`     | `["-reuse-instance", "%p", "-forward-search", "%f", "%l"]` |
+| Skim       | `displayline`    | `["%l", "%p", "%f"]`                                       |
+| Evince     | `evince-synctex` | `["-f", "%l", "%p", "\"code -g %f:%l\""]`                  |
+| qpdfview   | `qpdfview`       | `["--unique", "%p#src:%f:%l:1"]`                           |
+
+```json
+{
+  "forwardSearch": {
+    "executable": "zathura",
+    "args": ["--synctex-forward", "%l:1:%f", "%p"]
+  }
+}
+```
+
+### Triggering forward search
+
+Invoke your editor's forward-search command from the source line you want to
+find in the PDF. For status codes and troubleshooting, see [Triggering forward
+search](language-server.md#triggering-forward-search).
+
+### Inverse search
+
+Configure your viewer to run the command below. Substitute the viewer's own
+placeholders for the input file and line number.
+
+```sh
+badness inverse-search --input "%f" --line "%l"
+```
+
+For zathura, use this command.
+
+```sh
+zathura --synctex-editor-command "badness inverse-search --input %{input} --line %{line}"
+```
+
+Use `--line0` if your viewer counts lines from zero. `--line1` is a synonym for
+`--line`, so a Texlab configuration ports directly.
+
+Open the project in an editor whose LSP client supports `window/showDocument`
+before jumping back to the source. For workspace selection and IPC setup, see
+[Inverse search](language-server.md#inverse-search).

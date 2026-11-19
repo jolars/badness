@@ -2,9 +2,7 @@
 
 Badness brings formatting, linting, and language features to LaTeX and BibTeX
 editors through the Language Server Protocol. See [Editor
-setup](editor-setup.md) to connect your editor and the [Editor configuration
-reference](../reference/editor-configuration.md) for shared settings and PDF
-search.
+setup](editor-setup.md) to connect and configure your editor.
 
 ## Command completion
 
@@ -117,3 +115,54 @@ environment, the **Add column at end** code action appends a centered `c` column
 to the preamble and an empty trailing cell to every row. The action is withheld
 when the preamble uses unknown column types, a row has an ambiguous width, or
 the environment has been redefined, so it never applies a partial table rewrite.
+
+## Forward and inverse search
+
+Forward search jumps from a source line to the matching place in the compiled
+PDF. Badness passes the viewer the source file, the root document's PDF, and the
+line number. The viewer reads the SyncTeX data and maps the position. Inverse
+search starts in the viewer and sends the resolved source position to your
+editor. For build instructions and viewer settings, see [Forward and inverse
+search in Editor setup](editor-setup.md#forward-and-inverse-search).
+
+### Triggering forward search
+
+The server handles the custom request `textDocument/forwardSearch` with
+`{ textDocument, position }` parameters. It uses the same method name and
+parameters as Texlab, so a client written for Texlab works unchanged. The
+capability is advertised as `experimental.textDocumentForwardSearch`. The
+response includes a `status` field.
+
+- `0` means Badness launched the viewer.
+- `1` means the viewer failed to start.
+- `2` means the PDF is missing or the buffer has no path.
+- `3` means the viewer is unconfigured.
+
+For status `2`, save the source file and build the document. If the PDF already
+exists or forward search opens the wrong PDF, check how Badness identifies the
+root document. See [`root` in the configuration
+reference](../reference/configuration.md#root).
+
+### Inverse search
+
+The `badness inverse-search` command finds a running language server whose
+workspace contains the file and asks it to reveal the position using
+`window/showDocument`. Servers register for inverse search when their LSP
+clients support that request. The command reports when no server is listening.
+If several workspaces contain the file, the server with the longest matching
+workspace root wins, so nested projects resolve deterministically.
+
+Servers advertise themselves in `$BADNESS_IPC_DIR` when set. Otherwise they use
+a per-user directory under `$XDG_RUNTIME_DIR` or fall back to the temporary
+directory. The `forwardSearch.ipcDir` setting overrides the server's location.
+If you use it for a container or remote development setup, point the viewer's
+`badness inverse-search` command at the same directory with `--ipc-dir` or
+`$BADNESS_IPC_DIR`.
+
+Keep the directory path short on Unix. Badness logs an error if the socket path
+exceeds the platform limit of about 100 bytes. In the shared `/tmp` fallback,
+Badness uses a per-user directory with `0700` permissions and advertisements with
+`0600` permissions. It accepts only advertisements owned by the current user.
+
+SyncTeX maps the source as it was compiled. Save and rebuild after edits to
+bring source and PDF positions back into sync.

@@ -101,9 +101,10 @@ const legacy = JSON.parse(
   readFileSync(join(docsRoot, "tests/legacy-anchors.json"), "utf8"),
 );
 for (const [path, ids] of Object.entries(legacy)) {
-  const $ = pages.get(join(distRoot, path.replace(/\.md$/, ".html")));
+  const $ = pages.get(targetFor(new URL(pageUrl(path), origin)).file);
   for (const id of ids)
-    if (!hasId($, id)) errors.push(`${path}: missing legacy anchor #${id}`);
+    if (!$ || !hasId($, id))
+      errors.push(`${path}: missing legacy anchor #${id}`);
 }
 for (const [from, to] of Object.entries(aliases)) {
   const target = targetFor(new URL(from, origin));

@@ -27,7 +27,6 @@ const guide = [
 const reference = [
   ["CLI reference", "cli"],
   ["Configuration reference", "configuration"],
-  ["Editor configuration", "editor-configuration"],
   ["Lint rules", "linter-rules"],
   ["BibTeX lint rules", "bib-linter-rules"],
 ];

@@ -144,8 +144,8 @@ the whole file. An unclosed `off` region runs to the end of the file.
 
 Protected text keeps its original bytes, including line endings. Protected
 entries stay in place during sorting. Use `badness` in place of `badness-format`
-to suppress both formatting and linting. Open and close a region with the
-same directive family.
+to suppress both formatting and linting. Open and close a region with the same
+directive family.
 
 ## BibTeX field order
 

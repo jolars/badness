@@ -990,15 +990,15 @@ consumers.
 `% badness-format`, `% badness-lint`, and `% badness` select formatting,
 linting, or both. They share the verbs `skip`, `off`, `on`, and `skip-file`. The
 retired `% badness-ignore` spelling remains supported. BibTeX uses
-`@comment{...}` entries for entry, region, and file scopes. A `% badness-lint
-skip` inside a regular BibTeX entry uses the same field attachment the formatter
-uses when sorting fields.
+`@comment{...}` entries for entry, region, and file scopes. A
+`% badness-lint skip` inside a regular BibTeX entry uses the same field
+attachment the formatter uses when sorting fields.
 
 The resolver records each directive's range and outcome, including dangling
 `skip`, unmatched `on`, unclosed `off`, and unsupported forms. The
 `inert-suppression` rule reads these results instead of parsing comments again.
-Directive-like text on `.dtx` documentation margins and directives other than
-a lint-only `skip` in BibTeX field comments are recorded as unsupported.
+Directive-like text on `.dtx` documentation margins and directives other than a
+lint-only `skip` in BibTeX field comments are recorded as unsupported.
 
 Suppression requires containment in the resolved range. Mere overlap could
 otherwise suppress an ancestor containing most of the document. Anchors follow

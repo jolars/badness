@@ -196,15 +196,15 @@ Supply settings as `initializationOptions` at startup or through
 key.
 
 `lineWidth` and `indentWidth` serve as fallbacks. A discovered project
-`badness.toml` takes precedence over both, using built-in defaults for widths
-it omits. Without a project config, a global or `BADNESS_CONFIG` file overrides
-only the widths it explicitly sets, including values inherited through
-`extend`. If that file omits `indent-width`, your editor's tab size, sent with
-each formatting request, overrides `indentWidth`. Omitted widths otherwise
-fall back to these editor settings, then built-in defaults.
+`badness.toml` takes precedence over both, using built-in defaults for widths it
+omits. Without a project config, a global or `BADNESS_CONFIG` file overrides
+only the widths it explicitly sets, including values inherited through `extend`.
+If that file omits `indent-width`, your editor's tab size, sent with each
+formatting request, overrides `indentWidth`. Omitted widths otherwise fall back
+to these editor settings, then built-in defaults.
 
-The language server also reads the `[build]` section of `badness.toml` to
-locate the `.aux` files and PDF produced by compilation. See the [Configuration
+The language server also reads the `[build]` section of `badness.toml` to locate
+the `.aux` files and PDF produced by compilation. See the [Configuration
 reference](../reference/configuration.md#build).
 
 ### TEXMF discovery
@@ -244,33 +244,34 @@ The `forwardSearch` object has these keys.
 
 - `executable` is the viewer program name or path. Badness spawns it directly,
   so put flags and arguments in `args`.
-- `args` is a required array of strings. Each viewer uses its own arguments
-  for forward search.
+- `args` is a required array of strings. Each viewer uses its own arguments for
+  forward search.
 - `ipcDir` is an optional directory where inverse-search servers advertise
-  themselves. See [Inverse search in the language server guide](language-server.md#inverse-search).
+  themselves. See [Inverse search in the language server
+  guide](language-server.md#inverse-search).
 
 Each argument may contain these placeholders.
 
-| Placeholder | Expands to                       |
-| ----------- | -------------------------------- |
-| `%f`        | the `.tex` file the cursor is in |
-| `%p`        | the root document's PDF          |
-| `%l`        | the line number, counting from 1 |
-| `%%f`       | a literal `%f`                   |
+  | Placeholder | Expands to                       |
+  | ----------- | -------------------------------- |
+  | `%f`        | the `.tex` file the cursor is in |
+  | `%p`        | the root document's PDF          |
+  | `%l`        | the line number, counting from 1 |
+  | `%%f`       | a literal `%f`                   |
 
 To pass an argument through without substitution, wrap the entire argument in
 double quotes. Badness strips the enclosing quotes before passing it on.
 
 Badness uses the same viewer settings as Texlab.
 
-| Viewer     | `executable`     | `args`                                                     |
-| ---------- | ---------------- | ---------------------------------------------------------- |
-| zathura    | `zathura`        | `["--synctex-forward", "%l:1:%f", "%p"]`                   |
-| Okular     | `okular`         | `["--unique", "file:%p#src:%l%f"]`                         |
-| SumatraPDF | `SumatraPDF`     | `["-reuse-instance", "%p", "-forward-search", "%f", "%l"]` |
-| Skim       | `displayline`    | `["%l", "%p", "%f"]`                                       |
-| Evince     | `evince-synctex` | `["-f", "%l", "%p", "\"code -g %f:%l\""]`                  |
-| qpdfview   | `qpdfview`       | `["--unique", "%p#src:%f:%l:1"]`                           |
+  | Viewer     | `executable`     | `args`                                                     |
+  | ---------- | ---------------- | ---------------------------------------------------------- |
+  | zathura    | `zathura`        | `["--synctex-forward", "%l:1:%f", "%p"]`                   |
+  | Okular     | `okular`         | `["--unique", "file:%p#src:%l%f"]`                         |
+  | SumatraPDF | `SumatraPDF`     | `["-reuse-instance", "%p", "-forward-search", "%f", "%l"]` |
+  | Skim       | `displayline`    | `["%l", "%p", "%f"]`                                       |
+  | Evince     | `evince-synctex` | `["-f", "%l", "%p", "\"code -g %f:%l\""]`                  |
+  | qpdfview   | `qpdfview`       | `["--unique", "%p#src:%f:%l:1"]`                           |
 
 ```json
 {

@@ -79,8 +79,8 @@ Each has a bare counterpart that turns off the **formatter** at the same time:
 For layout only, use the `% badness-format` spellings described in
 [Formatting](formatting.md#turning-the-formatter-off).
 
-In `.bib` files, use an `@comment` entry to suppress lint for an entire entry,
-a region, or the whole file.
+In `.bib` files, use an `@comment` entry to suppress lint for an entire entry, a
+region, or the whole file.
 
 ```bib
 @comment{badness-lint skip missing-required-field: publisher long gone}
@@ -89,9 +89,9 @@ a region, or the whole file.
 
 Inside a regular bibliography entry, use `% badness-lint skip` to suppress lint
 for one field. A comment above a field applies to that field, and a comment at
-the end of a field's line applies to the field on that line. A comment within
-an assignment applies to that assignment. The formatter keeps the comment
-with its field when it sorts fields.
+the end of a field's line applies to the field on that line. A comment within an
+assignment applies to that assignment. The formatter keeps the comment with its
+field when it sorts fields.
 
 ```bib
 @misc{example,

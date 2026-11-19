@@ -161,8 +161,9 @@ If you use it for a container or remote development setup, point the viewer's
 
 Keep the directory path short on Unix. Badness logs an error if the socket path
 exceeds the platform limit of about 100 bytes. In the shared `/tmp` fallback,
-Badness uses a per-user directory with `0700` permissions and advertisements with
-`0600` permissions. It accepts only advertisements owned by the current user.
+Badness uses a per-user directory with `0700` permissions and advertisements
+with `0600` permissions. It accepts only advertisements owned by the current
+user.
 
 SyncTeX maps the source as it was compiled. Save and rebuild after edits to
 bring source and PDF positions back into sync.

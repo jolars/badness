@@ -11,8 +11,10 @@ use std::sync::Arc;
 
 use rowan::{TextRange, TextSize};
 
-use crate::ast::{AstNode, Command, Environment, Group, command_name};
-use crate::parser::lexer::{ExplToggle, expl_toggle};
+use crate::ast::{
+    AstNode, AstToken, Command, Environment, Group, command_name, control_word_range,
+};
+use crate::parser::lexer::{ExplToggle, docstrip_discards_suffix, expl_toggle};
 use crate::semantic::expl3::{Expl3Slot, expl3_slots};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode, is_trivia};
 
@@ -23,6 +25,10 @@ pub struct Expl3Index {
 
 pub struct Call {
     pub name: String,
+    pub offset: TextSize,
+    /// Whether this call is nested for variable scope linting. Unknown bodies
+    /// have no context, even when their argument shapes are recognizable.
+    pub variable_context: Option<bool>,
     pub arguments: Vec<Argument>,
     /// Actual message parameters after the enclosing definitions' hash escapes.
     pub message_parameters: Vec<(TextRange, u8)>,
@@ -42,6 +48,7 @@ struct Stream {
     elements: VecDeque<SyntaxElement>,
     definitions: Arc<[u8]>,
     active: bool,
+    variable_context: Option<bool>,
 }
 
 impl Expl3Index {
@@ -58,34 +65,79 @@ impl Expl3Index {
 
     pub fn build(root: &SyntaxNode) -> Self {
         let mut index = Self::default();
-        let documentation = root
+        let mut guard_lines = Vec::new();
+        let mut excluded_lines = Vec::new();
+        let mut guard = None;
+        let mut excluded_start = None;
+        let mut has_doc_margin = false;
+        for token in root
             .descendants_with_tokens()
-            .any(|el| el.kind() == SyntaxKind::DOC_MARGIN);
-        // Docstrip extracts only macrocode bodies. Documentation can itself
-        // contain live-looking expl3 examples, including syntax toggles.
-        let mut pending = if documentation {
-            root.descendants()
-                .filter_map(Environment::cast)
-                .filter(|env| {
-                    env.name()
-                        .is_some_and(|name| matches!(name.as_str(), "macrocode" | "macrocode*"))
-                })
-                .map(|env| environment_stream(env.syntax(), Arc::from([]), true))
-                .collect()
-        } else {
-            vec![Stream {
-                elements: root.children_with_tokens().collect(),
-                definitions: Arc::from([]),
-                active: false,
-            }]
+            .filter_map(|el| el.into_token())
+        {
+            let start = token.text_range().start();
+            match token.kind() {
+                SyntaxKind::DOC_MARGIN => {
+                    has_doc_margin = true;
+                    excluded_start = Some(start);
+                }
+                SyntaxKind::GUARD => {
+                    guard = Some(start);
+                    if docstrip_discards_suffix(token.text()) {
+                        excluded_start = Some(token.text_range().end());
+                    }
+                }
+                _ => {}
+            }
+            if (guard.is_some() || excluded_start.is_some())
+                && let Some(newline) = token.text().find(['\n', '\r'])
+            {
+                let end = start + TextSize::of(&token.text()[..newline]);
+                if let Some(start) = guard.take() {
+                    guard_lines.push(TextRange::new(start, end));
+                }
+                if let Some(start) = excluded_start.take() {
+                    excluded_lines.push(TextRange::new(start, end));
+                }
+            }
+        }
+        let end = root.text_range().end();
+        if let Some(start) = guard {
+            guard_lines.push(TextRange::new(start, end));
+        }
+        if let Some(start) = excluded_start {
+            excluded_lines.push(TextRange::new(start, end));
+        }
+        excluded_lines.retain(|line| !line.is_empty());
+        let overlaps_excluded_line = |range: TextRange| {
+            let next = excluded_lines.partition_point(|line| line.end() <= range.start());
+            excluded_lines
+                .get(next)
+                .is_some_and(|line| line.start() < range.end())
         };
+
+        let mut pending = vec![Stream {
+            elements: root.children_with_tokens().collect(),
+            definitions: Arc::from([]),
+            active: false,
+            variable_context: Some(false),
+        }];
         while let Some(mut stream) = pending.pop() {
             let mut known_boundary = true;
+            let mut group_starts = Vec::new();
+            let mut groups = Vec::new();
+            let mut offsets = Vec::new();
+            let mut branches = Vec::new();
             while let Some(element) = stream.elements.pop_front() {
+                if !known_boundary {
+                    group_starts.clear();
+                }
                 let Some(node) = element.as_node() else {
                     // A parameter or expansion token at statement position may
                     // consume subsequent commands. Trivia cannot restore proof.
-                    if stream.active && !is_stream_trivia(element.kind()) {
+                    if stream.active
+                        && !is_stream_trivia(element.kind())
+                        && !overlaps_excluded_line(element.text_range())
+                    {
                         known_boundary = false;
                     }
                     continue;
@@ -106,27 +158,42 @@ impl Expl3Index {
                         let Some(env) = Environment::cast(node.clone()) else {
                             continue;
                         };
-                        let Some(name) = env.name() else { continue };
-                        if known_boundary
-                            && matches!(name.as_str(), "document" | "macrocode" | "macrocode*")
+                        let Some(begin) = env.begin() else { continue };
+                        let Some(name) = begin.name() else { continue };
+                        let macrocode = matches!(name.as_str(), "macrocode" | "macrocode*");
+                        if (macrocode && (known_boundary || has_doc_margin))
+                            || (known_boundary
+                                && name == "document"
+                                && !overlaps_excluded_line(begin.syntax().text_range()))
                         {
-                            pending.push(environment_stream(
+                            let mut body = environment_stream(
                                 node,
                                 stream.definitions.clone(),
-                                stream.active || name.starts_with("macrocode"),
-                            ));
+                                stream.active || macrocode,
+                            );
+                            body.variable_context = stream.variable_context;
+                            pending.push(body);
                         }
                     }
                     SyntaxKind::GROUP if known_boundary => {
-                        if let Some(group) = Group::cast(node.clone()).filter(closed_group) {
-                            pending.push(body_stream(
-                                &group,
-                                stream.definitions.clone(),
-                                stream.active,
-                            ));
+                        if let Some(group) = Group::cast(node.clone()).filter(closed_group)
+                            && !overlaps_excluded_line(TextRange::at(
+                                node.text_range().start(),
+                                TextSize::from(1),
+                            ))
+                        {
+                            let mut body =
+                                body_stream(&group, stream.definitions.clone(), stream.active);
+                            body.variable_context = stream.variable_context.map(|_| true);
+                            pending.push(body);
                         }
                     }
                     SyntaxKind::COMMAND => {
+                        if overlaps_excluded_line(
+                            control_word_range(node).unwrap_or_else(|| node.text_range()),
+                        ) {
+                            continue;
+                        }
                         let Some(name) = command_name(node) else {
                             known_boundary &= !stream.active;
                             continue;
@@ -151,7 +218,26 @@ impl Expl3Index {
                             known_boundary &= !stream.active;
                             continue;
                         };
+                        if call.arguments.iter().any(|argument| {
+                            argument
+                                .elements
+                                .iter()
+                                .any(|element| overlaps_excluded_line(element.text_range()))
+                        }) {
+                            known_boundary = false;
+                            continue;
+                        }
                         stream.active = true;
+                        let offset = call.offset;
+                        match call.name.as_str() {
+                            "group_begin:" => group_starts.push(offset),
+                            "group_end:" => {
+                                if let Some(start) = group_starts.pop() {
+                                    groups.push(TextRange::new(start, offset));
+                                }
+                            }
+                            _ => {}
+                        }
                         if call.name.starts_with("exp_") || call.name.starts_with("use:") {
                             // Expansion drivers can expose a head that consumes
                             // further siblings beyond the driver's own argspec.
@@ -161,13 +247,16 @@ impl Expl3Index {
                         if let Some((body, count)) = definition_body(&call, &stream.definitions) {
                             let mut definitions = stream.definitions.to_vec();
                             definitions.push(count);
-                            pending.push(body_stream(&body, definitions.into(), true));
+                            let mut body = body_stream(&body, definitions.into(), true);
+                            body.variable_context = stream.variable_context.map(|_| true);
+                            pending.push(body);
                         }
                         for argument in &call.arguments {
                             if matches!(argument.specifier, b'T' | b'F')
                                 && let Some(group) = argument.group()
                             {
-                                pending.push(body_stream(&group, stream.definitions.clone(), true));
+                                let body = body_stream(&group, stream.definitions.clone(), true);
+                                branches.push((offset, recognized_branch_owner(&call.name), body));
                             }
                         }
                         if is_message_definition(&call.name) {
@@ -177,17 +266,77 @@ impl Expl3Index {
                                 }
                             }
                         }
-                        index.calls.insert(node.text_range().start(), call);
+                        offsets.push(offset);
+                        index.calls.insert(offset, call);
                     }
                     _ => {
-                        if stream.active {
+                        if stream.active
+                            && !overlaps_excluded_line(TextRange::at(
+                                node.text_range().start(),
+                                TextSize::from(1),
+                            ))
+                        {
                             known_boundary = false;
                         }
                     }
                 }
             }
+            // Match grouping markers before assigning context to calls and branches.
+            groups.sort_unstable_by_key(|range| (range.start(), range.end()));
+            let mut groups = groups.into_iter().peekable();
+            let mut proven_end = TextSize::default();
+            let mut uncertain_end = TextSize::default();
+            for offset in offsets {
+                while groups.peek().is_some_and(|range| range.start() <= offset) {
+                    let range = groups.next().unwrap();
+                    let next_guard =
+                        guard_lines.partition_point(|line| line.end() <= range.start());
+                    // A guard on either marker's line or between the markers
+                    // may change which groups are paired in the extracted file.
+                    if guard_lines
+                        .get(next_guard)
+                        .is_some_and(|line| line.start() <= range.end())
+                    {
+                        uncertain_end = uncertain_end.max(range.end());
+                    } else {
+                        proven_end = proven_end.max(range.end());
+                    }
+                }
+                index.calls.get_mut(&offset).unwrap().variable_context =
+                    stream.variable_context.and_then(|nested| {
+                        if nested || offset < proven_end {
+                            Some(true)
+                        } else if offset < uncertain_end {
+                            None
+                        } else {
+                            Some(false)
+                        }
+                    });
+            }
+            for (offset, recognized, mut body) in branches {
+                if recognized {
+                    body.variable_context = index.calls[&offset].variable_context;
+                }
+                pending.push(body);
+            }
         }
         index
+    }
+}
+
+fn recognized_branch_owner(name: &str) -> bool {
+    let Some((stem, spec)) = name.split_once(':') else {
+        return false;
+    };
+    match stem {
+        "bool_if" => matches!(
+            spec,
+            "NT" | "NF" | "NTF" | "cT" | "cF" | "cTF" | "nT" | "nF" | "nTF"
+        ),
+        "tl_if_empty" | "seq_if_empty" | "clist_if_empty" | "prop_if_empty" => {
+            matches!(spec, "NT" | "NF" | "NTF" | "cT" | "cF" | "cTF")
+        }
+        _ => false,
     }
 }
 
@@ -199,6 +348,7 @@ fn environment_stream(node: &SyntaxNode, definitions: Arc<[u8]>, active: bool) -
             .collect(),
         definitions,
         active,
+        variable_context: Some(false),
     }
 }
 
@@ -254,6 +404,7 @@ fn body_stream(group: &Group, definitions: Arc<[u8]>, active: bool) -> Stream {
         elements,
         definitions,
         active,
+        variable_context: None,
     }
 }
 
@@ -332,6 +483,8 @@ fn read_call(node: &SyntaxNode) -> Option<Call> {
     }
     Some(Call {
         name,
+        offset: node.text_range().start(),
+        variable_context: None,
         arguments,
         message_parameters: Vec::new(),
     })
@@ -349,6 +502,10 @@ impl Argument {
     /// different structural proofs. A command somewhere in a group is not
     /// enough to establish a single control-sequence argument.
     pub fn name(&self) -> Option<String> {
+        Some(self.literal_name()?.text)
+    }
+
+    pub fn literal_name(&self) -> Option<Literal> {
         match self.specifier {
             b'N' => {
                 let mut elements = self.elements.clone();
@@ -362,16 +519,27 @@ impl Argument {
                         })
                         .collect();
                 }
-                if elements.len() != 1 {
+                let [element] = elements.as_slice() else {
                     return None;
-                }
-                let command = Command::cast(elements[0].as_node()?.clone())?;
-                if command.syntax().children_with_tokens().count() != 1 {
-                    return None;
-                }
-                Some(command.name()?.to_string())
+                };
+                let token = match element {
+                    SyntaxElement::Node(node) if node.children_with_tokens().count() == 1 => {
+                        Command::cast(node.clone())?
+                            .control_word()?
+                            .syntax()
+                            .clone()
+                    }
+                    SyntaxElement::Token(token) if token.kind() == SyntaxKind::CONTROL_WORD => {
+                        token.clone()
+                    }
+                    _ => return None,
+                };
+                Some(Literal {
+                    text: token.text().strip_prefix('\\')?.to_owned(),
+                    range: token.text_range(),
+                })
             }
-            b'c' => Some(self.literal()?.text),
+            b'c' => self.literal(),
             _ => None,
         }
     }

@@ -275,6 +275,10 @@ pub fn expl_toggle(text: &str) -> Option<ExplToggle> {
     }
 }
 
+pub(crate) fn docstrip_discards_suffix(guard: &str) -> bool {
+    guard[2..].starts_with(['*', '/', '<', '@'])
+}
+
 pub(crate) fn dtx_has_expl_signal(input: &str) -> bool {
     input.contains("\\ProvidesExpl")
         || input
@@ -326,6 +330,7 @@ struct Lexer<'a> {
     expl_syntax: bool,
     at_line_start: bool,
     in_doc_line: bool,
+    discarded_suffix_end: usize,
     short_verbs: Vec<char>,
     macrocode: Option<MacrocodeSave>,
     pending: Option<Pending>,
@@ -356,6 +361,7 @@ impl<'a> Lexer<'a> {
             expl_syntax: false,
             at_line_start: true,
             in_doc_line: false,
+            discarded_suffix_end: 0,
             short_verbs: if config.dtx { vec!['|'] } else { Vec::new() },
             macrocode: None,
             pending: None,
@@ -457,7 +463,12 @@ impl<'a> Lexer<'a> {
             return false;
         }
         let len = 2 + rel + 1;
-        self.push(SyntaxKind::GUARD, &rest[..len]);
+        let guard = &rest[..len];
+        if docstrip_discards_suffix(guard) {
+            let end = rest[len..].find(['\n', '\r']).unwrap_or(rest.len() - len);
+            self.discarded_suffix_end = self.pos + len + end;
+        }
+        self.push(SyntaxKind::GUARD, guard);
         self.pos += len;
         self.at_line_start = false;
         true
@@ -637,8 +648,16 @@ impl<'a> Lexer<'a> {
                 }
             }
             _ => {
-                if let Some(toggle) = expl_toggle(text) {
-                    self.expl_syntax = matches!(toggle, ExplToggle::On);
+                if !self.in_doc_line
+                    && self.pos >= self.discarded_suffix_end
+                    && let Some(toggle) = expl_toggle(text)
+                {
+                    self.expl_syntax = toggle == ExplToggle::On;
+                    // DocStrip removes the frame, so explicit toggles also
+                    // establish the mode of subsequent extracted lines.
+                    if let Some(saved) = &mut self.macrocode {
+                        saved.expl_syntax = self.expl_syntax;
+                    }
                 }
             }
         }
@@ -1589,6 +1608,41 @@ mod tests {
         assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\seq_new:N")));
         assert!(seen.iter().any(|(k, _)| *k == SyntaxKind::UNDERSCORE));
         assert!(seen.contains(&(SyntaxKind::CONTROL_WORD, "\\tl_set:Nn")));
+    }
+
+    #[test]
+    fn explicit_docstrip_toggles_survive_macrocode_frames() {
+        let source = r"%<@@=demo>
+% \ExplSyntaxOn
+%    \begin{macrocode}
+\seq_new:N
+%    \end{macrocode}
+\plain_before:n
+%    \begin{macrocode}
+\ExplSyntaxOn
+%<*pkg>\ExplSyntaxOff
+%    \end{macrocode}
+\active_after:n
+%    \begin{macrocode}
+\ExplSyntaxOff
+%    \end{macrocode}
+\plain_after:n";
+        let tokens = lex_dtx(source);
+        assert_eq!(
+            tokens
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<String>(),
+            source
+        );
+        let words: Vec<_> = tokens
+            .iter()
+            .filter(|token| token.kind == SyntaxKind::CONTROL_WORD)
+            .map(|token| token.text.as_str())
+            .collect();
+        assert!(words.contains(&"\\seq_new:N"));
+        assert!(words.contains(&"\\active_after:n"));
+        assert_eq!(words.iter().filter(|&&word| word == "\\plain").count(), 2);
     }
 
     #[test]

@@ -1,0 +1,25 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `expl3-deprecated-command`
+
+Report literal references to deprecated control sequences in expl3 code, using the LaTeX3 kernel deprecation list pinned to the 2026-01-19 release. The warning includes the deprecation date.
+
+This rule is **enabled by default**.
+
+A deprecated expl3 function:
+
+```tex
+\ExplSyntaxOn
+\str_lower_case:n { ABC }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-deprecated-command
+ --> example.tex:2:1
+  |
+2 | \str_lower_case:n { ABC }
+  | ^^^^^^^^^^^^^^^^^ `\str_lower_case:n` was deprecated in LaTeX3 on 2020-01-03
+```

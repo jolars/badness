@@ -166,8 +166,9 @@ The `add-lint-rule` workflow automates these steps:
 Several files in `crates/badness-parser/data/` are generated from pinned
 upstream sources by `scripts/gen_*.py` and guarded by paired `task …:check` and
 `:sync` targets: `cwl_signatures.json`, the package and class name lists with
-`package_metadata.json`, and `bib_fields.json`. Regenerate them through their
-tasks rather than editing the generated data by hand. `signatures.json`,
+`package_metadata.json`, and `bib_fields.json`. The linter's expl3 deprecation
+table follows the same workflow. Regenerate these files through their tasks
+rather than editing them by hand. `signatures.json`,
 `colors.json`, and `tikz_libraries.json` are curated by hand and may be edited
 directly.
 

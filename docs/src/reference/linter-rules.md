@@ -340,6 +340,28 @@ warning: ellipsis
   |        ^^^ literal `...` ellipsis; use `\cdots` in math (`\ldots` for lists, `\cdots` for operator chains)
 ```
 
+## `expl3-deprecated-command`
+
+Report literal references to deprecated control sequences in expl3 code, using the LaTeX3 kernel deprecation list pinned to the 2026-01-19 release. The warning includes the deprecation date.
+
+This rule is **enabled by default**.
+
+A deprecated expl3 function:
+
+```tex
+\ExplSyntaxOn
+\str_lower_case:n { ABC }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-deprecated-command
+ --> example.tex:2:1
+  |
+2 | \str_lower_case:n { ABC }
+  | ^^^^^^^^^^^^^^^^^ `\str_lower_case:n` was deprecated in LaTeX3 on 2020-01-03
+```
+
 ## `expl3-invalid-message-parameter`
 
 Flag `#5` through `#9` in either text argument of a literal expl3 `msg_new`, `msg_set`, or `msg_gset` definition. Messages accept only `#1` through `#4`. Escaped hashes and parameters belonging to an enclosing function definition are distinguished from message parameters. Checks cover recognized executable calls and unexpanded function bodies; stored token lists, expanded text arguments, and unresolved calls stay silent. Report-only: the intended message argument is unknown.
@@ -421,6 +443,72 @@ warning: expl3-variant-type
   |
 2 | \cs_generate_variant:Nn \demo_use:Nn { nn }
   |                                        ^^ deprecated expl3 variant conversion from `Nn` to `nn`
+```
+
+## `expl3-variable-mutability`
+
+Report constant declarations using a variable name and assignments to a constant name.
+
+This rule is **enabled by default**.
+
+A variable is declared as a constant:
+
+```tex
+\ExplSyntaxOn
+\tl_const:Nn \g_demo_tl { value }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-variable-mutability
+ --> example.tex:2:14
+  |
+2 | \tl_const:Nn \g_demo_tl { value }
+  |              ^^^^^^^^^^ creating a constant with variable name `\g_demo_tl`
+```
+
+## `expl3-variable-scope`
+
+Report local assignments to global variables and global assignments to local variables in recognized nested expl3 code. Top-level assignments are exempt.
+
+This rule is **enabled by default**.
+
+A function assigns locally to a global variable:
+
+```tex
+\ExplSyntaxOn
+\cs_new_protected:Nn \demo: { \tl_set:Nn \g_demo_tl { value } }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-variable-scope
+ --> example.tex:2:42
+  |
+2 | \cs_new_protected:Nn \demo: { \tl_set:Nn \g_demo_tl { value } }
+  |                                          ^^^^^^^^^^ assigning locally to global variable `\g_demo_tl`
+```
+
+## `expl3-variable-type`
+
+Report incompatible types on literal variable operands of recognized expl3 kernel operations. Checks use the variable suffix and the operand role.
+
+This rule is **enabled by default**.
+
+A sequence operation receives an integer variable:
+
+```tex
+\ExplSyntaxOn
+\seq_count:N \l_demo_int
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-variable-type
+ --> example.tex:2:14
+  |
+2 | \seq_count:N \l_demo_int
+  |              ^^^^^^^^^^^ expl3 operation `\seq_count:N` expects type `seq` for this operand, which has type `int`
 ```
 
 ## `extra-alignment-tab`

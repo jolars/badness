@@ -1,0 +1,25 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `expl3-variable-mutability`
+
+Report constant declarations using a variable name and assignments to a constant name.
+
+This rule is **enabled by default**.
+
+A variable is declared as a constant:
+
+```tex
+\ExplSyntaxOn
+\tl_const:Nn \g_demo_tl { value }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-variable-mutability
+ --> example.tex:2:14
+  |
+2 | \tl_const:Nn \g_demo_tl { value }
+  |              ^^^^^^^^^^ creating a constant with variable name `\g_demo_tl`
+```

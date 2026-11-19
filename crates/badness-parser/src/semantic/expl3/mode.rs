@@ -1,7 +1,9 @@
-//! Expl3 command positions for completion, following the lexer's letter modes.
+//! Expl3 command positions following the lexer's letter modes.
 
 use crate::ast::{AstNode, Environment};
-use crate::parser::lexer::{ExplToggle, dtx_has_expl_signal, expl_toggle};
+use crate::parser::lexer::{
+    ExplToggle, docstrip_discards_suffix, dtx_has_expl_signal, expl_toggle,
+};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use rowan::{TextSize, WalkEvent};
 
@@ -12,10 +14,20 @@ pub struct ModeIndex {
 
 impl ModeIndex {
     pub fn build(root: &SyntaxNode, dtx: bool) -> Self {
+        Self::build_view(root, dtx, false)
+    }
+
+    /// Include ordinary and inline-guarded DocStrip code in the lint view.
+    pub fn build_for_lint(root: &SyntaxNode, dtx: bool) -> Self {
+        Self::build_view(root, dtx, true)
+    }
+
+    fn build_view(root: &SyntaxNode, dtx: bool, lint: bool) -> Self {
         let implicit = dtx && dtx_has_expl_signal(&root.text().to_string());
         let mut index = Self::default();
         let mut active = false;
         let mut doc_line = false;
+        let mut discarded_suffix = false;
         let mut saved = Vec::new();
         for event in root.preorder_with_tokens() {
             match event {
@@ -28,16 +40,30 @@ impl ModeIndex {
                 }
                 WalkEvent::Enter(SyntaxElement::Token(token)) => match token.kind() {
                     SyntaxKind::DOC_MARGIN => doc_line = true,
-                    SyntaxKind::NEWLINE => doc_line = false,
+                    SyntaxKind::GUARD if dtx => {
+                        discarded_suffix = docstrip_discards_suffix(token.text());
+                    }
+                    SyntaxKind::NEWLINE => {
+                        doc_line = false;
+                        discarded_suffix = false;
+                    }
                     SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL => {
-                        if active && !doc_line && (!dtx || !saved.is_empty()) {
+                        let executable = !doc_line && !discarded_suffix;
+                        if active && executable && (!dtx || lint || !saved.is_empty()) {
                             index.commands.push(token.text_range().start());
                         }
-                        if token.kind() == SyntaxKind::CONTROL_WORD
+                        if executable
+                            && token.kind() == SyntaxKind::CONTROL_WORD
                             && let Some(toggle) = expl_toggle(token.text())
                         {
                             active = toggle == ExplToggle::On;
+                            if let Some(outer) = saved.last_mut() {
+                                *outer = active;
+                            }
                         }
+                    }
+                    _ if discarded_suffix && token.text().contains(['\n', '\r']) => {
+                        discarded_suffix = false;
                     }
                     _ => {}
                 },

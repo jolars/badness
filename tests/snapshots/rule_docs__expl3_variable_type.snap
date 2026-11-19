@@ -1,0 +1,25 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `expl3-variable-type`
+
+Report incompatible types on literal variable operands of recognized expl3 kernel operations. Checks use the variable suffix and the operand role.
+
+This rule is **enabled by default**.
+
+A sequence operation receives an integer variable:
+
+```tex
+\ExplSyntaxOn
+\seq_count:N \l_demo_int
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-variable-type
+ --> example.tex:2:14
+  |
+2 | \seq_count:N \l_demo_int
+  |              ^^^^^^^^^^^ expl3 operation `\seq_count:N` expects type `seq` for this operand, which has type `int`
+```

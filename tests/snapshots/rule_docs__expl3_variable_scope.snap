@@ -1,0 +1,25 @@
+---
+source: tests/rule_docs.rs
+expression: render_rule_doc(rule.as_ref())
+---
+## `expl3-variable-scope`
+
+Report local assignments to global variables and global assignments to local variables in recognized nested expl3 code. Top-level assignments are exempt.
+
+This rule is **enabled by default**.
+
+A function assigns locally to a global variable:
+
+```tex
+\ExplSyntaxOn
+\cs_new_protected:Nn \demo: { \tl_set:Nn \g_demo_tl { value } }
+\ExplSyntaxOff
+```
+
+```text
+warning: expl3-variable-scope
+ --> example.tex:2:42
+  |
+2 | \cs_new_protected:Nn \demo: { \tl_set:Nn \g_demo_tl { value } }
+  |                                          ^^^^^^^^^^ assigning locally to global variable `\g_demo_tl`
+```

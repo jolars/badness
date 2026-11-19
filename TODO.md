@@ -145,12 +145,6 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Linter
 
-- [x] **Extend `unreferenced-label` range inference (issue #195).** A literal
-  `\\eqref{A}--\\eqref{D}` also uses intermediate labels in numbered `align` and
-  `gather` rows and across ordered, literal includes. Manual tags, skipped
-  numbers, counter changes, and ambiguous include order prevent inference.
-  Inferred uses remain separate from explicit keys for navigation and rename.
-
 ### Conditional reasoning for duplicate checks
 
 Extend the shared `ConditionalIndex` used by `duplicate-label` and
@@ -230,14 +224,15 @@ navigation and semantic resolution remain open.
   attachment policy, macro expansion, or catcode evaluation. Further operation
   semantics can extend this conservative foundation.
 
-- [ ] **Add deprecation and variable checks next.** Generate a pinned
-  deprecation table from LaTeX3's `l3obsolete.txt` for `W202`. Variable type
-  compatibility (`T422`), constant mutation (`E417`/`E418`), and local/global
-  assignment mismatches (`E420`/`E421`) need recognized operation semantics and
-  code context, not just name-prefix matching. Explcheck, for example, exempts
-  top-level assignments from its local/global mismatch checks. Malformed names
-  and braced `N` or unbraced `n` arguments (`W303`/`W302`) are lower-priority
-  style candidates; the latter shapes are not necessarily errors.
+- [x] **Add deprecation and core variable checks.** Added lexical warnings
+  from the pinned LaTeX3 deprecation list (W202) and checks for operand types
+  (T422), constant mutation (E417/E418), and assignment scope (E420/E421).
+  Variable checks cover recognized calls in the core collection, boolean, and
+  numeric families. Scope warnings exempt top-level assignments.
+
+- [ ] **Consider expl3 argument and naming style checks.** Malformed names,
+  braced `N` arguments, and unbraced `n` arguments are lower-priority candidates.
+  The argument shapes can be valid TeX.
 
 - [ ] **Index expl3 definitions and uses before adding resolution checks.**
   Cover functions, generated variants, variables, constants, and messages.
@@ -622,15 +617,3 @@ a file and a line, never a coordinate.
   removal issue) once the formatter/linter call sites migrate — two parallel
   APIs for the same reads with no forcing function is a standing invitation
   for new code to pick the wrong one.
-
-## Documentation site
-
-- [x] Keep editor recipes together in `docs/src/guide/editor-setup.md`; move
-  language-server capabilities and shared editor configuration to dedicated
-  guide and reference pages. Preserve published URLs and anchors.
-- [x] Shorten `docs/src/guide/getting-started.md` by moving detailed usage and
-  output explanations to Formatting and Linting, then linking to those guides.
-  Update the current Formatting links back to Getting Started at the same time.
-- [ ] Consolidate configuration setup between `docs/src/guide/configuration.md`
-  and `docs/src/reference/configuration.md`. Keep recipes in the guide and
-  exhaustive settings, defaults, and resolution rules in the reference.

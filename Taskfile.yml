@@ -101,6 +101,16 @@ tasks:
     cmds:
       - python3 scripts/gen_math_symbols.py --write
 
+  expl3-deprecations:check:
+    desc: Check the generated expl3 deprecations against the pinned LaTeX3 source
+    cmds:
+      - python3 scripts/gen_expl3_deprecations.py
+
+  expl3-deprecations:sync:
+    desc: Regenerate the expl3 deprecation table
+    cmds:
+      - python3 scripts/gen_expl3_deprecations.py --write
+
   aur:push:
     desc: "Manually publish badness-bin to the AUR (CI fallback; args: [version] [pkgrel])"
     cmds:

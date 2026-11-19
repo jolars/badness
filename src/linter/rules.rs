@@ -29,8 +29,12 @@ pub mod dollar_display_math;
 pub mod duplicate_label;
 pub mod duplicate_package;
 pub mod ellipsis;
+pub mod expl3_deprecated_command;
 pub mod expl3_invalid_message_parameter;
 pub mod expl3_protected_predicate;
+pub mod expl3_variable_mutability;
+pub mod expl3_variable_scope;
+pub mod expl3_variable_type;
 pub mod expl3_variant_type;
 pub mod extra_alignment_tab;
 pub mod extra_math_linebreak;
@@ -70,8 +74,12 @@ pub use dollar_display_math::DollarDisplayMath;
 pub use duplicate_label::DuplicateLabel;
 pub use duplicate_package::DuplicatePackage;
 pub use ellipsis::Ellipsis;
+pub use expl3_deprecated_command::Expl3DeprecatedCommand;
 pub use expl3_invalid_message_parameter::Expl3InvalidMessageParameter;
 pub use expl3_protected_predicate::Expl3ProtectedPredicate;
+pub use expl3_variable_mutability::Expl3VariableMutability;
+pub use expl3_variable_scope::Expl3VariableScope;
+pub use expl3_variable_type::Expl3VariableType;
 pub use expl3_variant_type::Expl3VariantType;
 pub use extra_alignment_tab::ExtraAlignmentTab;
 pub use extra_math_linebreak::ExtraMathLinebreak;
@@ -143,6 +151,8 @@ pub struct RuleContext<'a> {
     /// Executable expl3 calls and their argument context, shared by the three
     /// semantic rules instead of rediscovered by each rule's traversal.
     expl3_calls: OnceLock<super::expl3::Expl3Index>,
+    expl3_variables: OnceLock<super::expl3::VariableIndex>,
+    expl3_lexical: OnceLock<badness_parser::semantic::expl3::mode::ModeIndex>,
     /// The document's user command/environment definitions ([`scan_definitions`]),
     /// shared by the rules that must not flag a name the file itself redefines
     /// (`missing-required-argument`, `deprecated-command`, `primitive-command`).
@@ -178,6 +188,8 @@ impl<'a> RuleContext<'a> {
             conditionals: super::conditional::ConditionalIndex::compute(root),
             expl3_regions: OnceLock::new(),
             expl3_calls: OnceLock::new(),
+            expl3_variables: OnceLock::new(),
+            expl3_lexical: OnceLock::new(),
             user_definitions: OnceLock::new(),
             suppressions: crate::directives::Suppressions::build(root),
         }
@@ -233,10 +245,37 @@ impl<'a> RuleContext<'a> {
             .get_or_init(|| scan_definitions(self.root))
     }
 
+    pub(crate) fn in_expl3_lexical_mode(&self, offset: rowan::TextSize) -> bool {
+        self.expl3_lexical
+            .get_or_init(|| {
+                badness_parser::semantic::expl3::mode::ModeIndex::build_for_lint(
+                    self.root,
+                    crate::file_discovery::file_kind_or_tex(self.path)
+                        .lex_config()
+                        .dtx,
+                )
+            })
+            .at_command(offset)
+    }
+
+    pub(crate) fn expl3_variable_findings(&self, node: &SyntaxNode) -> &[super::expl3::Finding] {
+        if !crate::ast::command_name(node)
+            .is_some_and(|name| super::expl3::VariableIndex::recognizes(&name))
+        {
+            return &[];
+        }
+        self.expl3_variables
+            .get_or_init(|| super::expl3::VariableIndex::build(self.expl3_call_index()))
+            .get(node.text_range().start())
+    }
+
     pub(crate) fn expl3_call(&self, node: &SyntaxNode) -> Option<&super::expl3::Call> {
+        self.expl3_call_index().get(node)
+    }
+
+    fn expl3_call_index(&self) -> &super::expl3::Expl3Index {
         self.expl3_calls
             .get_or_init(|| super::expl3::Expl3Index::build(self.root))
-            .get(node)
     }
 }
 
@@ -754,9 +793,13 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(PrimitiveCommand),
         Box::new(DollarDisplayMath),
         Box::new(Ellipsis),
+        Box::new(Expl3DeprecatedCommand),
         Box::new(Expl3InvalidMessageParameter),
         Box::new(Expl3ProtectedPredicate),
         Box::new(Expl3VariantType),
+        Box::new(Expl3VariableMutability),
+        Box::new(Expl3VariableScope),
+        Box::new(Expl3VariableType),
         Box::new(ExtraAlignmentTab),
         Box::new(ExtraMathLinebreak),
         Box::new(HardCodedReference),
@@ -852,9 +895,13 @@ pub const ALL_RULE_IDS: &[&str] = &[
     "primitive-command",
     "dollar-display-math",
     "ellipsis",
+    "expl3-deprecated-command",
     "expl3-invalid-message-parameter",
     "expl3-protected-predicate",
     "expl3-variant-type",
+    "expl3-variable-mutability",
+    "expl3-variable-scope",
+    "expl3-variable-type",
     "extra-alignment-tab",
     "extra-math-linebreak",
     "hard-coded-reference",

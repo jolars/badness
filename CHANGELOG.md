@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.30.0](https://github.com/jolars/badness/compare/v0.29.1...v0.30.0) (2026-11-20)
+
+### Features
+
+- lint braced expl3 `N` arguments on opt-in ([`2a99f95`](https://github.com/jolars/badness/commit/2a99f9523890efc1de658d5b41935e8e69bb2233))
+- lint expl3 deprecations and variable operations ([`b8deb3b`](https://github.com/jolars/badness/commit/b8deb3b054e97ff01282aa7084ac1ec349699d39))
+- **lint:** support field-level BibTeX suppression ([`53fdfef`](https://github.com/jolars/badness/commit/53fdfef72d684a67a206a4998e16b476f7c89dc6))
+- **formatter:** support BibTeX format suppression ([`d5b8f61`](https://github.com/jolars/badness/commit/d5b8f61a7eca0f83e6600b59f04536d46fde4cca))
+- **lint:** add opt-in `unexplained-suppression` rule ([`b82ced7`](https://github.com/jolars/badness/commit/b82ced72d19a82f0b4b6b4975377e0aa1b45ec1e))
+
+### Bug Fixes
+
+- indent commented minipage header continuations ([`b2d8990`](https://github.com/jolars/badness/commit/b2d89907b304a52b8dfa7203614c21a0f15dcae3))
+- **lsp:** resolve captions within their owning float ([`3bc69ea`](https://github.com/jolars/badness/commit/3bc69eac885074ed17a4f3fa1692c49884bf58ef)), fixes [#230](https://github.com/jolars/badness/issues/230)
+- **deps:** update `rustix` to 1.1.6 ([`1cce2d1`](https://github.com/jolars/badness/commit/1cce2d10a3f8930d1e3b784ce25dcab8ae102823)), fixes [#228](https://github.com/jolars/badness/issues/228)
+
+### Dependencies
+
+- updated crates/badness-formatter to v0.13.0
+- updated crates/badness-parser to v0.13.0
+
 ## [0.29.1](https://github.com/jolars/badness/compare/v0.29.0...v0.29.1) (2026-11-08)
 
 ### Bug Fixes

@@ -519,7 +519,7 @@
     "tblr": { "args": [{ "kind": "opt", "content": "keyval" }, { "kind": "req", "content": "keyval" }], "block": true },
     "longtblr": { "args": [{ "kind": "opt", "content": "keyval" }, { "kind": "req", "content": "keyval" }], "block": true },
     "talltblr": { "args": [{ "kind": "opt", "content": "keyval" }, { "kind": "req", "content": "keyval" }], "block": true },
-    "minipage": { "args": ["opt", "req"], "block": true, "captionContainer": true },
+    "minipage": { "args": ["opt", "opt", "opt", "req"], "block": true, "captionContainer": true },
     "multicols": { "args": ["req"], "block": true },
     "thebibliography": { "args": ["req"], "block": true },
 

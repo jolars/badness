@@ -6142,7 +6142,10 @@ fn lower_commented_begin(begin: &SyntaxNode, cx: LowerCtx<'_>, args: &[ArgSpec])
                 has_newline |= token.kind() == SyntaxKind::NEWLINE;
                 next += 1;
             }
-            if !has_newline || !required_brace.get(next).copied().unwrap_or(false) {
+            if !has_newline
+                || !declared.get(next).is_some_and(Option::is_some)
+                || !required_brace[next..split].contains(&true)
+            {
                 return None;
             }
 

@@ -579,6 +579,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // body content out of ordinary body reflow. A genuinely pending mandatory
     // argument remains an indented header continuation.
     ("environment_argument_comment_slots", WrapMode::Reflow, 80),
+    ("minipage_optional_header_comment", WrapMode::Reflow, 80),
     // Slot matching reads only each outer argument delimiter. Escaped braces and
     // display-math brackets inside an argument cannot end or create slots, and a
     // later header comment does not preserve earlier collapsible argument gaps.

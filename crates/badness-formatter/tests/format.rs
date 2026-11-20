@@ -699,6 +699,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // An argument-taking verbatim environment: the `[options]` are kept verbatim on
     // the (indented) `\begin` line, while the opaque body is emitted byte-for-byte.
     ("verbatim_argument_environment", WrapMode::Preserve, 80),
+    ("lstlisting_literal_environment", WrapMode::Preserve, 80),
     // `filecontents` is the verbatim-body environment whose `\begin` line *defines
     // where the body starts*, so that line may never be broken. Its optional is
     // declared `ContentKind::Keyval`, which everywhere else licenses exploding a

@@ -639,6 +639,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // Delimiter-like comment text must not affect environment pairing or enter
     // verbatim mode. Nested bodies still reflow, and comments keep their binding.
     ("environment_delimiters_in_comments", WrapMode::Reflow, 80),
+    ("environment_nested_closing_comments", WrapMode::Reflow, 80),
     // The same `\begin`-line `%` lift for every *specialized* environment layout —
     // the alignment grid (`tabular`), math formula (`equation`), math grid
     // (`align`), list (`itemize`), and display math (`\[`), plus the empty-body

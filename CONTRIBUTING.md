@@ -59,8 +59,7 @@ performance.
 
 ### Checks that don't run in CI
 
-Two oracles need more than a Rust toolchain, so run them by hand when your
-change touches what they cover.
+Run these checks by hand when your change touches what they cover.
 
 `task typeset:check` compiles `tests/typeset/*.tex` before and after formatting
 and diffs the typeset output. CST comparisons cannot detect every risk
@@ -72,6 +71,11 @@ optional-argument lowering. It needs a TeX installation.
 as a differential oracle over a corpus. It simplifies both parsers' trees and
 compares their structures. Texlab provides a reference for comparison, so a
 divergence needs an explanation rather than an automatic fix.
+
+`task bib-error-compat` compares Badness and Biber syntax acceptance for each
+file in the BibTeX parser corpus. It requires `biber` on PATH and prints a
+summary and the filenames where the parsers disagree. Biber can skip later
+errors during recovery, so the comparison uses one outcome per file.
 
 ## Project layout
 

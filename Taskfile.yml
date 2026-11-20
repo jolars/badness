@@ -61,6 +61,11 @@ tasks:
     cmds:
       - cargo test -p badness-parser --test bib_parse_compat -- --ignored --nocapture
 
+  bib-error-compat:
+    desc: Compare BibTeX syntax acceptance with local Biber
+    cmds:
+      - cargo test -p badness-parser --test bib_error_compat -- --ignored --nocapture
+
   bib-fields:check:
     desc: Check crates/badness-parser/data/bib_fields.json is in sync with biblatex's data model (blx-dm.def)
     cmds:

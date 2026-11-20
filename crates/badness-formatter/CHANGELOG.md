@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.0](https://github.com/jolars/badness/compare/badness-formatter-v0.12.1...badness-formatter-v0.13.0) (2026-11-20)
+
+### Features
+
+- **lint:** support field-level BibTeX suppression ([`53fdfef`](https://github.com/jolars/badness/commit/53fdfef72d684a67a206a4998e16b476f7c89dc6))
+- **formatter:** support BibTeX format suppression ([`d5b8f61`](https://github.com/jolars/badness/commit/d5b8f61a7eca0f83e6600b59f04536d46fde4cca))
+
+### Bug Fixes
+
+- **formatter:** stabilize alignment fallback reflow ([`3935bb2`](https://github.com/jolars/badness/commit/3935bb262892ca8552b6c74cf3a171ba34928f98))
+- indent commented minipage header continuations ([`b2d8990`](https://github.com/jolars/badness/commit/b2d89907b304a52b8dfa7203614c21a0f15dcae3))
+
+### Dependencies
+
+- updated crates/badness-parser to v0.13.0
+
 ## [0.12.1](https://github.com/jolars/badness/compare/badness-formatter-v0.12.0...badness-formatter-v0.12.1) (2026-11-08)
 
 ### Bug Fixes

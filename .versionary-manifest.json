@@ -1,11 +1,11 @@
 {
   "manifest-version": 1,
-  "baseline-sha": "d793eec47ffdc2e66a21efb0ae121381d1ec653b",
+  "baseline-sha": "0b5240879660136029b3d5418cd8214a01b50161",
   "release-targets": [
     {
       "path": ".",
-      "version": "0.29.1",
-      "tag": "v0.29.1",
+      "version": "0.30.0",
+      "tag": "v0.30.0",
       "dependencies": [
         "crates/badness-formatter",
         "crates/badness-parser"
@@ -13,21 +13,21 @@
     },
     {
       "path": "crates/badness-formatter",
-      "version": "0.12.1",
-      "tag": "badness-formatter-v0.12.1",
+      "version": "0.13.0",
+      "tag": "badness-formatter-v0.13.0",
       "dependencies": [
         "crates/badness-parser"
       ]
     },
     {
       "path": "crates/badness-parser",
-      "version": "0.12.1",
-      "tag": "badness-parser-v0.12.1"
+      "version": "0.13.0",
+      "tag": "badness-parser-v0.13.0"
     },
     {
       "path": "editors/code",
-      "version": "0.29.1",
-      "tag": "badness-code-v0.29.1",
+      "version": "0.30.0",
+      "tag": "badness-code-v0.30.0",
       "dependencies": [
         "."
       ]
@@ -36,8 +36,8 @@
   "pending-release-targets": [
     {
       "path": ".",
-      "version": "0.29.1",
-      "tag": "v0.29.1",
+      "version": "0.30.0",
+      "tag": "v0.30.0",
       "dependencies": [
         "crates/badness-formatter",
         "crates/badness-parser"
@@ -45,21 +45,21 @@
     },
     {
       "path": "crates/badness-formatter",
-      "version": "0.12.1",
-      "tag": "badness-formatter-v0.12.1",
+      "version": "0.13.0",
+      "tag": "badness-formatter-v0.13.0",
       "dependencies": [
         "crates/badness-parser"
       ]
     },
     {
       "path": "crates/badness-parser",
-      "version": "0.12.1",
-      "tag": "badness-parser-v0.12.1"
+      "version": "0.13.0",
+      "tag": "badness-parser-v0.13.0"
     },
     {
       "path": "editors/code",
-      "version": "0.29.1",
-      "tag": "badness-code-v0.29.1",
+      "version": "0.30.0",
+      "tag": "badness-code-v0.30.0",
       "dependencies": [
         "."
       ]

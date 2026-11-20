@@ -532,6 +532,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
         WrapMode::Preserve,
         80,
     ),
+    ("float_nested_minipage", WrapMode::Preserve, 80),
     ("list_item_continuation_hang", WrapMode::Preserve, 80),
     ("environment_reindents", WrapMode::Preserve, 80),
     ("environment_blank_lines_in_body", WrapMode::Preserve, 80),

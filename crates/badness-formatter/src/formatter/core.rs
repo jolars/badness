@@ -1358,8 +1358,8 @@ fn lower_paragraph_reflow(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     )
 }
 
-/// [`ReflowKind::Statement`] for a paragraph in a `statementBody` environment,
-/// [`ReflowKind::Prose`] otherwise. Shared by [`lower_paragraph_reflow`] and the
+/// Choose the reflow policy from the paragraph’s enclosing environment.
+/// Shared by [`lower_paragraph_reflow`] and the
 /// `\begin`-tail splice in [`lower_env_body`], so a header the greedy parser
 /// over-attached lays out under the same rule as the body it is spliced into.
 fn paragraph_reflow_kind(node: &SyntaxNode, cx: LowerCtx<'_>) -> ReflowKind {
@@ -1367,6 +1367,11 @@ fn paragraph_reflow_kind(node: &SyntaxNode, cx: LowerCtx<'_>) -> ReflowKind {
         ReflowKind::Algorithm2e
     } else if in_statement_body_env(node, cx) {
         ReflowKind::Statement
+    } else if node.parent().is_some_and(|parent| {
+        parent.kind() == SyntaxKind::ENVIRONMENT
+            && (is_alignment_env(&parent, cx) || body_has_top_level_ampersand(&parent))
+    }) {
+        ReflowKind::AlignmentBody
     } else {
         ReflowKind::Prose
     }
@@ -1801,6 +1806,9 @@ fn dtx_paragraph_reflows(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 enum ReflowKind {
     /// Running prose: a lone newline is a break opportunity the fill rejoins.
     Prose,
+    /// A grid fallback has structural row breaks. A row that happens to put
+    /// commands on their own physical lines must not acquire extra breaks.
+    AlignmentBody,
     /// A signature-proven prose *argument* body ([`lower_prose_group`]): like
     /// [`Self::Prose`], but the command-only-line preservation does not apply —
     /// width alone owns the layout. Preserving a command-only line here turns a
@@ -2289,7 +2297,10 @@ fn reflow_elements_checked(
     };
     let glue_matched_args = !cx.in_dtx_doc_region
         && !run_carries_doc_margin(&elements, cx)
-        && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg);
+        && matches!(
+            kind,
+            ReflowKind::Prose | ReflowKind::ProseArg | ReflowKind::AlignmentBody
+        );
     // Algorithm terminators belong to this body's direct stream. Flattening a
     // text argument would promote its private `\;` into a statement boundary.
     let elements: Vec<SyntaxElement> = if kind == ReflowKind::Algorithm2e {
@@ -2415,11 +2426,17 @@ fn reflow_elements_checked(
                     // no positive signature property covers (see `line_all_commands`
                     // above); curated block commands never reach it.
                     // The command-only residue is skipped under `ProseArg` and
-                    // `StatementInterior`: a width-owned body must not mint
+                    // `StatementInterior` and in grid fallbacks: a width-owned
+                    // body must not mint
                     // forced breaks pass 2 can see and pass 1 could not (see
                     // [`ReflowKind`]).
-                    let residue_applies =
-                        !matches!(kind, ReflowKind::ProseArg | ReflowKind::StatementInterior | ReflowKind::Algorithm2e);
+                    let residue_applies = !matches!(
+                        kind,
+                        ReflowKind::ProseArg
+                            | ReflowKind::StatementInterior
+                            | ReflowKind::Algorithm2e
+                            | ReflowKind::AlignmentBody
+                    );
                     let prev_is_command = residue_applies && line_has_content && line_all_commands;
                     let next_is_command =
                         residue_applies && line_is_command_only(&elements, idx, cx);
@@ -2813,7 +2830,7 @@ fn reflow_elements_checked(
                     let hugs_preceding_prose = margin.is_none()
                         && child.kind() == SyntaxKind::INLINE_MATH
                         && line_has_content
-                        && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg)
+                        && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg | ReflowKind::AlignmentBody)
                         && matches!(b.render, RunRender::Fill);
                     let rides_preceding_block = after_block
                         && !after_block_gap
@@ -2890,7 +2907,7 @@ fn reflow_elements_checked(
                     // — leaves the line open so following content can ride it (the
                     // `after_block` paths).
                     let display_math_closes_prose = child.kind() == SyntaxKind::DISPLAY_MATH
-                        && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg);
+                        && matches!(kind, ReflowKind::Prose | ReflowKind::ProseArg | ReflowKind::AlignmentBody);
                     let environment_closes_line = child.kind() == SyntaxKind::ENVIRONMENT
                         && !cx.signatures.environment_at(child).is_some_and(|sig| sig.inline);
                     prev_block_closes_line = is_block_stmt

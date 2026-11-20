@@ -2577,6 +2577,24 @@ fn beamer_bodies_keep_authored_lines() {
 }
 
 #[test]
+fn beamer_overlay_in_table_fallback_is_idempotent() {
+    let input = r"\begin{tabular}{ll}
+\hline
+\multicolumn{1}{l}{\onslide<2->{ Heading}} & Right \\
+\hline
+\onslide<3->{Left} & \onslide<3->{Right} \\
+\hline
+\end{tabular}
+";
+    assert_format_invariants(input);
+
+    let multiline = input.replace("{ Heading}", "{\nHeading}");
+    let output = format_with_style(&multiline, FormatStyle::default()).unwrap();
+    assert!(output.contains("\\onslide<2->{\n"), "{output}");
+    assert_format_invariants(&multiline);
+}
+
+#[test]
 fn beamer_inline_bodies_do_not_reflow_to_width() {
     let input = "Before \\only<2->{a long inline body with several words} after.\n";
     let style = FormatStyle {

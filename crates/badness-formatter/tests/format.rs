@@ -527,6 +527,11 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // Environment indentation.
     ("environment_indents_body", WrapMode::Preserve, 80),
     ("nested_environments", WrapMode::Preserve, 80),
+    (
+        "environment_nested_minipage_paragraphs",
+        WrapMode::Preserve,
+        80,
+    ),
     ("list_item_continuation_hang", WrapMode::Preserve, 80),
     ("environment_reindents", WrapMode::Preserve, 80),
     ("environment_blank_lines_in_body", WrapMode::Preserve, 80),

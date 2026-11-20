@@ -168,9 +168,8 @@ upstream sources by `scripts/gen_*.py` and guarded by paired `task …:check` an
 `:sync` targets: `cwl_signatures.json`, the package and class name lists with
 `package_metadata.json`, and `bib_fields.json`. The linter's expl3 deprecation
 table follows the same workflow. Regenerate these files through their tasks
-rather than editing them by hand. `signatures.json`,
-`colors.json`, and `tikz_libraries.json` are curated by hand and may be edited
-directly.
+rather than editing them by hand. `signatures.json`, `colors.json`, and
+`tikz_libraries.json` are curated by hand and may be edited directly.
 
 Command entries in `signatures.json` may set `completionKind` to `symbol` for
 argument-free math and text symbols or logos, or `keyword` for argument-free

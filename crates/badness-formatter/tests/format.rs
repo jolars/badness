@@ -2967,6 +2967,32 @@ fn math_grid_leading_labels_preserve_comments_and_row_content() {
     }
 }
 
+#[test]
+fn nested_multlined_preserves_long_math_lines() {
+    let input = r"\begin{align}
+  a + b + c + d + e + f + g + h + i + j + k + l & = \begin{multlined}
+    x_1 + x_2 + x_3 + x_4 + x_5 + x_6 + x_7 + x_8 + x_9
+  \end{multlined}
+\end{align}
+";
+    let expected = r"\begin{align}
+    a + b + c + d + e + f + g + h + i + j + k + l & = \begin{multlined}
+                                                          x_1 + x_2 + x_3 + x_4 + x_5 + x_6 + x_7 + x_8 + x_9
+                                                      \end{multlined}
+\end{align}
+";
+    let style = FormatStyle {
+        wrap: WrapMode::Reflow,
+        math_wrap: MathWrap::Preserve,
+        indent_width: 4,
+        line_width: 80,
+        ..FormatStyle::default()
+    };
+
+    assert_eq!(format_with_style(input, style).unwrap(), expected);
+    assert_format_invariants_with_style(input, style);
+}
+
 /// Run one `input.tex`/`expected.tex` fixture pair under `style`, asserting the
 /// output matches and holds the formatter invariants (idempotence, clean parse,
 /// losslessness).

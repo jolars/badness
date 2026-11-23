@@ -571,6 +571,7 @@
 
     "aligned": { "math": true, "align": true },
     "gathered": { "math": true },
+    "multlined": { "math": true },
     "alignedat": { "math": true, "align": true },
     "split": { "math": true, "align": true },
     "cases": { "math": true, "align": true },

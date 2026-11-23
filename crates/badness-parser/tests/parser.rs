@@ -557,6 +557,11 @@ fn spaced_bracket_in_text_body_nested_in_math_stays_content() {
 }
 
 #[test]
+fn nested_multlined_math_body() {
+    insta::assert_snapshot!(tree(include_str!("corpus/math_multlined.tex")));
+}
+
+#[test]
 fn optional_never_attaches_across_newline() {
     // #43: a next-line `[` is content, never an argument — `\begin{align}`
     // followed by a newline and `[\partial_\mu V]_1` must not pull the bracket

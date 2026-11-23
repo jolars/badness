@@ -1,0 +1,75 @@
+---
+source: crates/badness-parser/tests/parser.rs
+expression: "tree(include_str!(\"corpus/math_multlined.tex\"))"
+---
+ROOT@0..104
+  ENVIRONMENT@0..103
+    BEGIN@0..13
+      CONTROL_WORD@0..6 "\\begin"
+      NAME_GROUP@6..13
+        L_BRACE@6..7 "{"
+        WORD@7..12 "align"
+        R_BRACE@12..13 "}"
+    MATH@13..92
+      NEWLINE@13..14 "\n"
+      WHITESPACE@14..16 "  "
+      WORD@16..17 "A"
+      WHITESPACE@17..18 " "
+      AMPERSAND@18..19 "&"
+      WORD@19..20 "="
+      WHITESPACE@20..21 " "
+      ENVIRONMENT@21..91
+        BEGIN@21..46
+          CONTROL_WORD@21..27 "\\begin"
+          NAME_GROUP@27..38
+            L_BRACE@27..28 "{"
+            WORD@28..37 "multlined"
+            R_BRACE@37..38 "}"
+          OPTIONAL@38..41
+            L_BRACKET@38..39 "["
+            WORD@39..40 "t"
+            R_BRACKET@40..41 "]"
+          OPTIONAL@41..46
+            L_BRACKET@41..42 "["
+            WORD@42..45 "4cm"
+            R_BRACKET@45..46 "]"
+        MATH@46..76
+          NEWLINE@46..47 "\n"
+          WHITESPACE@47..51 "    "
+          L_BRACKET@51..52 "["
+          WORD@52..53 "a"
+          SCRIPTED@53..56
+            R_BRACKET@53..54 "]"
+            SUBSCRIPT@54..56
+              UNDERSCORE@54..55 "_"
+              WORD@55..56 "1"
+          WHITESPACE@56..57 " "
+          WORD@57..58 "+"
+          WHITESPACE@58..59 " "
+          WORD@59..60 "b"
+          WHITESPACE@60..61 " "
+          LINE_BREAK@61..63
+            CONTROL_SYMBOL@61..63 "\\\\"
+          NEWLINE@63..64 "\n"
+          WHITESPACE@64..68 "    "
+          WORD@68..69 "c"
+          WHITESPACE@69..70 " "
+          WORD@70..71 "+"
+          WHITESPACE@71..72 " "
+          WORD@72..73 "d"
+          NEWLINE@73..74 "\n"
+          WHITESPACE@74..76 "  "
+        END@76..91
+          CONTROL_WORD@76..80 "\\end"
+          NAME_GROUP@80..91
+            L_BRACE@80..81 "{"
+            WORD@81..90 "multlined"
+            R_BRACE@90..91 "}"
+      NEWLINE@91..92 "\n"
+    END@92..103
+      CONTROL_WORD@92..96 "\\end"
+      NAME_GROUP@96..103
+        L_BRACE@96..97 "{"
+        WORD@97..102 "align"
+        R_BRACE@102..103 "}"
+  NEWLINE@103..104 "\n"

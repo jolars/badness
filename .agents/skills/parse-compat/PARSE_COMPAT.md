@@ -6,8 +6,8 @@ This is a **soft gauge, not a quality gate.** It projects badness's generic CST 
 
 - **Corpus:** corpus (`tests/corpus/*.tex`)
 - **Skeleton similarity:** 64.8%  _(Dice coefficient over skeleton lines)_
-- **File concordance:** 19.2%  (10/52 files identical after projection)
-- **Intentional deviations:** 42  ·  **Unexplained divergences:** 0
+- **File concordance:** 18.9%  (10/53 files identical after projection)
+- **Intentional deviations:** 43  ·  **Unexplained divergences:** 0
 - **Skipped:** 1 (badness could not parse cleanly)
 - **texlab parse errors:** 4 (badness-clean inputs texlab flagged — see the gate, `parse_oracle.rs`)
 
@@ -40,6 +40,7 @@ Listed in `tests/parse_compat_allowlist.toml`. These diverge from texlab on purp
 | `expl3_region_env_tokens.tex` | 75.5% | The expl3-region `\\begin`/`\\end` gate (smoke-test issue #60, same family as the definition-body rule): an expl3 region is code, and token lists pass `\\begin`/`\\end` around as data (l3prefixes.tex builds a longtable across two `\\tl_set`/`\\tl_put_right` bodies), so in-region they parse as plain commands — no pairing, no diagnostics. texlab pairs the `\\begin { longtable }` into an `(env)` that swallows the rest of the region. badness's reading keeps the parse clean. |
 | `latex_command_control_symbol_name.tex` | 94.7% | LaTeX2e/xparse command-definition name isolation (smoke-test issue #133, the LaTeX-level counterpart of def_display_math.tex): an unbraced control symbol after `\\DeclareRobustCommand` is the sequence being defined, so `\\[`/`\\]` stay inside their respective command nodes instead of pairing across replacement bodies. Dollar tokens in a replacement body are likewise macro-code data until the definition executes; texlab projects those dollars as math. badness's reading preserves the definition's surface structure, while a later live `\\[...\\]` still pairs normally. |
 | `math.tex` | 81.2% | texlab glues the subscript into the command name (`\\int_0`); badness keeps `\\int` a command and `_0` a separate SUBSCRIPT (badness is the more faithful surface reading). `\\` is a LINE_BREAK node vs texlab's generic command + optional arg. |
+| `math_multlined.tex` | 75.0% | Both parsers recognize the two optional header arguments. The gauge drops the BEGIN subtree that holds them in Badness, while texlab surfaces them under the environment (the same projection artifact as tables.tex). |
 | `math_nested_env_paragraph.tex` | 66.7% | The math shape gates' paragraph-break anchor is level-scoped (smoke-test issue #70): a blank line inside a nested environment or `{…}` group belongs to that body, not to the math, so `\\[ … \\begin{tikzpicture}` + blank line + `… \\]` still pairs. Both parsers agree on that pairing; the residual divergence bundles three already-recorded families — `\\def\\arraystretch{2.2}` signature nesting (edge.tex), TikZ/array option brackets texlab attaches as `(opt)` where the math bracket gate keeps them plain atoms (math_probability_brackets.tex), and `\\(…\\)` as INLINE_MATH vs texlab's bare delimiter commands (display_math.tex). |
 | `math_operators.tex` | 78.6% | `\\left…\\right` is a `LEFT_RIGHT` node isolating the delimiter token (`\\left[` lexes `[` as the delimiter, not an optional-arg open); texlab instead parses delimiter content into a `(opt)`/bracket group. badness is the more faithful surface reading (AGENTS.md decision #1). |
 | `math_probability_brackets.tex` | 73.7% | The math bracket gate (issue #55) leaves `\\P[` an ordinary atom because the lone `]` is claimed by the command-abutting `\\gamma[`; texlab attaches both brackets as nested optional args sharing that `]`. badness's reading keeps the parse clean (no unclosed-`[` diagnostic) and matches how the text renders. |

@@ -1,0 +1,12 @@
+\documentclass{article}
+\usepackage{tikz}
+\usetikzlibrary{calc}
+\newcommand{\calcpath}{\draw ($2*(1,1 -| a)-(0,-1mm)$) -- (2,2);}
+\begin{document}
+\begin{tikzpicture}
+  \coordinate (a) at (0,0);
+  \draw ($(1,1 |- a)+(0,-1mm)$) -- (2,2);
+  \calcpath
+\end{tikzpicture}
+Ordinary math ($x+y$).
+\end{document}

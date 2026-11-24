@@ -1217,6 +1217,7 @@ const FIXTURES: &[(&str, WrapMode, usize)] = &[
     // environment is still aligned in its own right.
     ("align_columns_basic", WrapMode::Preserve, 80),
     ("issue_223_tikzcd_trailing_arrows", WrapMode::Reflow, 80),
+    ("issue_239_tikz_calc_coordinates", WrapMode::Reflow, 80),
     ("issue_201_align_leading_label", WrapMode::Sentence, 80),
     ("issue_202_math_intertext", WrapMode::Preserve, 80),
     // A user-defined (unclassified) environment with a top-level `&` grid-aligns

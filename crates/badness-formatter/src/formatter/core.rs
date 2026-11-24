@@ -9934,10 +9934,90 @@ fn alignment_cell_elements(
     }
 }
 
+/// TikZ calc coordinates have literal `($` and `$)` boundaries inside a path.
+/// The path command can be in a macro body, so a picture environment is optional.
+fn is_tikz_calc_coordinate(node: &SyntaxNode) -> bool {
+    if !node
+        .first_token()
+        .is_some_and(|token| token.kind() == SyntaxKind::DOLLAR)
+        || !node
+            .last_token()
+            .is_some_and(|token| token.kind() == SyntaxKind::DOLLAR)
+    {
+        return false;
+    }
+    let Some(open) = node.prev_sibling_or_token() else {
+        return false;
+    };
+    if !open
+        .as_token()
+        .is_some_and(|token| token.kind() == SyntaxKind::WORD && token.text().ends_with('('))
+        || !node
+            .next_sibling_or_token()
+            .and_then(|element| element.into_token())
+            .is_some_and(|token| token.kind() == SyntaxKind::WORD && token.text().starts_with(')'))
+    {
+        return false;
+    }
+
+    let mut previous = Some(open);
+    while let Some(element) = previous {
+        match &element {
+            SyntaxElement::Token(token)
+                if token.kind() == SyntaxKind::WORD && token.text().contains(';') =>
+            {
+                break;
+            }
+            SyntaxElement::Node(command)
+                if command.kind() == SyntaxKind::COMMAND
+                    && matches!(
+                        command_name(command).as_deref(),
+                        Some(
+                            "tikz"
+                                | "path"
+                                | "draw"
+                                | "fill"
+                                | "filldraw"
+                                | "pattern"
+                                | "shade"
+                                | "shadedraw"
+                                | "clip"
+                                | "useasboundingbox"
+                                | "node"
+                                | "pic"
+                                | "coordinate"
+                        )
+                    ) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        previous = element.prev_sibling_or_token();
+    }
+    false
+}
+
 /// Lower inline `$…$`/`\(…\)` or display `$$…$$`/`\[…\]` math. The delimiter
 /// tokens are direct children of the math node and are emitted verbatim; the
 /// `MATH` child (the body) is formatted by [`lower_math_body`].
 fn lower_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    if is_tikz_calc_coordinate(node) {
+        if !cx.in_dtx_doc_region {
+            return Ir::verbatim(node.text().to_string());
+        }
+        let tokens = node
+            .descendants_with_tokens()
+            .filter(|element| element.as_token().is_some());
+        let text: String = strip_virtual_dtx_framing(tokens, cx)
+            .into_iter()
+            .filter_map(|element| element.into_token())
+            .fold(String::new(), |mut text, token| {
+                text.push_str(token.text());
+                text
+            });
+        return Ir::verbatim(text);
+    }
     Ir::concat(
         strip_virtual_dtx_framing(node.children_with_tokens(), cx)
             .into_iter()

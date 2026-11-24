@@ -7,6 +7,18 @@ This file is organized by architectural responsibility, not filesystem path.
 Follow the section for the behavior being changed, including when its code lives
 in another crate or at a cross-subsystem call site.
 
+## Performance investigations
+
+Use [the benchmark and profiling guide](benches/PERFORMANCE.md) to select the
+workload and verification checks. Use the real release CLI for discovery,
+configuration, linting, or output costs. Measure editor symptoms in a
+persistent language server. For retained heap, compare edit histories ending
+with the same buffers and project state.
+
+Keep formatter output, CST reconstruction, parser errors, lint findings and
+fixes, and incremental behavior equivalent. Use the `bench` skill when
+refreshing published benchmark comparisons is in scope.
+
 ## Project architecture
 
 Badness follows a rust-analyzer-style architecture:

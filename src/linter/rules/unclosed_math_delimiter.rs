@@ -106,6 +106,19 @@ impl Rule for UnclosedMathDelimiter {
                 if suppressed(&parent, ctx, offset) {
                     return;
                 }
+                if let Some(pair) = ctx.ambiguous_display_dollars(&parent)
+                    && pair.contains(range.start())
+                {
+                    if range.start() == pair.start() {
+                        push(
+                            self,
+                            sink,
+                            pair,
+                            "unmatched `$$` after dollar-delimited display math",
+                        );
+                    }
+                    return;
+                }
                 push(
                     self,
                     sink,
@@ -345,6 +358,13 @@ mod tests {
         // A `\left` outside any math region is a different shape (not a demoted
         // delimiter); the `in_math` gate keeps it out of scope.
         assert!(findings("plain \\left text\n").is_empty());
+    }
+
+    #[test]
+    fn ambiguous_display_reports_one_unmatched_pair() {
+        let out = findings("We define $$. Then\n$$\na = b\n$$\n");
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].start, out[0].end), (28, 30));
     }
 
     #[test]

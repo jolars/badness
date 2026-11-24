@@ -7976,3 +7976,34 @@ fn a_client_without_show_document_support_never_advertises() {
 
     shutdown(&client, server_thread);
 }
+
+#[test]
+fn lsp_preserves_ambiguous_dollar_math() {
+    let (client, server_thread) = start_server(None);
+    let uri: Uri = "file:///ambiguous-dollars.tex".parse().unwrap();
+    let doc = "We define $$. Then\n$$\na = b\n$$\n\nOther   prose.\n";
+    did_open(&client, &uri, 1, doc);
+    recv_diagnostics(&client);
+    send_request(
+        &client,
+        2,
+        "textDocument/rangeFormatting",
+        serde_json::to_value(DocumentRangeFormattingParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range: Range::new(Position::new(0, 1), Position::new(0, 3)),
+            options: FormattingOptions {
+                tab_size: 2,
+                insert_spaces: true,
+                ..Default::default()
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .unwrap(),
+    );
+    let edits: Vec<TextEdit> =
+        serde_json::from_value(recv_response(&client).result().unwrap()).unwrap();
+    assert!(edits.is_empty());
+    let edit = one_formatting_edit(&client, &uri, 3);
+    assert_eq!(edit.new_text, doc.replace("Other   prose.", "Other prose."));
+    shutdown(&client, server_thread);
+}

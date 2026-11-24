@@ -5108,3 +5108,51 @@ fn table_captions_do_not_set_column_widths() {
         }
     }
 }
+
+#[test]
+fn preserves_ambiguous_dollar_math_in_document_and_range() {
+    let paragraph = "We define $$. Then\n$$\na = b\n$$";
+    let input = format!(
+        "\\documentclass{{article}}\n\\begin{{document}}\n\n{paragraph}\n\nOther   prose.\n\n\\end{{document}}\n"
+    );
+    let expected = input.replace("Other   prose.", "Other prose.");
+    let style = FormatStyle::default();
+    let formatted = format_with_style(&input, style).unwrap();
+    assert_eq!(formatted, expected);
+    assert_eq!(format_with_style(&formatted, style).unwrap(), formatted);
+
+    let root = badness_parser::parser::parse(paragraph).syntax();
+    let start = 0u32;
+    let range = rowan::TextRange::new(start.into(), (start + paragraph.len() as u32).into());
+    assert_eq!(
+        format_node_range_with_signatures(&root, style, &SignatureDb::default(), range).unwrap(),
+        paragraph
+    );
+}
+
+#[test]
+fn preserves_margins_on_ambiguous_dollar_math_in_dtx() {
+    let paragraph = "% We define $$. Then\n% $$\n% a=b\n% $$\n";
+    for input in [
+        paragraph.to_owned(),
+        format!("% First paragraph.\n%\n{paragraph}"),
+        format!("% \\begin{{quote}}\n{paragraph}% \\end{{quote}}\n"),
+    ] {
+        let style = FormatStyle::default();
+        let formatted = format_with_style_flavored(&input, style, dtx_config()).unwrap();
+        assert!(formatted.contains(paragraph), "{formatted}");
+        assert_eq!(
+            format_with_style_flavored(&formatted, style, dtx_config()).unwrap(),
+            formatted
+        );
+    }
+}
+
+#[test]
+fn preserves_ambiguous_dollar_math_in_an_indented_environment() {
+    let input = "\\begin{quote}\n$$x$$ a $$\n\\end{quote}\n";
+    let expected = "\\begin{quote}\n  $$x$$ a $$\n\\end{quote}\n";
+    let style = FormatStyle::default();
+    assert_eq!(format_with_style(input, style).unwrap(), expected);
+    assert_eq!(format_with_style(expected, style).unwrap(), expected);
+}

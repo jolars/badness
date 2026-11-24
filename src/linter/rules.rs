@@ -6,6 +6,8 @@
 //! applied as a post-filter so the
 //! shared `lint_document` driver stays config-unaware.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -150,6 +152,8 @@ pub struct RuleContext<'a> {
     /// delimiters are rare, so — unlike `math_regions` — it is computed *lazily*
     /// on first [`RuleContext::in_expl3`] call rather than for every lint.
     expl3_regions: OnceLock<Vec<TextRange>>,
+    // Cache both answers so multiple findings in one paragraph share a scan.
+    ambiguous_dollars: RefCell<HashMap<TextRange, Option<TextRange>>>,
     /// Executable expl3 calls and their argument context, shared by the three
     /// semantic rules instead of rediscovered by each rule's traversal.
     expl3_calls: OnceLock<super::expl3::Expl3Index>,
@@ -189,6 +193,7 @@ impl<'a> RuleContext<'a> {
             mode_index: ModeIndex::build(root),
             conditionals: super::conditional::ConditionalIndex::compute(root),
             expl3_regions: OnceLock::new(),
+            ambiguous_dollars: RefCell::default(),
             expl3_calls: OnceLock::new(),
             expl3_variables: OnceLock::new(),
             expl3_lexical: OnceLock::new(),
@@ -217,6 +222,21 @@ impl<'a> RuleContext<'a> {
     /// Whether byte `offset` is proven text.
     pub fn in_text(&self, offset: usize) -> bool {
         self.mode_at(offset) == Mode::Text
+    }
+
+    pub(crate) fn ambiguous_display_dollars(&self, node: &SyntaxNode) -> Option<TextRange> {
+        if node.kind() != SyntaxKind::PARAGRAPH {
+            return None;
+        }
+        *self
+            .ambiguous_dollars
+            .borrow_mut()
+            .entry(node.text_range())
+            .or_insert_with(|| {
+                crate::formatter::core::ambiguous_display_dollars(node, |at| {
+                    self.in_expl3(at.into())
+                })
+            })
     }
 
     /// Whether byte `offset` falls inside an expl3 code region (`\ExplSyntaxOn`…

@@ -915,6 +915,78 @@ impl<'a> LowerCtx<'a> {
     }
 }
 
+/// The unmatched dollar pair after a dollar-delimited display in prose.
+pub fn ambiguous_display_dollars(
+    paragraph: &SyntaxNode,
+    in_expl3: impl Fn(TextSize) -> bool,
+) -> Option<TextRange> {
+    if paragraph.kind() != SyntaxKind::PARAGRAPH {
+        return None;
+    }
+    let mut saw_display = false;
+    let mut previous_dollar: Option<TextRange> = None;
+    let mut parameter_end = paragraph.text_range().start();
+    for element in paragraph.children_with_tokens() {
+        let range = element.text_range();
+        if range.start() < parameter_end {
+            continue;
+        }
+        if element.kind() == SyntaxKind::COMMAND
+            && let Some(head) = element.as_node().and_then(SyntaxNode::first_token)
+            && is_def_prefix_command(head.text())
+        {
+            // The parser leaves literal dollars in a primitive definition's
+            // parameter text bare. Read through the definee up to the body brace,
+            // which can live inside a command node under greedy attachment.
+            let mut tokens = std::iter::successors(head.next_token(), SyntaxToken::next_token)
+                .take_while(|token| paragraph.text_range().contains(token.text_range().start()));
+            if tokens
+                .find(|token| !is_trivia(token.kind()))
+                .is_some_and(|token| {
+                    matches!(
+                        token.kind(),
+                        SyntaxKind::CONTROL_WORD | SyntaxKind::CONTROL_SYMBOL
+                    )
+                })
+            {
+                parameter_end = tokens
+                    .find(|token| token.kind() == SyntaxKind::L_BRACE)
+                    .map_or(paragraph.text_range().end(), |token| {
+                        token.text_range().start()
+                    });
+            }
+        }
+        if element.kind() == SyntaxKind::DISPLAY_MATH
+            && element.as_node()?.first_token()?.kind() == SyntaxKind::DOLLAR
+            && !in_expl3(element.text_range().start())
+        {
+            saw_display = true;
+        }
+        if saw_display && element.kind() == SyntaxKind::DOLLAR {
+            if let Some(previous) = previous_dollar
+                && previous.end() == range.start()
+                && !in_expl3(previous.start())
+                && !inside_macrocode(paragraph)
+                && !paragraph.ancestors().any(|node| {
+                    matches!(
+                        node.kind(),
+                        SyntaxKind::GROUP
+                            | SyntaxKind::OPTIONAL
+                            | SyntaxKind::ARGUMENT
+                            | SyntaxKind::NAME_GROUP
+                    )
+                })
+            {
+                return Some(previous.cover(range));
+            }
+            previous_dollar = Some(range);
+        } else {
+            previous_dollar = None;
+        }
+    }
+    None
+}
+
 /// Lower a CST node to IR. Most nodes lower generically (see
 /// [`lower_element_stream`]); an [`SyntaxKind::ENVIRONMENT`] is special-cased to
 /// indent its body (see [`lower_environment`]), and under each prose-wrapping mode a
@@ -934,6 +1006,30 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
     // ranged path fall out of the one mechanism.
     if node.kind() != SyntaxKind::ROOT && cx.suppressed(node.text_range()) {
         return Ir::verbatim(node.text().to_string());
+    }
+    if ambiguous_display_dollars(node, |at| cx.in_expl3_region(at)).is_some() {
+        // The enclosing layout owns leading indentation and line breaks.
+        // Normalize that gap with the same fixed point as the generic stream,
+        // and preserve the ambiguous paragraph from its first content token.
+        let mut elements = node.children_with_tokens().peekable();
+        let leading = match elements.peek() {
+            Some(SyntaxElement::Token(token)) if is_collapsible_trivia(token.kind()) => {
+                let token = token.clone();
+                elements.next();
+                classify_trivia(consume_gap_widened(&token, &mut elements), false)
+            }
+            _ => Ir::Nil,
+        };
+        let margin = match elements.peek() {
+            Some(SyntaxElement::Token(token)) if token.kind() == SyntaxKind::DOC_MARGIN => {
+                let margin = Ir::column_zero(token.text());
+                elements.next();
+                margin
+            }
+            _ => Ir::Nil,
+        };
+        let text: String = elements.map(|element| element.to_string()).collect();
+        return Ir::concat([leading, margin, Ir::verbatim(text)]);
     }
     if node.kind() == SyntaxKind::DOC_COMMENT
         && cx.omitted_leading_comment == Some(node.text_range())
@@ -1435,6 +1531,10 @@ fn dtx_doc_region(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
         || cx.in_dtx_doc_region
         || node.kind() != SyntaxKind::ENVIRONMENT
         || has_verbatim_body(node)
+        // Ambiguous dollar paragraphs carry their physical margins verbatim.
+        || node.descendants().any(|child| {
+            ambiguous_display_dollars(&child, |at| cx.in_expl3_region(at)).is_some()
+        })
         || node
             .descendants()
             .filter_map(Environment::cast)
@@ -1725,6 +1825,10 @@ fn dtx_doc_paragraph_reflows_safely(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool
     }
     if let Some(&answer) = cx.dtx_reflow_cache.borrow().get(node) {
         return answer;
+    }
+    if ambiguous_display_dollars(node, |at| cx.in_expl3_region(at)).is_some() {
+        cx.dtx_reflow_cache.borrow_mut().insert(node.clone(), false);
+        return false;
     }
     // Answer every *nested* doc paragraph first, innermost-first (reverse
     // pre-order visits a node before its ancestors). The probe below lowers this
@@ -5039,6 +5143,7 @@ fn is_lifted_comment(el: &SyntaxElement, lifted: Option<&SyntaxToken>) -> bool {
 fn paragraph_reflows_as_prose(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
     cx.wraps_prose()
         && !is_dtx_doc_paragraph(node)
+        && ambiguous_display_dollars(node, |at| cx.in_expl3_region(at)).is_none()
         && !(cx.any_expl3() && cx.overlaps_expl3(node.text_range()))
 }
 
@@ -10002,6 +10107,23 @@ fn is_tikz_calc_coordinate(node: &SyntaxNode) -> bool {
 /// tokens are direct children of the math node and are emitted verbatim; the
 /// `MATH` child (the body) is formatted by [`lower_math_body`].
 fn lower_math(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
+    // TeX reads adjacent dollar tokens as a display opener. Keep a space
+    // even when lowering a body with no math atoms.
+    if node.kind() == SyntaxKind::INLINE_MATH
+        && node
+            .first_token()
+            .is_some_and(|token| token.kind() == SyntaxKind::DOLLAR)
+        && node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::MATH)
+            .is_some_and(|body| {
+                body.children_with_tokens().all(|element| {
+                    matches!(element.kind(), SyntaxKind::WHITESPACE | SyntaxKind::NEWLINE)
+                })
+            })
+    {
+        return Ir::verbatim("$ $");
+    }
     if is_tikz_calc_coordinate(node) {
         if !cx.in_dtx_doc_region {
             return Ir::verbatim(node.text().to_string());

@@ -59,7 +59,7 @@ impl Rule for DollarDisplayMath {
         &[SyntaxKind::DISPLAY_MATH]
     }
 
-    fn check(&self, el: &SyntaxElement, _ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
+    fn check(&self, el: &SyntaxElement, ctx: &RuleContext<'_>, sink: &mut Vec<Diagnostic>) {
         let Some(math) = el.as_node() else {
             return;
         };
@@ -67,6 +67,9 @@ impl Rule for DollarDisplayMath {
             // The `\[…\]` form opens with a CONTROL_SYMBOL, not `$$` — fine.
             return;
         };
+        let ambiguous = math
+            .parent()
+            .is_some_and(|paragraph| ctx.ambiguous_display_dollars(&paragraph).is_some());
         sink.push(Diagnostic {
             rule: self.id(),
             severity: self.default_severity(),
@@ -74,7 +77,11 @@ impl Rule for DollarDisplayMath {
             start: usize::from(range.start()),
             end: usize::from(range.end()),
             message: "`$$…$$` is plain-TeX display math; use `\\[…\\]`".to_owned(),
-            fix: delimiter_swap_fix(math, range),
+            fix: if ambiguous {
+                None
+            } else {
+                delimiter_swap_fix(math, range)
+            },
             related: Vec::new(),
         });
     }
@@ -216,6 +223,30 @@ mod tests {
     #[test]
     fn bracket_display_is_fine() {
         assert!(findings("\\[x = y\\]\n").is_empty());
+    }
+
+    #[test]
+    fn ambiguous_display_has_no_delimiter_swap() {
+        let out = findings("We define $$. Then\n$$\na = b\n$$\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fix.is_none());
+    }
+
+    #[test]
+    fn macro_parameter_dollars_do_not_block_the_display_fix() {
+        for definition in [
+            r"\def\grab#1$${#1}",
+            r"\gdef\grab$${body}",
+            r"\edef\!#1$${#1}",
+        ] {
+            let out = findings(&format!("$$a=b$$\n{definition}\n"));
+            assert_eq!(out.len(), 1, "{definition}");
+            assert!(out[0].fix.is_some(), "{definition}");
+        }
+
+        let out = findings("$$a=b$$\n\\def\\grab#1$${#1} prose $$\n");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].fix.is_none());
     }
 
     #[test]

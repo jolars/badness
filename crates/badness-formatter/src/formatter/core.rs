@@ -354,6 +354,7 @@ fn format_root(
     // owned here for the whole lowering like `user` and `regions`.
     let dtx_reflow_cache = DtxReflowCache::default();
     let algorithm2e_cache = RefCell::new(HashMap::new());
+    let alignment_tab_cache = RefCell::new(HashMap::new());
     let cx = LowerCtx {
         wrap: ctx.style().wrap,
         item_indent: ctx.style().item_indent,
@@ -369,6 +370,7 @@ fn format_root(
         range,
         dtx_reflow_cache: &dtx_reflow_cache,
         algorithm2e_cache: &algorithm2e_cache,
+        alignment_tab_cache: &alignment_tab_cache,
         dtx_margin_probe: false,
         preserve_dtx_nested_layout: false,
         in_dtx_doc_region: false,
@@ -793,6 +795,8 @@ struct LowerCtx<'a> {
     /// Cache the control-flow proof for each candidate algorithm environment;
     /// every paragraph and managed command can ask for the same body policy.
     algorithm2e_cache: &'a RefCell<HashMap<SyntaxNode, bool>>,
+    /// Reuse the alignment-tab scan when paragraphs ask about the same environment.
+    alignment_tab_cache: &'a RefCell<HashMap<SyntaxNode, bool>>,
     /// Set while *probing* whether a `.dtx` doc paragraph reflows safely. The probe
     /// lowers the paragraph, and that lowering must not consult
     /// [`margin_floats_into_paragraph`] again — the two would recurse into each
@@ -1312,7 +1316,7 @@ fn lower_node(node: &SyntaxNode, cx: LowerCtx<'_>) -> Ir {
         SyntaxKind::ENVIRONMENT
             if !has_verbatim_body(node)
                 && !contains_doc_margin(node, cx)
-                && body_has_top_level_ampersand(node) =>
+                && body_has_top_level_ampersand(node, cx) =>
         {
             return lower_aligned_environment(node, cx);
         }
@@ -1465,7 +1469,7 @@ fn paragraph_reflow_kind(node: &SyntaxNode, cx: LowerCtx<'_>) -> ReflowKind {
         ReflowKind::Statement
     } else if node.parent().is_some_and(|parent| {
         parent.kind() == SyntaxKind::ENVIRONMENT
-            && (is_alignment_env(&parent, cx) || body_has_top_level_ampersand(&parent))
+            && (is_alignment_env(&parent, cx) || body_has_top_level_ampersand(&parent, cx))
     }) {
         ReflowKind::AlignmentBody
     } else {
@@ -6771,14 +6775,19 @@ fn is_alignment_env(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
 /// keyed on `&` alone (not `\\`): a `\\`-only body is a line stack, not a column
 /// alignment, and gridding an arbitrary `\begin{center}a \\ b\end{center}` would
 /// reflow it.
-fn body_has_top_level_ampersand(node: &SyntaxNode) -> bool {
-    node.children_with_tokens().any(|el| match el {
-        SyntaxElement::Token(t) => t.kind() == SyntaxKind::AMPERSAND,
-        SyntaxElement::Node(p) if p.kind() == SyntaxKind::PARAGRAPH => p
-            .children_with_tokens()
-            .any(|g| g.kind() == SyntaxKind::AMPERSAND),
-        _ => false,
-    })
+fn body_has_top_level_ampersand(node: &SyntaxNode, cx: LowerCtx<'_>) -> bool {
+    *cx.alignment_tab_cache
+        .borrow_mut()
+        .entry(node.clone())
+        .or_insert_with(|| {
+            node.children_with_tokens().any(|el| match el {
+                SyntaxElement::Token(t) => t.kind() == SyntaxKind::AMPERSAND,
+                SyntaxElement::Node(p) if p.kind() == SyntaxKind::PARAGRAPH => p
+                    .children_with_tokens()
+                    .any(|g| g.kind() == SyntaxKind::AMPERSAND),
+                _ => false,
+            })
+        })
 }
 
 /// True if `node` (an `ENVIRONMENT`) names an environment the signature DB marks

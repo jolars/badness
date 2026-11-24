@@ -223,7 +223,7 @@ fn append_formatted(
     if pending.is_empty() {
         return;
     }
-    let mut formatted = printer.print(&Ir::concat(std::mem::take(pending)).propagate_breaks());
+    let mut formatted = printer.print(&Ir::concat(std::mem::take(pending)));
     if eof {
         let trimmed_len = formatted.trim_end_matches([' ', '\t', '\n', '\r']).len();
         formatted.truncate(trimmed_len);

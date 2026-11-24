@@ -405,15 +405,17 @@ sources below are missing.
   still preserves write ordering and declaration publication. Measurements and
   validation are in `target/perf-investigation/config-validation/`.
 
-- [ ] **Improve large-file formatting.** On a Ryzen 9 7900, the release CLI
-  took 11.9 s median over five runs and used 1.34 GiB peak RSS on the 29.7 MB
-  Stacks book generated with `make tmp/book.tex` at `a04446e`. A separate probe
-  measured 1.5 s for parsing and 7.4 s for formatting from the CST. Rowan's
-  token traversal accounted for about 24% of sampled CPU cycles. Time the
-  formatter's full-tree scans individually and see which can share a traversal.
-  Add an opt-in scaling benchmark with many paragraphs in one environment.
-  Recheck peak RSS, byte-for-byte output, losslessness, and idempotence on the
-  generated book. [Issue #240](https://github.com/jolars/badness/issues/240)
+- [x] **Reduce large-file formatting memory and measure scaling.** On a
+  Ryzen 9 7900, the release CLI's median peak RSS fell from 1.34 to 0.97 GiB
+  (27%) and wall time fell from 8.03 to 6.94 s (14%) across five paired runs
+  against `84c2570`. The input was the 29.7 MB Stacks book generated with
+  `make tmp/book.tex` at `a04446e`. Parser events and formatter layout nodes
+  each take half as much space. Token validation and docstrip detection
+  share a traversal, and the printer uses the break information already
+  stored in groups. Run `BADNESS_BENCH_SCALING=1 task bench:micro` to measure
+  one environment with 1,000 to 32,000 paragraphs. See
+  `target/perf-investigation/book-memory/` for measurements and validation.
+  [Issue #240](https://github.com/jolars/badness/issues/240)
 
 - [ ] **Borrowed token text, maybe.** Tokens are `SmolStr`
   (`Token` in `parser/lexer.rs`, same in `bib/lexer.rs`), so short tokens are

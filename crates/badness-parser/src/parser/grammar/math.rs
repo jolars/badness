@@ -3,6 +3,8 @@
 //! All math bodies share atom and script parsing, including named environments.
 //! Entry gates live with the grammar's shared shape-gate machinery.
 
+use rowan::{TextRange, TextSize};
+
 use super::trivia::CommentMode;
 use super::{Block, LEFT_CMD, Parser, RIGHT_CMD, peek_end_name};
 use crate::parser::events::Event;
@@ -195,7 +197,7 @@ impl Parser<'_> {
     fn math_word_fragment(&mut self, idx: usize, start: usize, end: usize) {
         debug_assert!(start < end, "math WORD fragment must be non-empty");
         if !self.at_script() {
-            self.events.push(Event::SubTok { idx, start, end });
+            self.emit_word_fragment(idx, start, end);
             return;
         }
 
@@ -205,19 +207,20 @@ impl Parser<'_> {
             .map(|(offset, _)| start + offset)
             .expect("a WORD fragment is non-empty");
         if start < last {
-            self.events.push(Event::SubTok {
-                idx,
-                start,
-                end: last,
-            });
+            self.emit_word_fragment(idx, start, last);
         }
         let checkpoint = self.events.len();
-        self.events.push(Event::SubTok {
-            idx,
-            start: last,
-            end,
-        });
+        self.emit_word_fragment(idx, last, end);
         self.math_scripts(checkpoint);
+    }
+
+    fn emit_word_fragment(&mut self, idx: usize, start: usize, end: usize) {
+        let offset = self.starts[idx];
+        let range = TextRange::new(
+            TextSize::try_from(offset + start).expect("source offset exceeds Rowan's limit"),
+            TextSize::try_from(offset + end).expect("source offset exceeds Rowan's limit"),
+        );
+        self.events.push(Event::SubTok(range));
     }
 
     /// Attach any `^`/`_` scripts that follow the base atom emitted since
@@ -373,11 +376,7 @@ impl Parser<'_> {
             let text = &self.tokens[idx].text;
             let end = text.len();
             let first_end = text.char_indices().nth(1).map_or(end, |(offset, _)| offset);
-            self.events.push(Event::SubTok {
-                idx,
-                start: 0,
-                end: first_end,
-            });
+            self.emit_word_fragment(idx, 0, first_end);
             self.pos += 1;
             return (first_end < end).then_some((idx, first_end, end));
         }

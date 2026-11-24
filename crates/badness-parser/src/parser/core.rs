@@ -119,7 +119,7 @@ pub fn parse_with_declarations_resolved(
 fn parse_with(input: &str, ctx: &ParseCtx, config: LexConfig) -> Parse {
     let tokens = lex_with(input, ctx, config);
     let (events, errors) = grammar::parse(&tokens, ctx);
-    let green = build_tree(&tokens, &events);
+    let green = build_tree(input, &tokens, &events);
     Parse { green, errors }
 }
 
@@ -136,7 +136,7 @@ pub(crate) fn parse_fragment_with_ctx(
 ) -> Parse {
     let tokens = lex_with_implicit_expl(input, ctx, config, implicit_expl);
     let (events, errors) = grammar::parse(&tokens, ctx);
-    let green = build_tree(&tokens, &events);
+    let green = build_tree(input, &tokens, &events);
     Parse { green, errors }
 }
 

@@ -1,11 +1,9 @@
 //! Recursive-descent grammar for LaTeX surface syntax.
 //!
 //! The parser walks the full token stream (trivia included) and emits a flat
-//! list of [`Event`]s — `Start(kind)` / `Tok(idx)` / `Finish` — that
-//! [`super::tree_builder`] replays into a green tree. Because every token is
-//! emitted exactly once, in order, via [`Parser::bump`], losslessness holds by
-//! construction: `pos` only ever advances through `bump`, and nothing else
-//! touches it.
+//! list of [`Event`]s that [`super::tree_builder`] replays into a green tree.
+//! Each token is emitted in order, either whole via [`Parser::bump`] or as
+//! contiguous source slices when math scripts split a `WORD`.
 //!
 //! It is **error-tolerant**: a malformed construct never aborts the parse. Each
 //! recovery records a [`SyntaxError`] on the side channel and either closes the
@@ -93,7 +91,7 @@ fn debug_assert_balanced(events: &[Event]) {
                 depth -= 1;
                 debug_assert!(depth >= 0, "parser emitted a Finish with no open node");
             }
-            Event::Tok(_) | Event::SubTok { .. } => {}
+            Event::Tok(_) | Event::SubTok(_) => {}
         }
     }
     debug_assert_eq!(

@@ -195,7 +195,7 @@ pub fn format_with_style_flavored_with_signatures(
 /// reparse-free entry: the language server hands it the salsa-cached tree
 /// (`db.parsed_tree`) instead of re-running the parser. The caller owns the
 /// `ParseErrors` guard — this entry assumes the parse was clean and only
-/// enforces the `ERROR`-token invariant ([`validate_supported_tokens`]).
+/// enforces the `ERROR`-token invariant.
 /// [`format_with_style`] is the parse-then-format convenience wrapper.
 pub fn format_node(root: &SyntaxNode, style: FormatStyle) -> Result<String, FormatError> {
     format_node_with_signatures(root, style, &SignatureDb::default())
@@ -222,10 +222,8 @@ pub fn format_node_with_signatures_sentence(
     external: &SignatureDb,
     sentence: SentenceOptions<'_>,
 ) -> Result<String, FormatError> {
-    validate_supported_tokens(root)?;
-
     let ctx = FormatContext::with_sentence(style, sentence);
-    let mut formatted = format_root(root, ctx, external, None);
+    let mut formatted = format_root(root, ctx, external, None)?;
     // Normalize the document's trailing edge: drop any trailing blank lines and
     // per-line trailing whitespace at EOF, then guarantee exactly one final
     // newline. Empty output stays empty. Only ASCII whitespace/newlines are
@@ -279,10 +277,8 @@ pub fn format_node_range_with_signatures_sentence(
     range: TextRange,
     sentence: SentenceOptions<'_>,
 ) -> Result<String, FormatError> {
-    validate_supported_tokens(root)?;
-
     let ctx = FormatContext::with_sentence(style, sentence);
-    let mut formatted = format_root(root, ctx, external, Some(range));
+    let mut formatted = format_root(root, ctx, external, Some(range))?;
     let trimmed_len = formatted.trim_end_matches([' ', '\t', '\n', '\r']).len();
     formatted.truncate(trimmed_len);
     // Detected from the whole document, not the fragment: the replacement has to
@@ -302,21 +298,25 @@ fn resolve_line_ending(root: &SyntaxNode, style: FormatStyle) -> LineEnding {
     }
 }
 
-/// Refuse any `ERROR` token. A clean parse should contain none, but the parser
-/// can emit them on recovery; the formatter never reshapes around them.
-fn validate_supported_tokens(root: &SyntaxNode) -> Result<(), FormatError> {
-    for element in root.descendants_with_tokens() {
-        let Some(token) = element.into_token() else {
-            continue;
-        };
-        if token.kind() == SyntaxKind::ERROR {
-            return Err(FormatError::UnsupportedConstruct {
-                kind: token.kind(),
-                snippet: token.text().to_string(),
-            });
+/// Detect docstrip tokens while checking the whole tree for `ERROR` tokens.
+fn validate_and_detect_dtx(root: &SyntaxNode) -> Result<bool, FormatError> {
+    let mut is_dtx = false;
+    for token in root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+    {
+        match token.kind() {
+            SyntaxKind::ERROR => {
+                return Err(FormatError::UnsupportedConstruct {
+                    kind: token.kind(),
+                    snippet: token.text().to_string(),
+                });
+            }
+            SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD => is_dtx = true,
+            _ => {}
         }
     }
-    Ok(())
+    Ok(is_dtx)
 }
 
 fn format_root(
@@ -324,7 +324,8 @@ fn format_root(
     ctx: FormatContext,
     external: &SignatureDb,
     range: Option<TextRange>,
-) -> String {
+) -> Result<String, FormatError> {
+    let is_dtx = validate_and_detect_dtx(root)?;
     // Class meanings depend only on the document's literal declaration. Loaded
     // local packages and document redefinitions override these curated defaults.
     let mut user = document_class_signatures(root).cloned().unwrap_or_default();
@@ -377,18 +378,10 @@ fn format_root(
         in_alignment_cell: false,
         absorbed_control_newline: None,
         omitted_leading_comment: None,
-        is_dtx: root
-            .descendants_with_tokens()
-            .filter_map(|e| e.into_token())
-            .any(|t| matches!(t.kind(), SyntaxKind::DOC_MARGIN | SyntaxKind::GUARD)),
+        is_dtx,
     };
-    // Saturate `Group::expand` at the lowering->printer seam: after this, the
-    // flag is the single representation of "forced open" the printer trusts.
-    // Lowering-time `contains_forced_break` queries use the immutable summary
-    // stored at each group boundary; this final pass still marks every nested
-    // group for the printer in one bottom-up walk.
-    let ir = lower_node(root, cx).propagate_breaks();
-    Printer::new(ctx.style()).print(&ir)
+    let ir = lower_node(root, cx);
+    Ok(Printer::new(ctx.style()).print(&ir))
 }
 
 /// Whether two byte ranges overlap (share at least one byte). Half-open, so ranges
@@ -4527,11 +4520,9 @@ fn lower_expl_group(
                 forced,
             } => (open_ir, body, close_ir, spaced, forced),
         };
-    // A forced block gets hard boundary separators *in-shape*, so
-    // `propagate_breaks` marks the group `expand` and the printer lays the
-    // body out in break mode — never the K&R hybrid of a flat-dispatched
-    // concat (issue #97, `l3auxdata.dtx`). Otherwise the flat boundary is a
-    // space (l3 house style) or nothing (tight); both break identically.
+    // Hard boundary separators force the group into break mode
+    // (issue #97, `l3auxdata.dtx`). A soft boundary prints a space or
+    // nothing in flat mode. Both choices break identically.
     let boundary = if has_comment {
         Ir::hard_line()
     } else if spaced {

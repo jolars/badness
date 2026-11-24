@@ -6,9 +6,9 @@ use crate::parser::events::Event;
 use crate::parser::lexer::Token;
 use crate::syntax::SyntaxKind;
 
-/// Replay `events` against `tokens` to construct the green tree. The whole
-/// document is wrapped in a single `ROOT` node.
-pub(crate) fn build_tree(tokens: &[Token], events: &[Event]) -> GreenNode {
+/// Replay `events` against the lexer tokens and source slices to construct a
+/// green tree wrapped in a single `ROOT` node.
+pub(crate) fn build_tree(input: &str, tokens: &[Token], events: &[Event]) -> GreenNode {
     let mut builder = GreenNodeBuilder::new();
     builder.start_node(SyntaxKind::ROOT.into());
     for event in events {
@@ -18,8 +18,8 @@ pub(crate) fn build_tree(tokens: &[Token], events: &[Event]) -> GreenNode {
                 let tok = &tokens[idx];
                 builder.token(tok.kind.into(), &tok.text);
             }
-            Event::SubTok { idx, start, end } => {
-                builder.token(SyntaxKind::WORD.into(), &tokens[idx].text[start..end]);
+            Event::SubTok(range) => {
+                builder.token(SyntaxKind::WORD.into(), &input[range]);
             }
             Event::Finish => builder.finish_node(),
         }

@@ -24,7 +24,9 @@
 //!
 //! Env knobs:
 //!   - `BADNESS_BENCH_DOC` — profile only this doc under `benches/documents/`.
-//!   - `BADNESS_BENCH_ITERATIONS` — iteration count for the selected doc (10).
+//!   - `BADNESS_BENCH_SCALING` — generate documents with increasing paragraph
+//!     counts inside one environment instead of loading the corpus.
+//!   - `BADNESS_BENCH_ITERATIONS` — iteration count for single-doc or scaling mode (10).
 //!   - `BADNESS_BENCH_OUTPUT_JSON` — write a machine-readable report to this path.
 
 use badness::formatter::{FormatStyle, format_node, format_with_style_flavored};
@@ -167,6 +169,21 @@ fn load_document(name: &str) -> Option<String> {
     fs::read_to_string(Path::new("benches/documents").join(name)).ok()
 }
 
+fn paragraph_scaling(iterations: usize) -> Vec<BenchmarkResult> {
+    const PARAGRAPH: &str = "A paragraph with some text and $x+y$ in an ordinary environment.\n\n";
+
+    [1_000, 2_000, 4_000, 8_000, 16_000, 32_000]
+        .into_iter()
+        .map(|count| {
+            let mut input = String::from("\\begin{document}\n");
+            input.extend(std::iter::repeat_n(PARAGRAPH, count));
+            input.push_str("\\end{document}\n");
+            run_benchmark(&format!("paragraphs-{count}.tex"), &input, iterations)
+                .expect("generated paragraph document must format")
+        })
+        .collect()
+}
+
 /// Measure the one-time signature-DB init. The builtin `data/signatures.json` is
 /// a `LazyLock` parsed once per process — a fixed *startup-floor* component the
 /// CLI pays once and the timed per-byte loops below never see (warmup triggers it
@@ -194,19 +211,24 @@ fn main() {
     println!("badness formatter micro-benchmarks (in-process, no startup floor)");
     report_signature_db_init();
 
+    let selected_iterations = env::var("BADNESS_BENCH_ITERATIONS")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .unwrap_or(10);
+    if env::var_os("BADNESS_BENCH_SCALING").is_some() {
+        maybe_write_json_report(paragraph_scaling(selected_iterations));
+        return;
+    }
+
     let mut results = Vec::new();
 
     // Single-doc profiling mode: profile exactly the named document, e.g. under
     // `cargo flamegraph --bench formatting`.
     if let Ok(doc_name) = env::var("BADNESS_BENCH_DOC") {
-        let iterations = env::var("BADNESS_BENCH_ITERATIONS")
-            .ok()
-            .and_then(|raw| raw.parse::<usize>().ok())
-            .unwrap_or(10);
         let doc = load_document(&doc_name).unwrap_or_else(|| {
             panic!("BADNESS_BENCH_DOC '{doc_name}' not found under benches/documents/")
         });
-        results.extend(run_benchmark(&doc_name, &doc, iterations));
+        results.extend(run_benchmark(&doc_name, &doc, selected_iterations));
         maybe_write_json_report(results);
         return;
     }

@@ -43,7 +43,7 @@ impl LayoutCost {
 /// `FlatPrefix` is the weaker claim used by trailing-block hugs: measurement
 /// stops at the first forced break, so nested groups beyond it must re-evaluate.
 ///
-/// An `expand` group always renders in `Break`, even under an incoming `Flat`.
+/// A regular group with a forced break always renders in `Break`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Flat,
@@ -60,22 +60,21 @@ enum FlatMeasure {
     /// The flat-rendered *footprint*, unbounded by the line width. A
     /// single-line forced-break `Verbatim` (a comment) counts its width — it
     /// shares the line, forcing a break only *after* — as does a group forced
-    /// open only by one (`expand` is ignored; a genuinely unflattenable group
-    /// surfaces its `HardLine` by recursion). Behind [`Printer::flat_width`],
-    /// the fill layout's pair-fit width.
+    /// open only by one. Recursing into a group still exposes its hard lines.
+    /// This is the fill layout's pair-fit width, measured by [`Printer::flat_width`].
     Footprint,
     /// Can the subtree lie *fully flat* within the line width from the start
-    /// column: any forced break (a comment included) fails, an `expand` group
-    /// fails, and the measurement fails as soon as the width is exceeded. The
+    /// column: any forced break (a comment included) fails, and the
+    /// measurement fails as soon as the width is exceeded. The
     /// non-hug `Group` decision.
     Fits,
     /// The trailing-block hug's prefix claim: a forced line break
     /// (`HardLine`/`EmptyLine`, or a *multi-line* `Verbatim`) stops the
     /// measurement *successfully* — only the prefix up to the block's opening
     /// needs to fit — while a single-line comment still fails, and content
-    /// decides instead of the `expand` flag. With `excuse_overflow`, an atom
-    /// that can never fit on any line (`width >= line_width`) is excused
-    /// rather than failed (see `hug_excuse_overflow` on [`Ir::Group`]).
+    /// decides even when a group contains a forced break. With `excuse_overflow`,
+    /// the measurement accepts an atom that can never fit on any line
+    /// (`width >= line_width`). See `hug_excuse_overflow` on [`Ir::Group`].
     HugPrefix { excuse_overflow: bool },
 }
 
@@ -149,6 +148,8 @@ enum Cmd<'a> {
 pub(crate) struct Printer {
     line_width: usize,
     indent_unit: usize,
+    // Lowering's flat probe keeps soft separators flat inside forced groups.
+    expand_forced_groups: bool,
 }
 
 /// Accumulates output while deferring indentation until visible content is
@@ -278,6 +279,7 @@ impl Printer {
         Self {
             line_width: style.effective_line_width(),
             indent_unit: style.indent_width,
+            expand_forced_groups: true,
         }
     }
 
@@ -304,7 +306,9 @@ impl Printer {
     /// `Group`/`ConditionalGroup` inside a cell stays flat rather than breaking on
     /// the configured line width.
     pub(crate) fn print_flat(&self, ir: &Ir) -> String {
-        self.wide().run_with_mode(ir, 0, 0, Mode::Flat)
+        let mut printer = self.wide();
+        printer.expand_forced_groups = false;
+        printer.run_with_mode(ir, 0, 0, Mode::Flat)
     }
 
     /// A copy of this printer with an effectively infinite line width, so a
@@ -315,6 +319,7 @@ impl Printer {
         Printer {
             line_width: UNLIMITED_LINE_WIDTH,
             indent_unit: self.indent_unit,
+            expand_forced_groups: self.expand_forced_groups,
         }
     }
 
@@ -447,11 +452,8 @@ impl Printer {
                     hug: true,
                     broken: false,
                 }),
-                Ir::PreferredFill {
-                    atoms,
-                    preferred,
-                    target,
-                } => {
+                Ir::PreferredFill(fill) => {
+                    let atoms = &fill.atoms;
                     let breaks = if mode != Mode::Break {
                         vec![false; atoms.len().saturating_sub(1)].into()
                     } else {
@@ -460,8 +462,8 @@ impl Printer {
                             indent,
                             prefix,
                             atoms,
-                            preferred,
-                            *target,
+                            &fill.preferred,
+                            fill.target,
                         )
                     };
                     stack.push(Cmd::PreferredFill {
@@ -528,19 +530,15 @@ impl Printer {
                 // first line (the leading break that put us here came from the
                 // parent, outside this scope) via the column-0 pin, then print
                 // `inner` with the prefix active so every later break re-emits it.
-                Ir::MarginPrefix {
-                    prefix: margin,
-                    blank_prefix,
-                    inner,
-                } => {
-                    w.write_column_zero(margin);
+                Ir::MarginPrefix(margin) => {
+                    w.write_column_zero(&margin.prefix);
                     stack.push(Cmd::Node {
                         indent,
                         mode,
-                        node: inner,
+                        node: &margin.inner,
                         prefix: Some(ActivePrefix {
-                            line: margin,
-                            blank: blank_prefix.as_deref(),
+                            line: &margin.prefix,
+                            blank: margin.blank_prefix.as_deref(),
                         }),
                     });
                 }
@@ -569,13 +567,9 @@ impl Printer {
                         prefix,
                     });
                 }
-                // Requires a `propagate_breaks`-saturated tree: honoring an
-                // incoming `Flat` trusts that a group whose subtree carries a
-                // hard break is `expand`-marked (the first arm), so a stale
-                // flag would wrongly pin its `Line`s flat.
                 Ir::Group {
                     inner,
-                    expand,
+                    forced_break,
                     hug,
                     hug_excuse_overflow,
                     ..
@@ -586,7 +580,7 @@ impl Printer {
                     // lets an overflowing flat layout be wrongly verified —
                     // an error the honest contract would then pin instead of
                     // letting nested re-decisions paper over it.
-                    let m = if *expand {
+                    let m = if self.expand_forced_groups && !*hug && *forced_break {
                         Mode::Break
                     } else if mode == Mode::Flat {
                         // Honest contract: the producer verified the whole
@@ -976,7 +970,7 @@ impl Printer {
     /// The shared traversal behind every flat measurement: simulate `node`
     /// laid out flat from `start_col` and return the column it ends at, or
     /// `None` when the measurement fails under `measure`'s policy (a forced
-    /// break, an overflow, an `expand` group — see [`FlatMeasure`]). For a
+    /// break, an overflow, a forced group — see [`FlatMeasure`]). For a
     /// [`FlatMeasure::HugPrefix`] stop and for an excused unfittable atom the
     /// returned column is where the measurement stopped, not a full line end —
     /// those callers only ask `is_some()`.
@@ -1026,17 +1020,26 @@ impl Printer {
                     stack.push(inner);
                 }
                 Ir::BoundedAlign { aligned, .. } => stack.push(aligned),
-                Ir::MarginPrefix { inner, .. } => stack.push(inner),
+                Ir::MarginPrefix(margin) => stack.push(&margin.inner),
                 Ir::IfBreak { flat, .. } => stack.push(flat),
-                // `Fits` trusts the saturated `expand` flag; `Footprint` and
-                // `HugPrefix` deliberately let the content decide instead. A
+                // `Fits` can reject a forced regular group immediately.
+                // `Footprint` and `HugPrefix` still inspect the content. A
                 // group forced open only by a single-line comment still has a
                 // flat footprint (the comment shares the line, forcing a
                 // break only after), and a hug must stop *successfully* at a
                 // nested block's first hard break while a prefix comment
                 // fails it — distinctions the flag cannot carry.
-                Ir::Group { inner, expand, .. } => {
-                    if *expand && measure == FlatMeasure::Fits {
+                Ir::Group {
+                    inner,
+                    hug,
+                    forced_break,
+                    ..
+                } => {
+                    if self.expand_forced_groups
+                        && !*hug
+                        && *forced_break
+                        && measure == FlatMeasure::Fits
+                    {
                         return None;
                     }
                     stack.push(inner);
@@ -1054,13 +1057,13 @@ impl Printer {
                 Ir::Fill(parts) | Ir::StickyFill(parts) | Ir::HugFill(parts) => {
                     stack.extend(parts.iter().rev());
                 }
-                Ir::PreferredFill { atoms, .. } => {
-                    let gaps = atoms.len().saturating_sub(1);
+                Ir::PreferredFill(fill) => {
+                    let gaps = fill.atoms.len().saturating_sub(1);
                     col = col.saturating_add(gaps);
                     if measure != FlatMeasure::Footprint && col > self.line_width {
                         return None;
                     }
-                    stack.extend(atoms.iter().rev());
+                    stack.extend(fill.atoms.iter().rev());
                 }
             }
         }
@@ -1350,7 +1353,7 @@ impl Printer {
                     };
                     work.push((mode, verified, chosen));
                 }
-                Ir::MarginPrefix { inner, .. } => work.push((mode, verified, inner)),
+                Ir::MarginPrefix(margin) => work.push((mode, verified, &margin.inner)),
                 Ir::IfBreak { flat, broken } => {
                     work.push((
                         mode,
@@ -1360,18 +1363,18 @@ impl Printer {
                 }
                 Ir::Group {
                     inner,
-                    expand,
+                    forced_break,
                     hug,
                     hug_excuse_overflow,
                     ..
                 } => {
                     // Mirrors the run loop's `Group` arm, honest contract
                     // included: under a verified `Flat` the printer pins the
-                    // nested group flat (`expand` carve-out aside), so the
-                    // measurement must too, or the two diverge. A non-hug
-                    // group this measurement decides flat is itself verified
+                    // nested group flat when it can, so the measurement must
+                    // follow the same decision. When this measurement picks
+                    // flat mode for a regular group, the whole group is verified
                     // ([`Self::flat_end`] measured its whole flat rendering).
-                    let (m, v) = if *expand {
+                    let (m, v) = if self.expand_forced_groups && !*hug && *forced_break {
                         (Mode::Break, false)
                     } else if verified && mode == Mode::Flat {
                         (Mode::Flat, true)
@@ -1408,7 +1411,7 @@ impl Printer {
                         work.push((mode, verified, item));
                     }
                 }
-                Ir::PreferredFill { atoms, .. } => match mode {
+                Ir::PreferredFill(fill) => match mode {
                     // A preferred fill chooses its own breaks: in `Break` mode it
                     // breaks at a gap, so its first line ends after (at most) the
                     // first atom — the line fits iff that atom fits here.
@@ -1416,7 +1419,7 @@ impl Printer {
                     // force an enclosing group to break. In `Flat`/`FlatPrefix`
                     // mode the whole fill stays on the line.
                     Mode::Break => {
-                        return atoms.first().is_none_or(|atom| {
+                        return fill.atoms.first().is_none_or(|atom| {
                             self.line_fits(
                                 col,
                                 std::iter::once((Mode::Flat, false, atom)),
@@ -1425,7 +1428,7 @@ impl Printer {
                         });
                     }
                     Mode::Flat | Mode::FlatPrefix => {
-                        match self.preferred_fill_flat_end(col, atoms) {
+                        match self.preferred_fill_flat_end(col, &fill.atoms) {
                             Some(end) => col = end,
                             None => return false,
                         }
@@ -1440,6 +1443,19 @@ impl Printer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flat_probe_keeps_soft_separators_flat_inside_a_forced_group() {
+        let printer = Printer::new(FormatStyle::default());
+        let forced = Ir::group(Ir::concat([
+            Ir::text("a"),
+            Ir::line(),
+            Ir::verbatim_forced("% c"),
+        ]));
+        let ir = Ir::if_break(forced, Ir::nil());
+        assert_eq!(printer.flat_width(&ir), Some(5));
+        assert_eq!(printer.print_flat(&ir), "a % c");
+    }
 
     #[test]
     fn tight_line_renders_glued_but_keeps_the_line_fit_budget() {
@@ -1680,8 +1696,7 @@ mod tests {
         let ir = Ir::concat([
             Ir::conditional_group_all_lines([candidate]),
             Ir::text("XXXX"),
-        ])
-        .propagate_breaks();
+        ]);
         assert_eq!(printer.print(&ir), "abc defXXXX");
     }
 
@@ -1732,8 +1747,7 @@ mod tests {
                 Ir::indent(Ir::concat([Ir::hard_line(), t_branch])),
                 Ir::indent(Ir::concat([Ir::hard_line(), f_branch])),
             ]),
-        ]))
-        .propagate_breaks();
+        ]));
         assert_eq!(
             printer.print(&ir),
             "\\head:TF \\v\n  {\n    tt\n  }\n  {\n    ffffffffffffffffffff\n  }"
@@ -1743,8 +1757,7 @@ mod tests {
     #[test]
     fn hug_prefix_flat_does_not_pin_the_expanded_block() {
         // A hug verifies only its prefix, so its `Flat` must not reach into
-        // the detonating block: the block group is `expand`-marked by
-        // `propagate_breaks` and still prints `Break` (its `Line` breaks)
+        // the block: its forced group still prints in `Break` mode
         // even though it is dispatched under the hug's flat prefix.
         let printer = Printer::new(FormatStyle::default());
         let block = Ir::group(Ir::concat([
@@ -1758,7 +1771,7 @@ mod tests {
             Ir::hard_line(),
             Ir::text("}"),
         ]));
-        let ir = Ir::group_hug(Ir::concat([Ir::text("f(a, "), block])).propagate_breaks();
+        let ir = Ir::group_hug(Ir::concat([Ir::text("f(a, "), block]));
         assert_eq!(printer.print(&ir), "f(a, {\n  x\n  y\n}");
     }
 
@@ -1774,8 +1787,7 @@ mod tests {
             ])),
             Ir::soft_line(),
             Ir::text("}"),
-        ]))
-        .propagate_breaks();
+        ]));
         assert!(!ir.contains_forced_break());
         for line_width in [0, 20, 80] {
             let printer = Printer::new(FormatStyle {
@@ -2043,11 +2055,11 @@ mod tests {
         ];
         // A plain fill has no flat width for the block-bearing atom, so its gap
         // breaks and the atom starts a line of its own.
-        let plain = Ir::Fill(parts.to_vec().into()).propagate_breaks();
+        let plain = Ir::Fill(parts.to_vec().into());
         assert_eq!(printer.print(&plain), "head\ncmd{\n  body\n}");
         // The hugging fill measures the atom's first line instead: `cmd{` fits
         // after `head `, so the pair stays joined and only the body breaks.
-        let hug = Ir::HugFill(parts.to_vec().into()).propagate_breaks();
+        let hug = Ir::HugFill(parts.to_vec().into());
         assert_eq!(printer.print(&hug), "head cmd{\n  body\n}");
     }
 
@@ -2065,8 +2077,7 @@ mod tests {
                 Ir::concat([Ir::text("cmd"), block()]),
             ]
             .into(),
-        )
-        .propagate_breaks();
+        );
         let mid = Ir::HugFill(
             vec![
                 Ir::text("head"),
@@ -2076,8 +2087,7 @@ mod tests {
                 Ir::text("tail"),
             ]
             .into(),
-        )
-        .propagate_breaks();
+        );
         assert_eq!(printer.print(&last), "head cmd{\n  body\n}");
         assert_eq!(printer.print(&mid), "head cmd{\n  body\n}\ntail");
     }
@@ -2097,8 +2107,7 @@ mod tests {
                 Ir::concat([Ir::text("command"), block()]),
             ]
             .into(),
-        )
-        .propagate_breaks();
+        );
         assert_eq!(printer.print(&ir), "head\ncommand{\n  body\n}");
     }
 

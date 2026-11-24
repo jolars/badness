@@ -81,10 +81,9 @@ profile of the full pipeline alone. Isolate the relevant loop if that
 distinction affects the diagnosis. Confirm the document was measured rather than
 skipped for parser diagnostics.
 
-Run `BADNESS_BENCH_SCALING=1 task bench:micro` to measure documents with
-1,000 to 32,000 paragraphs in a single `document` environment. The benchmark
-generates the documents before timing and reports the same three phases at
-each size.
+Run `BADNESS_BENCH_SCALING=1 task bench:micro` to measure documents with 1,000
+to 32,000 paragraphs in a single `document` environment. The benchmark generates
+the documents before timing and reports the same three phases at each size.
 
 ### Symbolized profiles
 

@@ -1214,30 +1214,22 @@ impl Printer {
     /// command keeps its already-decided mode. A seeding adapter over
     /// [`Self::line_fits`].
     fn rest_fits(&self, start_col: usize, rest: &[Cmd]) -> bool {
-        // Seed the work stack from the printer stack (`rest` is bottom→top; `pop`
-        // takes the top, i.e. the next thing to print). A `Cmd::Fill`'s parts are
-        // pushed reversed so they `pop` back in fill order.
-        // A stack command's `Flat` is a *verified* flat (the honest contract:
-        // the printer only dispatches `Flat` after measuring the whole flat
-        // rendering), so it is seeded verified and pins nested groups exactly
-        // as the run loop will.
-        let mut work: Vec<(Mode, bool, &Ir)> = Vec::new();
-        for cmd in rest {
-            match cmd {
-                Cmd::Node { mode, node, .. } => work.push((*mode, *mode == Mode::Flat, node)),
-                Cmd::Fill { mode, parts, .. } => {
-                    for part in parts.iter().rev() {
-                        work.push((*mode, *mode == Mode::Flat, part));
-                    }
-                }
+        // Read from the top of the printer stack in print order. Most pending
+        // commands belong to later lines, so let line_fits pull only what it needs.
+        // A queued Flat command has already been measured and pins nested groups.
+        let pending = rest.iter().rev().flat_map(|cmd| {
+            let (mode, nodes) = match cmd {
+                Cmd::Node { mode, node, .. } => (*mode, std::slice::from_ref(*node)),
+                Cmd::Fill { mode, parts, .. } => (*mode, *parts),
                 Cmd::PreferredFill {
                     mode, atoms, index, ..
-                } => {
-                    work.push((*mode, *mode == Mode::Flat, &atoms[*index]));
-                }
-            }
-        }
-        self.line_fits(start_col, work, CommentFit::SharesLine)
+                } => (*mode, std::slice::from_ref(&atoms[*index])),
+            };
+            nodes
+                .iter()
+                .map(move |node| (mode, mode == Mode::Flat, node))
+        });
+        self.line_fits(start_col, pending, CommentFit::SharesLine)
     }
 
     /// Does the *first line* of `node` fit starting at `start_col`? Unlike a
@@ -1253,13 +1245,13 @@ impl Printer {
     fn first_line_fits(&self, start_col: usize, node: &Ir) -> bool {
         self.line_fits(
             start_col,
-            vec![(Mode::Flat, false, node)],
+            std::iter::once((Mode::Flat, false, node)),
             CommentFit::Fails,
         )
     }
 
     /// The shared line measurement behind [`Self::rest_fits`] and
-    /// [`Self::first_line_fits`]: walk the pending `work` items from
+    /// [`Self::first_line_fits`]: walk the pending items from
     /// `start_col`, each in its mode, until the first newline that would
     /// actually be emitted (a `HardLine`/`EmptyLine`, a `Line`/`SoftLine` in
     /// `Break` mode, a multi-line `Verbatim`'s own embedded newline, or a
@@ -1285,14 +1277,15 @@ impl Printer {
     /// through [`Self::pick_candidate`] rather than assuming its flat-most
     /// candidate — the two measurements share this one traversal so they
     /// cannot drift apart again.
-    fn line_fits(
+    fn line_fits<'a>(
         &self,
         start_col: usize,
-        mut work: Vec<(Mode, bool, &Ir)>,
+        mut pending: impl Iterator<Item = (Mode, bool, &'a Ir)>,
         comments: CommentFit,
     ) -> bool {
         let mut col = start_col;
-        while let Some((mode, verified, node)) = work.pop() {
+        let mut work = Vec::new();
+        while let Some((mode, verified, node)) = work.pop().or_else(|| pending.next()) {
             match node {
                 Ir::Nil | Ir::ZeroWidth(_) => {}
                 Ir::SoftLine => {
@@ -1424,7 +1417,11 @@ impl Printer {
                     // mode the whole fill stays on the line.
                     Mode::Break => {
                         return atoms.first().is_none_or(|atom| {
-                            self.line_fits(col, vec![(Mode::Flat, false, atom)], comments)
+                            self.line_fits(
+                                col,
+                                std::iter::once((Mode::Flat, false, atom)),
+                                comments,
+                            )
                         });
                     }
                     Mode::Flat | Mode::FlatPrefix => {

@@ -20,17 +20,6 @@ function orderedUnique(rows, key) {
 
 // Whole decades keep the log scale easy to read; a small margin keeps dots
 // at the domain boundaries clear of the plot edges.
-function logDomain(points, field) {
-  var values = points
-    .map(function (p) {
-      return p[field];
-    })
-    .filter(function (value) {
-      return Number.isFinite(value) && value > 0;
-    });
-  return logExtent(values.concat([1]));
-}
-
 function logExtent(values) {
   values = values.filter(function (value) {
     return Number.isFinite(value) && value > 0;
@@ -47,7 +36,7 @@ function logExtent(values) {
 
 // Match ggplot2's log ticks: long at powers of ten, medium at five, and
 // short at the other subdivisions. Only powers of ten receive labels.
-function logAxis(domain, color, absolute) {
+function logAxis(domain, color) {
   var ticks = [];
   var major = [];
   var middle = [];
@@ -83,7 +72,7 @@ function logAxis(domain, color, absolute) {
     grid: true,
     gridOpacity: {
       condition: {
-        test: isMajor + (absolute ? "" : " && datum.value !== 1"),
+        test: isMajor,
         value: 1,
       },
       value: 0,
@@ -125,12 +114,10 @@ function seriesColor(field, title, values, compact) {
 }
 
 function spec(points, caption, compact) {
-  var dark = isDark();
-  var fg = dark ? "#c8c9db" : "#333333";
-  var grid = dark ? "#3b3f5c" : "#dddddd";
+  var config = chartConfig();
   var formatters = orderedUnique(points, "formatter");
   var documents = orderedUnique(points, "document");
-  var domain = logDomain(points, "ratio");
+  var domain = logExtent(points.map((point) => point.mean_ms));
 
   return {
     $schema: "https://vega.github.io/schema/vega-lite/v5.json",
@@ -138,43 +125,34 @@ function spec(points, caption, compact) {
     width: "container",
     height: 340,
     data: { values: points },
-    layer: [
-      // The shared baseline makes ratios comparable across documents.
-      {
-        mark: { type: "rule", strokeDash: [4, 4], color: grid },
-        encoding: { y: { datum: 1, type: "quantitative" } },
+    mark: { type: "point", filled: true, size: 130, opacity: 0.9 },
+    encoding: {
+      x: {
+        field: "formatter",
+        type: "nominal",
+        title: "Tool",
+        sort: formatters,
+        axis: { labelAngle: 0 },
       },
-      {
-        mark: { type: "point", filled: true, size: 130, opacity: 0.9 },
-        encoding: {
-          x: {
-            field: "formatter",
-            type: "nominal",
-            title: "Tool",
-            sort: formatters,
-            axis: { labelAngle: 0 },
-          },
-          y: {
-            field: "ratio",
-            type: "quantitative",
-            title: "Time relative to badness",
-            scale: { type: "log", domain: domain, nice: false },
-            axis: logAxis(domain, fg),
-          },
-          color: seriesColor("document", "Document", documents, compact),
-          tooltip: [
-            { field: "document", title: "Document" },
-            { field: "formatter", title: "Tool" },
-            { field: "mean_ms", title: "Mean (ms)", format: ".3f" },
-            { field: "ratio_label", title: "Relative" },
-            { field: "min_ms", title: "Min (ms)", format: ".3f" },
-            { field: "max_ms", title: "Max (ms)", format: ".3f" },
-            { field: "stddev_ms", title: "Std dev (ms)", format: ".3f" },
-          ],
-        },
+      y: {
+        field: "mean_ms",
+        type: "quantitative",
+        title: "Mean time (ms, log scale)",
+        scale: { type: "log", domain: domain, nice: false },
+        axis: logAxis(domain, config.axis.labelColor),
       },
-    ],
-    config: chartConfig(),
+      color: seriesColor("document", "Document", documents, compact),
+      tooltip: [
+        { field: "document", title: "Document" },
+        { field: "formatter", title: "Tool" },
+        { field: "mean_ms", title: "Mean (ms)", format: ".3f" },
+        { field: "ratio_label", title: "Relative" },
+        { field: "min_ms", title: "Min (ms)", format: ".3f" },
+        { field: "max_ms", title: "Max (ms)", format: ".3f" },
+        { field: "stddev_ms", title: "Std dev (ms)", format: ".3f" },
+      ],
+    },
+    config,
   };
 }
 
@@ -272,7 +250,7 @@ function lspSpec(points, kind, caption, compact) {
         ? "Request latency (ms, log scale)"
         : "Elapsed time (ms, log scale)",
       scale: { type: "log", domain: domain, nice: false },
-      axis: logAxis(domain, chart.config.axis.labelColor, true),
+      axis: logAxis(domain, chart.config.axis.labelColor),
     },
     color: seriesColor(
       "metric",

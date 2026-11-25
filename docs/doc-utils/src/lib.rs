@@ -138,7 +138,6 @@ struct ChartPoint {
     document: String,
     formatter: String,
     mean_ms: f64,
-    ratio: f64,
     ratio_label: String,
     stddev_ms: Option<f64>,
     min_ms: Option<f64>,
@@ -218,26 +217,15 @@ struct Rendered {
 }
 
 /// Chart caption for the formatter results (`{{ benchmark-results }}`).
-const FORMAT_CAPTION: &str = "Mean formatting time relative to <code>badness</code> \
-     on a logarithmic scale. The dashed line marks <code>badness</code> at 1; \
-     faster tools fall below it. Color distinguishes documents. \
-     Hover over a dot for times in milliseconds.";
+const FORMAT_CAPTION: &str = "Mean formatting time in milliseconds on a logarithmic scale. \
+     Lower is faster. Color distinguishes documents.";
 
-/// Chart caption for the whole-project formatter results
-/// (`{{ benchmark-project-results }}`). Only `badness` and `tex-fmt` appear
-/// (latexindent has no recursive mode), and this is a folder `--check`, a
-/// different mode from the single-file rows.
 const FORMAT_PROJECT_CAPTION: &str =
-    "Mean time to check formatting across the thesis project, relative to \
-     <code>badness</code> on a logarithmic scale. The dashed line marks \
-     <code>badness</code> at 1; faster tools fall below it. \
-     Hover over a dot for times in milliseconds.";
+    "Mean time to check formatting across the thesis project in milliseconds on a \
+     logarithmic scale. Lower is faster.";
 
-/// Chart caption for the linter results (`{{ lint-benchmark-results }}`).
-const LINT_CAPTION: &str =
-    "Mean linting time relative to <code>badness</code> on a logarithmic scale. \
-     The dashed line marks <code>badness</code> at 1; faster tools fall below it. \
-     Color distinguishes documents. Hover over a dot for times in milliseconds.";
+const LINT_CAPTION: &str = "Mean linting time in milliseconds on a logarithmic scale. \
+     Lower is faster. Color distinguishes documents.";
 
 /// A Markdown bullet list of tool versions, timing backend, host, and run date.
 fn render_meta(meta: &Meta) -> String {
@@ -296,7 +284,7 @@ fn push_host_meta(out: &mut String, meta: &Meta) {
 /// plus an HTML table with the same numbers as a no-JS/print fallback.
 ///
 /// The chart data rides in an escaped HTML attribute; the JS
-/// plots time-relative-to-badness on a log axis, one dot per (document,
+/// plots mean time in milliseconds on a log axis, one dot per (document,
 /// formatter). Kept as raw HTML (not a Markdown pipe table) so the fallback
 /// renders inside `<details>`.
 fn render_results(documents: &[Document], results: &[BenchResult], caption: &str) -> String {
@@ -328,10 +316,7 @@ fn render_results(documents: &[Document], results: &[BenchResult], caption: &str
     out
 }
 
-/// One dot per (document, formatter): its mean time as a ratio to that
-/// document's badness baseline (badness itself is `1.0`), in corpus order.
-/// Documents whose baseline is missing or non-positive are skipped (they carry
-/// no meaningful ratio); they still appear in the fallback table.
+/// One dot per positive mean timing, in corpus order.
 fn chart_points(documents: &[Document], results: &[BenchResult]) -> Vec<ChartPoint> {
     let mut points = Vec::new();
     for doc in documents {
@@ -339,20 +324,19 @@ fn chart_points(documents: &[Document], results: &[BenchResult]) -> Vec<ChartPoi
             .iter()
             .find(|r| r.document == doc.id && r.formatter == "badness")
             .map(|r| r.mean_ms);
-        let Some(base) = base.filter(|&b| b > 0.0) else {
-            continue;
-        };
-        for r in results.iter().filter(|r| r.document == doc.id) {
+        for r in results
+            .iter()
+            .filter(|r| r.document == doc.id && r.mean_ms > 0.0)
+        {
             let ratio_label = if r.formatter == "badness" {
                 "baseline".to_string()
             } else {
-                relative_cell(r.mean_ms, Some(base))
+                relative_cell(r.mean_ms, base)
             };
             points.push(ChartPoint {
                 document: doc.name.clone(),
                 formatter: r.formatter.clone(),
                 mean_ms: r.mean_ms,
-                ratio: r.mean_ms / base,
                 ratio_label,
                 stddev_ms: r.stddev_ms,
                 min_ms: r.min_ms,

@@ -3612,7 +3612,7 @@ fn unlimited_line_width_keeps_stable_authored_breaks() {
     let caption = "\\caption{Alpha beta\ngamma delta epsilon zeta eta theta.}\n";
     assert_eq!(
         format_with_style(caption, style).unwrap(),
-        "\\caption{\n  Alpha beta\n  gamma delta epsilon zeta eta theta.\n}\n",
+        "\\caption{Alpha beta\n  gamma delta epsilon zeta eta theta.}\n",
     );
     check_format_invariants(caption, style, LexConfig::default()).unwrap();
 }

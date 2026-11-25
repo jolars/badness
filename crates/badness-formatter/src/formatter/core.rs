@@ -9763,8 +9763,10 @@ fn lower_inline_prose_group(
 /// Lower a block-level prose argument: like [`lower_bracketed`], but the body is reflowed
 /// to the line width ([`reflow_elements`]) and the whole thing is wrapped in a soft
 /// [`Ir::group`] so it stays on one line when it fits (`\caption{short}`) and
-/// breaks the delimiters onto their own lines, indenting and word-wrapping the body,
-/// when it does not. Empty bodies collapse to the bare delimiters.
+/// indents and word-wraps the body when it does not. A delimiter glued to the body
+/// stays glued, since a break there would add a space token to the argument; one
+/// separated from it by whitespace takes its own line. Empty bodies collapse to the
+/// bare delimiters.
 ///
 /// A `%` comment at either edge of the body takes [`lower_bracketed`]'s two
 /// guards, for the same reasons — the soft group is the only thing that makes
@@ -9812,6 +9814,14 @@ fn lower_prose_group_kind(
         }
     }
 
+    let edge_is_gap = |element: Option<&SyntaxElement>| {
+        element
+            .and_then(SyntaxElement::as_token)
+            .is_some_and(|t| is_collapsible_trivia(t.kind()))
+    };
+    let leading_gap = edge_is_gap(body_elements.first());
+    let trailing_gap = edge_is_gap(body_elements.last());
+
     // The parser emits leading whitespace/newlines as their own trivia tokens, so
     // the first body element is a `COMMENT` iff it was glued to the opener.
     let has_leading_comment = body_elements
@@ -9842,10 +9852,13 @@ fn lower_prose_group_kind(
             } else {
                 Ir::soft_line
             };
+        // A glued edge holds no space token; breaking there would add one.
+        let hug = kind != ReflowKind::Algorithm2e;
+        let edge = |guarded: bool| if hug && !guarded { Ir::Nil } else { brk() };
         Ir::group(Ir::concat([
             open_ir,
-            Ir::indent(Ir::concat([brk(), body])),
-            brk(),
+            Ir::indent(Ir::concat([edge(has_leading_comment || leading_gap), body])),
+            edge(has_trailing_comment || trailing_gap),
             close_ir,
         ]))
     }

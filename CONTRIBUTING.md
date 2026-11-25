@@ -202,8 +202,9 @@ URIs: decode LSP URIs to filesystem paths only through `uri_to_fs_path` and
 
 User-facing docs use [VitePress](https://vitepress.dev/) under `docs/`. Preview
 them locally with `task docs:serve` (live reload), build them with `task docs`,
-or run the documentation checks with `task docs:check`. The linter-rules
-reference and benchmark results are generated; regenerate them with
+or run the documentation checks with `task docs:check`. The devenv shell uses
+Corepack to select the pnpm version pinned in `docs/package.json`. The
+linter-rules reference and benchmark results are generated; regenerate them with
 `task docs:rules` and `task bench` rather than editing them by hand. Building
 the site reads the committed benchmark data without running benchmarks.
 
@@ -215,8 +216,8 @@ content shared by VitePress and Markdown exports.
 
 GitHub Actions validates pull requests and main pushes. Release tags and manual
 runs deploy the built site to Cloudflare Workers at <https://badness.dev>.
-`pnpm --dir docs preview:worker` previews redirects and Markdown negotiation
-locally after a build. Deployment uses the `CLOUDFLARE_ACCOUNT_ID` and
+After a build, run `pnpm preview:worker` from `docs/` to preview redirects and
+Markdown negotiation locally. Deployment uses the `CLOUDFLARE_ACCOUNT_ID` and
 `CLOUDFLARE_API_TOKEN` GitHub secrets.
 
 ## A note on `AGENTS.md`

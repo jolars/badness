@@ -47,14 +47,7 @@
 
     javascript = {
       enable = true;
-
-      pnpm = {
-        enable = true;
-
-        install = {
-          enable = true;
-        };
-      };
+      corepack.enable = true;
     };
 
     typescript = {

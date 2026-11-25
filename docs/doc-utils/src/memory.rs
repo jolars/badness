@@ -293,7 +293,7 @@ fn render_speed(benchmarks: &MemoryBenchmarks) -> String {
         "lsp-readiness",
         &readiness,
         "Time until each server is ready, on a logarithmic scale. Dots show medians \
-         across fresh sessions, and color distinguishes the waits. Lower is faster. \
+         across fresh sessions, and color distinguishes servers. Lower is faster. \
          Hover over a dot for minimum and maximum times.",
         &table,
     ));
@@ -331,7 +331,7 @@ fn render_speed(benchmarks: &MemoryBenchmarks) -> String {
         "lsp-latency",
         &latencies,
         "Warm request latency on a logarithmic scale. Dots show medians, and color \
-         distinguishes operations. Lower is faster. Hover over a dot for the 95th \
+         distinguishes servers. Lower is faster. Hover over a dot for the 95th \
          percentile, sample counts, and response details.",
         &table,
     ));

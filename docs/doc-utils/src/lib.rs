@@ -218,14 +218,14 @@ struct Rendered {
 
 /// Chart caption for the formatter results (`{{ benchmark-results }}`).
 const FORMAT_CAPTION: &str = "Mean formatting time in milliseconds on a logarithmic scale. \
-     Lower is faster. Color distinguishes documents.";
+     Lower is faster. Color distinguishes tools.";
 
 const FORMAT_PROJECT_CAPTION: &str =
     "Mean time to check formatting across the thesis project in milliseconds on a \
      logarithmic scale. Lower is faster.";
 
 const LINT_CAPTION: &str = "Mean linting time in milliseconds on a logarithmic scale. \
-     Lower is faster. Color distinguishes documents.";
+     Lower is faster. Color distinguishes tools.";
 
 /// A Markdown bullet list of tool versions, timing backend, host, and run date.
 fn render_meta(meta: &Meta) -> String {

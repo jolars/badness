@@ -215,8 +215,8 @@ Vega scripts only on pages with charts. `docs/doc-utils` renders generated
 content shared by VitePress and Markdown exports.
 
 GitHub Actions validates pull requests and main pushes. Release tags and manual
-runs deploy the built site to Cloudflare Workers at <https://badness.dev>.
-After a build, run `pnpm preview:worker` from `docs/` to preview redirects and
+runs deploy the built site to Cloudflare Workers at <https://badness.dev>. After
+a build, run `pnpm preview:worker` from `docs/` to preview redirects and
 Markdown negotiation locally. Deployment uses the `CLOUDFLARE_ACCOUNT_ID` and
 `CLOUDFLARE_API_TOKEN` GitHub secrets.
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.1](https://github.com/jolars/badness/compare/badness-parser-v0.13.0...badness-parser-v0.13.1) (2026-11-26)
+
+### Bug Fixes
+
+- **formatter:** honor `math-wrap` in `multlined` ([`c77f7d5`](https://github.com/jolars/badness/commit/c77f7d5e53b15e0e151285e5619dab4f144332e1)), fixes [#235](https://github.com/jolars/badness/issues/235)
+
+### Performance Improvements
+
+- **formatter:** reduce peak memory on large documents ([`7161048`](https://github.com/jolars/badness/commit/716104824bc1081104bae1f6e83200f0cc39c741)), refs [#240](https://github.com/jolars/badness/issues/240)
+
 ## [0.13.0](https://github.com/jolars/badness/compare/badness-parser-v0.12.1...badness-parser-v0.13.0) (2026-11-20)
 
 ### Features

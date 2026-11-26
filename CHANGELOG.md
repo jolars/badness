@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.30.1](https://github.com/jolars/badness/compare/v0.30.0...v0.30.1) (2026-11-26)
+
+### Bug Fixes
+
+- **project:** discover `.tikz` and `.pgf` sources ([`32d90d3`](https://github.com/jolars/badness/commit/32d90d33e727fa811030476b61637139309d555c)), fixes [#243](https://github.com/jolars/badness/issues/243)
+- **lsp:** resolve configured build roots through directory aliases ([`41c05fd`](https://github.com/jolars/badness/commit/41c05fd2fede65af00766ab4def2a5251303d8b6))
+- **cli:** resolve directory aliases during project linting ([`896e929`](https://github.com/jolars/badness/commit/896e929a77ab3bf5779e1a675eab7c4e9e8abe44))
+- **project:** scope labels and citations to document roots ([`cd66c21`](https://github.com/jolars/badness/commit/cd66c2153891cdfea66f9b82abdb590ecb06f297)), fixes [#244](https://github.com/jolars/badness/issues/244)
+- **formatter:** keep glued delimiters on block prose arguments (#242) ([`e41eb91`](https://github.com/jolars/badness/commit/e41eb910965bcdd184c657b051b98e361058efd7)), refs [#242](https://github.com/jolars/badness/issues/242)
+- **formatter:** preserve ambiguous dollar math ([`e8afbdf`](https://github.com/jolars/badness/commit/e8afbdf1ae74b211b535faf2a75a98333edda148)), fixes [#234](https://github.com/jolars/badness/issues/234)
+- **formatter:** honor `math-wrap` in `multlined` ([`c77f7d5`](https://github.com/jolars/badness/commit/c77f7d5e53b15e0e151285e5619dab4f144332e1)), fixes [#235](https://github.com/jolars/badness/issues/235)
+
+### Performance Improvements
+
+- **formatter:** reduce peak memory on large documents ([`7161048`](https://github.com/jolars/badness/commit/716104824bc1081104bae1f6e83200f0cc39c741)), refs [#240](https://github.com/jolars/badness/issues/240)
+
+### Dependencies
+
+- updated crates/badness-formatter to v0.13.1
+- updated crates/badness-parser to v0.13.1
+
 ## [0.30.0](https://github.com/jolars/badness/compare/v0.29.1...v0.30.0) (2026-11-20)
 
 ### Features

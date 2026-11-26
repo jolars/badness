@@ -2130,7 +2130,14 @@ fn hover_markdown(client: &Connection, id: i32, uri: &Uri, position: Position) -
         })
         .unwrap(),
     );
-    let resp = recv_response(client);
+    let resp = loop {
+        match recv(client) {
+            Message::Response(response) => break response,
+            Message::Notification(notification)
+                if notification.method == "textDocument/publishDiagnostics" => {}
+            other => panic!("expected a hover response, got {other:?}"),
+        }
+    };
     assert_eq!(resp.id, RequestId::from(id));
     let result = resp.result().unwrap();
     if result.is_null() {
@@ -7686,6 +7693,7 @@ fn forward_search_targets_the_root_documents_pdf_from_a_child() {
     std::fs::write(&main_path, main).unwrap();
     std::fs::write(&chapter_path, chapter).unwrap();
     std::fs::write(dir.path().join("main.pdf"), "%PDF-1.7\n").unwrap();
+    std::fs::write(dir.path().join("scratch.tex"), "\\input{chapter}\n").unwrap();
     let record = dir.path().join("viewer-args.txt");
 
     let (client, server_thread) = start_server(Some(viewer_options(&record, &["%p", "%f"])));
@@ -8006,4 +8014,442 @@ fn lsp_preserves_ambiguous_dollar_math() {
     let edit = one_formatting_edit(&client, &uri, 3);
     assert_eq!(edit.new_text, doc.replace("Other   prose.", "Other prose."));
     shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_rename_checks_every_document_that_sees_a_shared_edit() {
+    for (a_body, b_body, shared, expected_files) in [
+        (
+            "\\label{key}\\ref{key}",
+            "\\label{key}\\ref{key}",
+            "% shared",
+            1,
+        ),
+        (
+            "\\label{key}\\ref{key}",
+            "\\label{key}\\ref{key}",
+            "\\ref{key}",
+            0,
+        ),
+        ("\\ref{key}", "\\ref{key}", "\\label{key}", 3),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("a.tex");
+        let uri = path_to_file_uri(&root);
+        let document = |body| {
+            format!(
+                "\\documentclass{{article}}\n\\input{{shared}}\n\\begin{{document}}\n{body}\n\\end{{document}}\n"
+            )
+        };
+        let a = document(a_body);
+        std::fs::write(&root, &a).unwrap();
+        std::fs::write(dir.path().join("b.tex"), document(b_body)).unwrap();
+        std::fs::write(dir.path().join("shared.tex"), shared).unwrap();
+
+        let (client, thread) = start_server(None);
+        did_open(&client, &uri, 1, &a);
+        assert!(recv_diagnostics(&client).diagnostics.is_empty());
+        let cursor = Position::new(3, (a_body.rfind("{key}").unwrap() + 2) as u32);
+        let b_uri = path_to_file_uri(&dir.path().join("b.tex"));
+        let found = definition(&client, 2, &uri, cursor);
+        assert_eq!(found.len(), 1);
+        assert_ne!(found[0].uri, b_uri);
+        let refs = references(&client, 3, &uri, cursor, false);
+        assert_eq!(refs.iter().any(|loc| loc.uri == b_uri), expected_files == 3);
+        let prepared = prepare_rename(&client, 4, &uri, cursor);
+        assert_eq!(prepared.is_null(), expected_files == 0);
+        let changes = rename(&client, 5, &uri, cursor, "new");
+        assert_eq!(changes.len(), expected_files, "{changes:?}");
+        if expected_files == 1 {
+            assert!(changes.contains_key(&uri));
+        }
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_rename_shared_bibliography_entry_reaches_both_documents() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.tex");
+    let b = dir.path().join("b.tex");
+    let bib = dir.path().join("shared.bib");
+    let source = "\\documentclass{article}\n\\bibliography{shared}\n\\cite{key}\n";
+    for path in [&a, &b] {
+        std::fs::write(path, source).unwrap();
+    }
+    std::fs::write(
+        &bib,
+        "@book{KEY, title={Book}, author={Jane Smith}, year={2025}}\n",
+    )
+    .unwrap();
+    let (client, thread) = start_server(None);
+    let a_uri = path_to_file_uri(&a);
+    did_open(&client, &a_uri, 1, source);
+    assert!(recv_diagnostics(&client).diagnostics.is_empty());
+    let changes = rename(&client, 2, &a_uri, Position::new(2, 7), "new");
+    assert_eq!(changes.len(), 3);
+    for path in [&a, &b, &bib] {
+        assert_eq!(changes[&path_to_file_uri(path)].len(), 1);
+    }
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_rename_keeps_uses_in_wrappers_without_root_markers() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared = dir.path().join("shared.tex");
+    let shared_source = "\\label{key}\n";
+    let wrapper = "\\input{preamble}\n\\input{shared}\n\\ref{key}\n\\end{document}\n";
+    for (file, source) in [
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\input{shared}\n\\ref{key}\n",
+        ),
+        (
+            "preamble.tex",
+            "\\documentclass{article}\n\\begin{document}\n",
+        ),
+        ("wrapper.tex", wrapper),
+        ("shared.tex", shared_source),
+    ] {
+        std::fs::write(dir.path().join(file), source).unwrap();
+    }
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&shared);
+    did_open(&client, &uri, 1, shared_source);
+    let _ = recv_diagnostics(&client);
+    let changes = rename(&client, 2, &uri, Position::new(0, 8), "new");
+    assert_eq!(changes.len(), 3, "{changes:?}");
+    assert_eq!(
+        apply_edits(
+            wrapper,
+            &changes[&path_to_file_uri(&dir.path().join("wrapper.tex"))]
+        ),
+        wrapper.replace("{key}", "{new}")
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_rename_corrects_unresolved_references_in_one_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let source = "\\documentclass{article}\n\\input{part}\n\\label{actual}\\ref{misspelled}\n";
+    let part = "\\ref{misspelled}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(dir.path().join("part.tex"), part).unwrap();
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let _ = recv_diagnostics(&client);
+    let cursor = Position::new(2, 21);
+    assert!(!prepare_rename(&client, 2, &uri, cursor).is_null());
+    let changes = rename(&client, 3, &uri, cursor, "actual");
+    assert_eq!(changes.len(), 2);
+    assert_eq!(
+        apply_edits(source, &changes[&uri]),
+        source.replace("{misspelled}", "{actual}")
+    );
+    assert_eq!(
+        apply_edits(
+            part,
+            &changes[&path_to_file_uri(&dir.path().join("part.tex"))]
+        ),
+        "\\ref{actual}\n",
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_rename_accepts_repeated_declarations_of_the_same_subfiles_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let source =
+        "\\documentclass{article}\n\\usepackage{subfiles}\n\\subfile{part}\n\\label{key}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(dir.path().join("part.tex"),
+        "\\iftrue\n\\documentclass[main.tex]{subfiles}\n\\else\n\\documentclass[./main]{subfiles}\n\\fi\n\\ref{key}\n",
+    ).unwrap();
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let _ = recv_diagnostics(&client);
+    let changes = rename(&client, 2, &uri, Position::new(3, 8), "new");
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    shutdown(&client, thread);
+}
+
+#[cfg(unix)]
+#[test]
+fn lsp_rename_refuses_edits_to_a_definition_tracked_through_two_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.tex");
+    let b = dir.path().join("b.tex");
+    let shared = dir.path().join("shared.tex");
+    let alias = dir.path().join("alias.tex");
+    let def = "\\label{key}\n";
+    let a_source = "\\documentclass{article}\n\\input{alias}\n\\ref{key}\n";
+    for (path, source) in [
+        (&a, a_source),
+        (
+            &b,
+            "\\documentclass{article}\n\\input{shared}\n\\ref{key}\n",
+        ),
+        (&shared, def),
+    ] {
+        std::fs::write(path, source).unwrap();
+    }
+    std::os::unix::fs::symlink(&shared, &alias).unwrap();
+    let (client, thread) = start_server(None);
+    let a_uri = path_to_file_uri(&a);
+    let alias_uri = path_to_file_uri(&alias);
+    did_open(&client, &alias_uri, 1, def);
+    let _ = recv_diagnostics(&client);
+    did_open(&client, &a_uri, 1, a_source);
+    let _ = recv_diagnostics(&client);
+    let cursor = Position::new(2, 6);
+    let found = definition(&client, 2, &a_uri, cursor);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].uri, alias_uri);
+    assert!(prepare_rename(&client, 3, &a_uri, cursor).is_null());
+    assert!(rename(&client, 4, &a_uri, cursor, "new").is_empty());
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_rename_includes_references_from_a_class_only_preamble() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let preamble = dir.path().join("preamble.tex");
+    let source = "\\input{preamble}\n\\begin{document}\n\\label{key}\n\\end{document}\n";
+    let callback = "\\documentclass{article}\n\\AtBeginDocument{\\ref{key}}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&preamble, callback).unwrap();
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let _ = recv_diagnostics(&client);
+    let changes = rename(&client, 2, &uri, Position::new(2, 8), "new");
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert_eq!(
+        apply_edits(callback, &changes[&path_to_file_uri(&preamble)]),
+        callback.replace("{key}", "{new}"),
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_rename_reaches_a_subfile_whose_parent_delegates_its_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let complete = dir.path().join("complete.tex");
+    let chapter = dir.path().join("chapter.tex");
+    let source = "\\documentclass{article}\n\\usepackage{subfiles}\n\\AtBeginDocument{\\label{key}}\n\\begin{document}\nHello.\n\\end{document}\n";
+    let chapter_source =
+        "\\documentclass[main.tex]{subfiles}\n\\begin{document}\n\\ref{key}\n\\end{document}\n";
+    std::fs::write(&complete, source).unwrap();
+    std::fs::write(dir.path().join("main.tex"), "\\input{complete}\n").unwrap();
+    std::fs::write(&chapter, chapter_source).unwrap();
+
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&complete);
+    did_open(&client, &uri, 1, source);
+    let _ = recv_diagnostics(&client);
+    let cursor = Position::new(2, 25);
+    let changes = rename(&client, 2, &uri, cursor, "new");
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert_eq!(
+        apply_edits(chapter_source, &changes[&path_to_file_uri(&chapter)]),
+        chapter_source.replace("{key}", "{new}"),
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_hover_reads_aux_from_a_wrapper() {
+    for configured in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.tex");
+        let source = "\\documentclass{article}\n\\begin{document}\n\\section{Intro}\\label{key}\n\\include{chapter}\n\\ref{key}\\ref{chapter}\n\\end{document}\n";
+        std::fs::write(&main, source).unwrap();
+        std::fs::write(dir.path().join("draft.tex"), "\\input{main}\n").unwrap();
+        std::fs::write(dir.path().join("draft.aux"), "\\newlabel{key}{{7}{1}}\n").unwrap();
+        std::fs::write(
+            dir.path().join("chapter.tex"),
+            "\\section{Chapter}\\label{chapter}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("chapter.aux"),
+            "\\newlabel{chapter}{{8}{2}}\n",
+        )
+        .unwrap();
+        if configured {
+            std::fs::write(
+                dir.path().join("badness.toml"),
+                "[build]\nroot = \"draft.tex\"\n",
+            )
+            .unwrap();
+        }
+        let (client, thread) = start_server(None);
+        let uri = path_to_file_uri(&main);
+        did_open(&client, &uri, 1, source);
+        let _ = recv_diagnostics(&client);
+        assert_eq!(
+            hover_markdown(&client, 2, &uri, Position::new(4, 6)).as_deref(),
+            Some("Section 7 (Intro)"),
+        );
+        assert_eq!(
+            hover_markdown(&client, 3, &uri, Position::new(4, 15)).as_deref(),
+            Some("Section 8 (Chapter)"),
+        );
+        shutdown(&client, thread);
+    }
+}
+
+#[test]
+fn lsp_label_resolution_uses_the_preamble_of_an_included_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let part = dir.path().join("part.tex");
+    let preamble = "\\documentclass{article}\n\\AtBeginDocument{\\label{key}}\n\\input{part}\n";
+    let body = "\\begin{document}\n\\ref{key}\n\\end{document}\n";
+    std::fs::write(&main, preamble).unwrap();
+    std::fs::write(&part, body).unwrap();
+    std::fs::write(main.with_extension("aux"), "\\newlabel{key}{{7}{1}}\n").unwrap();
+
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&part);
+    did_open(&client, &uri, 1, body);
+    let _ = recv_diagnostics(&client);
+    let cursor = Position::new(1, 6);
+    let preview = hover_markdown(&client, 2, &uri, cursor).unwrap();
+    assert!(preview.contains('7'), "{preview}");
+    let changes = rename(&client, 3, &uri, cursor, "new");
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert_eq!(
+        apply_edits(preamble, &changes[&path_to_file_uri(&main)]),
+        preamble.replace("{key}", "{new}")
+    );
+    assert_eq!(
+        apply_edits(body, &changes[&uri]),
+        body.replace("{key}", "{new}")
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_rename_updates_labels_in_both_conditional_branches() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let source = "\\documentclass{article}\n\\begin{document}\n\\iftrue\\label{key}\\else\\label{key}\\fi\n\\ref{key}\n\\end{document}\n";
+    std::fs::write(&main, source).unwrap();
+
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, source);
+    let _ = recv_diagnostics(&client);
+    let cursor = Position::new(3, 6);
+    assert!(!prepare_rename(&client, 2, &uri, cursor).is_null());
+    let changes = rename(&client, 3, &uri, cursor, "new");
+    assert_eq!(
+        apply_edits(source, &changes[&uri]),
+        source.replace("{key}", "{new}")
+    );
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_split_document_wrapper_resolves_labels_from_both_inputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let preamble = dir.path().join("preamble.tex");
+    let body = dir.path().join("body.tex");
+    let main_source = "\\input{preamble}\n\\AtBeginDocument{\\ref{missing}}\n\\input{body}\n";
+    let preamble_source = "\\documentclass{article}\n\\AtBeginDocument{\\label{key}}\n";
+    let body_source = "\\begin{document}\n\\ref{key}\n\\end{document}\n";
+    for (path, source) in [
+        (&main, main_source),
+        (&preamble, preamble_source),
+        (&body, body_source),
+    ] {
+        std::fs::write(path, source).unwrap();
+    }
+
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&main);
+    did_open(&client, &uri, 1, main_source);
+    let diagnostics = recv_diagnostics(&client);
+    assert!(
+        rule_codes(&diagnostics)
+            .iter()
+            .any(|code| code == "undefined-ref")
+    );
+
+    let body_uri = path_to_file_uri(&body);
+    did_open(&client, &body_uri, 1, body_source);
+    let _ = recv_diagnostics(&client);
+    let changes = rename(&client, 2, &body_uri, Position::new(1, 6), "new");
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    for (path, source) in [(&preamble, preamble_source), (&body, body_source)] {
+        assert_eq!(
+            apply_edits(source, &changes[&path_to_file_uri(path)]),
+            source.replace("{key}", "{new}"),
+        );
+    }
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_rename_updates_shared_conditional_labels_in_both_documents() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.tex");
+    let b = dir.path().join("b.tex");
+    let shared = dir.path().join("shared.tex");
+    let document = "\\documentclass{article}\n\\begin{document}\n\\input{shared}\n\\ref{key}\n\\end{document}\n";
+    let branches = "\\iftrue\\label{key}\\else\\label{key}\\fi\n\\ref{key}\n";
+    let files = [(&a, document), (&b, document), (&shared, branches)];
+    for (path, source) in files {
+        std::fs::write(path, source).unwrap();
+    }
+
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&shared);
+    did_open(&client, &uri, 1, branches);
+    let _ = recv_diagnostics(&client);
+    let cursor = Position::new(1, 6);
+    assert!(!prepare_rename(&client, 2, &uri, cursor).is_null());
+    let changes = rename(&client, 3, &uri, cursor, "new");
+    assert_eq!(changes.len(), 3, "{changes:?}");
+    for (path, source) in files {
+        assert_eq!(
+            apply_edits(source, &changes[&path_to_file_uri(path)]),
+            source.replace("{key}", "{new}"),
+        );
+    }
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_rename_ignores_inactive_document_markers() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main.tex");
+    let chapter = dir.path().join("chapter.tex");
+    let document = "\\documentclass{article}\n\\begin{document}\n\\label{key}\n\\input{chapter}\n\\end{document}\n";
+    let fragment = "\\iffalse\n\\documentclass{article}\n\n\\begin{document}\n\\end{document}\n\\fi\n\\ref{key}\n";
+    std::fs::write(&main, document).unwrap();
+    std::fs::write(&chapter, fragment).unwrap();
+
+    let (client, thread) = start_server(None);
+    let uri = path_to_file_uri(&chapter);
+    did_open(&client, &uri, 1, fragment);
+    let _ = recv_diagnostics(&client);
+    let changes = rename(&client, 2, &uri, Position::new(6, 6), "new");
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    for (path, source) in [(&main, document), (&chapter, fragment)] {
+        assert_eq!(
+            apply_edits(source, &changes[&path_to_file_uri(path)]),
+            source.replace("{key}", "{new}"),
+        );
+    }
+    shutdown(&client, thread);
 }

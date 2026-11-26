@@ -8,27 +8,19 @@
 //! no salsa); the language server (eventually) uses the query. Both feed the same
 //! data into the linter, so results match.
 //!
-//! **Namespace = undirected connected component of the include graph.** LaTeX
-//! labels share one namespace per *compiled document*, but with no designated
-//! main file ([`crate::project::project_graph`] passes `root: None`) the
-//! root-free approximation is the connected component: a `main` and the chapters
-//! it `\input`s form one namespace, while two unrelated documents in the same
-//! directory stay separate and don't cross-contaminate. **Known limitation:** two
-//! independent documents that share a common include (e.g. a `preamble.tex`) are
-//! merged into one component, so a label defined in both is reported as a
-//! cross-file duplicate even though they never co-compile.
+//! Each document root owns a scope, and shared files can belong to several.
 
+use super::scopes::{DocumentRoot, DocumentScopes, document_scopes};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use smol_str::SmolStr;
 
 use crate::ast::{command_name, environment_name};
-use crate::incremental::{
-    IncrementalDb, QueryKind, QueryLogEntry, file_is_document_root, file_labels, file_refs,
-};
-use crate::project::graph::{IncludeGraph, project_graph};
-use crate::project::include::{IncludeKind, IncludeTarget, collect_include_edges};
+use crate::incremental::{IncrementalDb, QueryKind, QueryLogEntry, file_labels, file_refs};
+use crate::project::graph::IncludeGraph;
+use crate::project::include::{IncludeEdge, IncludeKind, IncludeTarget, collect_include_edges};
 use crate::semantic::{RefCommand, SemanticModel};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -80,15 +72,10 @@ pub fn document_glossary_keys(model: &SemanticModel) -> Vec<SmolStr> {
 /// Shared by the CLI and the [`crate::incremental::file_is_document_root`]
 /// firewall.
 pub fn is_document_root(root: &SyntaxNode) -> bool {
-    root.descendants().any(|node| match node.kind() {
-        SyntaxKind::COMMAND => command_name(&node).as_deref() == Some("documentclass"),
-        // The `document` environment's name lives on its `\begin{document}`.
-        SyntaxKind::BEGIN => environment_name(&node).as_deref() == Some("document"),
-        _ => false,
-    })
+    DocumentRoot::detect(root) != DocumentRoot::None
 }
 
-/// One label namespace: an undirected connected component of the include graph.
+/// Label definitions and references within one document scope.
 #[derive(Debug, Default)]
 struct Component {
     /// Label name → the files in this component that define it, sorted & deduped.
@@ -97,13 +84,6 @@ struct Component {
     /// only (order-free), so a `HashSet`: `unreferenced-label` asks "is this
     /// label referenced somewhere in the namespace?", the mirror of `defs`.
     refs: HashSet<SmolStr>,
-    /// Whether every include in the component resolves to an analyzed member: no
-    /// dynamic and no external (out-of-set) targets. Only then is "defined
-    /// nowhere" trustworthy enough to drive `undefined-ref`.
-    closed: bool,
-    /// Whether any member is a document root (`\documentclass` /
-    /// `\begin{document}`). `undefined-ref` fires only inside a rooted namespace.
-    rooted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +120,20 @@ pub struct EquationRangeFacts {
 
 impl EquationRangeFacts {
     pub fn collect(path: &Path, root: &SyntaxNode, model: &SemanticModel) -> Self {
+        Self::collect_with_includes(
+            path,
+            root,
+            model,
+            collect_include_edges(root, path.parent()),
+        )
+    }
+
+    pub fn collect_with_includes(
+        path: &Path,
+        root: &SyntaxNode,
+        model: &SemanticModel,
+        includes: impl IntoIterator<Item = IncludeEdge>,
+    ) -> Self {
         let source = root.text().to_string();
         let mut refs: Vec<_> = model
             .refs()
@@ -256,7 +250,7 @@ impl EquationRangeFacts {
             })
             .map(|node| node.text_range())
             .collect();
-        for edge in collect_include_edges(root, path.parent()) {
+        for edge in includes {
             if matches!(
                 edge.kind,
                 IncludeKind::SubFilesParent | IncludeKind::GlsEntries
@@ -326,8 +320,18 @@ impl EquationRangeFacts {
             }
         }
         let counts = label_counts(std::iter::once(self));
-        infer_pairs(resolution, &self.path, &self.pairs, &stream, &counts)
-            .into_iter()
+        resolution
+            .scopes
+            .containing(&self.path)
+            .iter()
+            .flat_map(|&id| {
+                infer_pairs(
+                    |key| resolution.definers_in(id, key).len(),
+                    &self.pairs,
+                    &stream,
+                    &counts,
+                )
+            })
             .map(|site| site.unit.offset)
             .collect()
     }
@@ -416,8 +420,7 @@ fn label_counts<'a>(
 }
 
 fn infer_pairs(
-    resolution: &ResolvedLabels,
-    origin: &Path,
+    definer_count: impl Fn(&str) -> usize,
     pairs: &[(SmolStr, SmolStr)],
     stream: &[Option<RangeSite>],
     counts: &HashMap<SmolStr, usize>,
@@ -434,8 +437,8 @@ fn infer_pairs(
     for (first, last) in pairs {
         if counts.get(first) != Some(&1)
             || counts.get(last) != Some(&1)
-            || resolution.definers(origin, first).len() != 1
-            || resolution.definers(origin, last).len() != 1
+            || definer_count(first) != 1
+            || definer_count(last) != 1
         {
             continue;
         }
@@ -446,9 +449,7 @@ fn infer_pairs(
             continue;
         }
         for site in stream[start + 1..end].iter().flatten() {
-            if counts.get(&site.unit.name) == Some(&1)
-                && resolution.definers(origin, &site.unit.name).len() == 1
-            {
+            if counts.get(&site.unit.name) == Some(&1) && definer_count(&site.unit.name) == 1 {
                 inferred.push(site.clone());
             }
         }
@@ -505,11 +506,11 @@ fn walk_range_source(
 /// `no_eq`. Built by [`ResolvedLabels::build`].
 #[derive(Debug, Default)]
 pub struct ResolvedLabels {
-    /// File path → index into [`components`](Self::components).
-    component_of: HashMap<PathBuf, usize>,
+    pub scopes: Arc<DocumentScopes>,
     components: Vec<Component>,
     inferred_ranges: HashMap<PathBuf, HashSet<usize>>,
     range_fact_paths: HashSet<PathBuf>,
+    pub display_paths: HashMap<PathBuf, PathBuf>,
 }
 
 impl ResolvedLabels {
@@ -525,65 +526,32 @@ impl ResolvedLabels {
         files: &[(PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool)],
         graph: &IncludeGraph,
     ) -> Self {
-        // Sorted, unique member paths give union-find a deterministic index space.
-        let mut paths: Vec<&Path> = files.iter().map(|(p, _, _, _)| p.as_path()).collect();
-        paths.sort_unstable();
-        paths.dedup();
-        let index: HashMap<&Path, usize> = paths.iter().enumerate().map(|(i, p)| (*p, i)).collect();
+        Self::build_in_scopes(
+            files,
+            DocumentScopes::build(
+                graph,
+                files.iter().map(|(p, _, _, root)| (p.as_path(), *root)),
+            ),
+        )
+    }
 
-        // Undirected connectivity: union a file with each include neighbor that is
-        // itself a member (edges in either direction merge the same namespace).
-        let mut uf = UnionFind::new(paths.len());
-        for (&path, &i) in &index {
-            for edge in graph.outgoing(path) {
-                if let Some(&j) = index.get(edge.to.as_path()) {
-                    uf.union(i, j);
-                }
-            }
-            for included in graph.included_by(path) {
-                if let Some(&j) = index.get(included.as_path()) {
-                    uf.union(i, j);
-                }
-            }
-        }
-
-        // Assign compact component ids in first-seen (sorted-path) order.
-        let mut root_to_id: HashMap<usize, usize> = HashMap::new();
-        let mut component_of: HashMap<PathBuf, usize> = HashMap::new();
-        for (i, &path) in paths.iter().enumerate() {
-            let root = uf.find(i);
-            let next = root_to_id.len();
-            let id = *root_to_id.entry(root).or_insert(next);
-            component_of.insert(path.to_path_buf(), id);
-        }
-        let mut components: Vec<Component> = (0..root_to_id.len())
-            .map(|_| Component {
-                closed: true,
-                ..Component::default()
-            })
+    fn build_in_scopes(
+        files: &[(PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool)],
+        scopes: Arc<DocumentScopes>,
+    ) -> Self {
+        let mut components: Vec<Component> = (0..scopes.scopes.len())
+            .map(|_| Component::default())
             .collect();
-
-        // Index definitions, references, and the rooted flag per component.
-        for (path, names, refs, is_root) in files {
-            let Some(&id) = component_of.get(path) else {
-                continue;
-            };
-            let comp = &mut components[id];
-            comp.rooted |= *is_root;
-            for name in names {
-                comp.defs
-                    .entry(name.clone())
-                    .or_default()
-                    .push(path.clone());
-            }
-            comp.refs.extend(refs.iter().cloned());
-        }
-
-        // An unresolved include (dynamic or out-of-set) opens its component: the
-        // real label universe may be larger than what we analyzed.
-        for edge in graph.unresolved() {
-            if let Some(&id) = component_of.get(&edge.from) {
-                components[id].closed = false;
+        for (path, names, refs, _) in files {
+            for &id in scopes.containing(path) {
+                let comp = &mut components[id];
+                for name in names {
+                    comp.defs
+                        .entry(name.clone())
+                        .or_default()
+                        .push(path.clone());
+                }
+                comp.refs.extend(refs.iter().cloned());
             }
         }
 
@@ -597,10 +565,11 @@ impl ResolvedLabels {
         }
 
         Self {
-            component_of,
+            scopes,
             components,
             inferred_ranges: HashMap::new(),
             range_fact_paths: HashSet::new(),
+            display_paths: HashMap::new(),
         }
     }
 
@@ -611,41 +580,43 @@ impl ResolvedLabels {
         graph: &IncludeGraph,
         facts: &[EquationRangeFacts],
     ) -> Self {
-        let mut resolved = Self::build(files, graph);
+        Self::build_with_range_facts_in_scopes(
+            files,
+            graph,
+            facts,
+            DocumentScopes::build(
+                graph,
+                files
+                    .iter()
+                    .map(|(path, _, _, root)| (path.as_path(), *root)),
+            ),
+        )
+    }
+
+    pub fn build_with_range_facts_in_scopes(
+        files: &[(PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool)],
+        graph: &IncludeGraph,
+        facts: &[EquationRangeFacts],
+        scopes: Arc<DocumentScopes>,
+    ) -> Self {
+        let mut resolved = Self::build_in_scopes(files, scopes);
         resolved.range_fact_paths = facts.iter().map(|fact| fact.path.clone()).collect();
         let by_path: HashMap<&Path, &EquationRangeFacts> = facts
             .iter()
             .map(|fact| (fact.path.as_path(), fact))
             .collect();
 
-        // Same-file inference remains available even when cross-file execution
-        // order cannot be established for the component.
         for fact in facts {
             resolved
                 .inferred_ranges
                 .insert(fact.path.clone(), fact.local_inferred(&resolved));
         }
 
-        for component_id in 0..resolved.components.len() {
-            if !resolved.components[component_id].closed
-                || !resolved.components[component_id].rooted
-            {
+        for (id, scope) in resolved.scopes.scopes.iter().enumerate() {
+            let Some(root) = scope.root.as_deref().filter(|_| scope.closed) else {
                 continue;
-            }
-            let members: Vec<_> = resolved
-                .component_of
-                .iter()
-                .filter(|&(_, &id)| id == component_id)
-                .map(|(path, _)| path.as_path())
-                .collect();
-            let roots: Vec<_> = files
-                .iter()
-                .filter(|(path, _, _, rooted)| {
-                    *rooted && resolved.component_of.get(path) == Some(&component_id)
-                })
-                .map(|(path, _, _, _)| path.as_path())
-                .collect();
-            let [root] = roots.as_slice() else { continue };
+            };
+            let members: Vec<_> = scope.members.iter().map(PathBuf::as_path).collect();
             if members
                 .iter()
                 .any(|path| by_path.get(path).is_none_or(|fact| fact.ambiguous))
@@ -672,7 +643,12 @@ impl ResolvedLabels {
                 .collect();
             let counts = label_counts(component_facts.iter().copied());
             for fact in component_facts {
-                for site in infer_pairs(&resolved, &fact.path, &fact.pairs, &stream, &counts) {
+                for site in infer_pairs(
+                    |key| resolved.definers_in(id, key).len(),
+                    &fact.pairs,
+                    &stream,
+                    &counts,
+                ) {
                     resolved
                         .inferred_ranges
                         .entry(site.path)
@@ -696,79 +672,73 @@ impl ResolvedLabels {
         self.range_fact_paths.contains(file)
     }
 
-    /// Files in `file`'s namespace that define `name`, sorted. Empty when `file`
-    /// is unknown or `name` is undefined in its component. Includes `file` itself
-    /// when it defines `name`; callers wanting *other* definers filter it out.
-    pub fn definers(&self, file: &Path, name: &str) -> &[PathBuf] {
-        self.component_of
-            .get(file)
-            .and_then(|&id| self.components[id].defs.get(name))
+    pub(crate) fn display_path<'a>(&'a self, path: &'a Path) -> &'a Path {
+        self.display_paths.get(path).map_or(path, PathBuf::as_path)
+    }
+
+    pub fn definers_in(&self, id: usize, name: &str) -> &[PathBuf] {
+        self.components[id]
+            .defs
+            .get(name)
             .map_or(&[], Vec::as_slice)
     }
 
-    /// Whether `name` is defined anywhere in `file`'s namespace.
-    pub fn is_defined(&self, file: &Path, name: &str) -> bool {
-        !self.definers(file, name).is_empty()
-    }
-
-    /// Whether `name` is targeted by a `\ref`-family command anywhere in `file`'s
-    /// namespace. The mirror of [`is_defined`](Self::is_defined): `undefined-ref`
-    /// asks whether a *reference* has a definition, `unreferenced-label` asks
-    /// whether a *definition* has a reference. Both are trustworthy only over a
-    /// closed, rooted namespace (see [`is_closed`](Self::is_closed) /
-    /// [`is_root_component`](Self::is_root_component)).
-    pub fn is_referenced(&self, file: &Path, name: &str) -> bool {
-        self.component_of
-            .get(file)
-            .is_some_and(|&id| self.components[id].refs.contains(name))
-    }
-
-    /// All member files sharing `file`'s namespace (its connected component),
-    /// sorted; empty when `file` is unknown. Includes `file` itself. Unlike
-    /// [`definers`](Self::definers) (which files *define* a name) this is every
-    /// file in the namespace — the search set for find-references, which must scan
-    /// each member for `\ref` use sites.
-    pub fn namespace_members(&self, file: &Path) -> Vec<&Path> {
-        let Some(&id) = self.component_of.get(file) else {
-            return Vec::new();
-        };
-        let mut members: Vec<&Path> = self
-            .component_of
+    pub fn definers(&self, file: &Path, name: &str) -> Vec<PathBuf> {
+        self.scopes
+            .containing(file)
             .iter()
-            .filter(|&(_, &cid)| cid == id)
-            .map(|(p, _)| p.as_path())
-            .collect();
-        members.sort_unstable();
-        members
+            .flat_map(|&id| self.definers_in(id, name))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
-    /// Whether `file`'s namespace is closed — every include resolves to an
-    /// analyzed member. Gates `undefined-ref` (an open namespace may define the
-    /// key in a file we never saw).
+    pub fn is_defined(&self, file: &Path, name: &str) -> bool {
+        self.scopes
+            .containing(file)
+            .iter()
+            .any(|&id| !self.definers_in(id, name).is_empty())
+    }
+
+    pub fn is_referenced_in(&self, id: usize, name: &str) -> bool {
+        self.components[id].refs.contains(name)
+    }
+
+    pub fn is_referenced(&self, file: &Path, name: &str) -> bool {
+        self.scopes
+            .containing(file)
+            .iter()
+            .any(|&id| self.is_referenced_in(id, name))
+    }
+
+    pub fn namespace_members(&self, file: &Path) -> Vec<&Path> {
+        self.scopes
+            .members(self.scopes.containing(file).iter().copied())
+    }
+
     pub fn is_closed(&self, file: &Path) -> bool {
-        self.component_of
-            .get(file)
-            .is_some_and(|&id| self.components[id].closed)
+        let ids = self.scopes.containing(file);
+        !ids.is_empty() && ids.iter().all(|&id| self.scopes.scopes[id].closed)
     }
 
-    /// Whether `file`'s namespace contains a document root. Gates `undefined-ref`
-    /// so a bare fragment opened standalone is never flagged.
     pub fn is_root_component(&self, file: &Path) -> bool {
-        self.component_of
-            .get(file)
-            .is_some_and(|&id| self.components[id].rooted)
+        self.scopes
+            .containing(file)
+            .iter()
+            .any(|&id| self.scopes.scopes[id].root.is_some())
     }
 }
 
 /// The cross-file label resolution for `project`, built from the per-file
-/// [`file_labels`] firewall and the [`project_graph`].
+/// [`file_labels`] firewall and the [`crate::project::project_graph`].
 ///
-/// `no_eq` + `unsafe(non_salsa_values)` for the same reason as [`project_graph`]:
+/// `no_eq` + `unsafe(non_salsa_values)` for the same reason as [`crate::project::project_graph`]:
 /// [`ResolvedLabels`] holds `HashMap`s (not `Eq`/`salsa::SalsaValue`) and is a pure
 /// function of the backdated [`Project`] plus the backdated per-file facts, so it
 /// carries no salsa references. The firewall pays off here: a prose edit leaves
 /// `file_labels`, `file_refs`, `file_is_document_root`, and `include_edges` all
-/// backdated, so neither [`project_graph`] nor this query re-executes. A `\ref`
+/// backdated, so neither [`crate::project::project_graph`] nor this query re-executes. A `\ref`
 /// edit *does* rebuild this query (it changes `file_refs`), because
 /// `unreferenced-label` depends on the cross-file reference union — but a pure
 /// prose edit still backdates both firewalls.
@@ -780,7 +750,6 @@ pub fn resolved_labels(db: &dyn IncrementalDb) -> ResolvedLabels {
     });
 
     let project = crate::project::workspace_project(db);
-    let graph = project_graph(db);
     // Labels live in LaTeX files (`.tex`/`.sty`/`.cls`); `.bib` members carry none
     // and are not part of the include-graph namespace.
     let files: Vec<(PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool)> = project
@@ -792,47 +761,12 @@ pub fn resolved_labels(db: &dyn IncrementalDb) -> ResolvedLabels {
                 member.path.clone(),
                 file_labels(db, member.file).clone(),
                 file_refs(db, member.file).clone(),
-                *file_is_document_root(db, member.file),
+                false,
             )
         })
         .collect();
 
-    ResolvedLabels::build(&files, graph)
-}
-
-/// A minimal union-find (disjoint-set) with path halving and union by size.
-struct UnionFind {
-    parent: Vec<usize>,
-    size: Vec<usize>,
-}
-
-impl UnionFind {
-    fn new(n: usize) -> Self {
-        Self {
-            parent: (0..n).collect(),
-            size: vec![1; n],
-        }
-    }
-
-    fn find(&mut self, mut x: usize) -> usize {
-        while self.parent[x] != x {
-            self.parent[x] = self.parent[self.parent[x]];
-            x = self.parent[x];
-        }
-        x
-    }
-
-    fn union(&mut self, a: usize, b: usize) {
-        let (mut ra, mut rb) = (self.find(a), self.find(b));
-        if ra == rb {
-            return;
-        }
-        if self.size[ra] < self.size[rb] {
-            std::mem::swap(&mut ra, &mut rb);
-        }
-        self.parent[rb] = ra;
-        self.size[ra] += self.size[rb];
-    }
+    ResolvedLabels::build_in_scopes(&files, document_scopes(db).clone())
 }
 
 #[cfg(test)]

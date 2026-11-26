@@ -555,10 +555,6 @@ a file and a line, never a coordinate.
   regular entries only; consider `@string`/`@preamble`/`@comment` blocks (and a
   richer `SymbolKind`/detail).
 
-- [ ] Shared component-finder: `ResolvedCitations` duplicates the union-find +
-  component assignment from `ResolvedLabels` (`project/citations.rs`); factor one
-  helper when a third consumer appears.
-
 - [ ] **`subfiles`' `\subfix` wrapper opens the citation namespace.** The
   package's path fixer is the idiomatic way a subfile names a shared resource
   (`\addbibresource{\subfix{references.bib}}`), but a macro inside the group

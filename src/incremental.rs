@@ -29,9 +29,7 @@ use crate::parser::{
     parse_with_declarations_resolved, reparse_edits,
 };
 use crate::project::citations::document_cite_names;
-use crate::project::labels::{
-    document_glossary_keys, document_label_names, document_ref_names, is_document_root,
-};
+use crate::project::labels::{document_glossary_keys, document_label_names, document_ref_names};
 use crate::project::options::resolved_package_options;
 use crate::project::{
     BibTarget, IncludeEdgeKey, PackageEdgeKey, PackageOptionFacts, ProjectMember,
@@ -811,21 +809,25 @@ pub fn file_glossary_keys(db: &dyn IncrementalDb, file: SourceFile) -> Vec<SmolS
     document_glossary_keys(semantic_model(db, file))
 }
 
-/// Whether `file` looks like a document *root* — it carries a `\documentclass`
-/// or a `\begin{document}`. The cross-file `undefined-ref` lint only fires
-/// inside a namespace that contains a root, so a bare chapter fragment opened
-/// alone (whose labels live in the main document) is never flagged.
-///
-/// A cheap `bool` projection of the parse tree, `Eq` for the same firewall
-/// reason as [`file_labels`]: it changes only when a `\documentclass` /
-/// `\begin{document}` is added or removed, so ordinary edits backdate.
+/// Project the root marker without retaining syntax or ranges so prose edits
+/// backdate the scope input.
 #[salsa::tracked(returns(ref))]
-pub fn file_is_document_root(db: &dyn IncrementalDb, file: SourceFile) -> bool {
+pub(crate) fn file_document_root(
+    db: &dyn IncrementalDb,
+    file: SourceFile,
+) -> crate::project::scopes::DocumentRoot {
     db.record_query(QueryLogEntry {
         kind: QueryKind::FileIsDocumentRoot,
         file: Some(file),
     });
-    is_document_root(&parsed_tree_root(db, file))
+    crate::project::scopes::DocumentRoot::detect(&parsed_tree_root(db, file))
+}
+
+pub fn file_is_document_root(db: &dyn IncrementalDb, file: SourceFile) -> &bool {
+    match file_document_root(db, file) {
+        crate::project::scopes::DocumentRoot::None => &false,
+        _ => &true,
+    }
 }
 
 /// A `.sty` file's statically-declared option surface
@@ -1107,7 +1109,7 @@ fn recover_poison<T>(err: std::sync::PoisonError<T>) -> T {
 /// `a.tex`, `./a.tex`, and a sibling resolved as `dir/../a.tex` all map to one
 /// key, so the language server's `\input`-resolved siblings collapse onto the
 /// same input as the buffer the editor opened.
-pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+pub fn normalize_path(path: &Path) -> PathBuf {
     use std::path::Component;
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let mut out = PathBuf::new();
@@ -1595,6 +1597,10 @@ impl Analysis {
     }
 
     /// Resolve the current project's package-load graph ([`package_graph`]).
+    pub fn include_graph(&self) -> &crate::project::IncludeGraph {
+        crate::project::project_graph(&self.0)
+    }
+
     pub fn package_graph(&self) -> &crate::project::PackageGraph {
         package_graph(&self.0)
     }

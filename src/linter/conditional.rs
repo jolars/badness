@@ -23,7 +23,8 @@
 //! command (per [`crate::semantic::define::is_definition_command`]) is skipped.
 //! Loads and labels inside definitions are still counted by the rules.
 //!
-//! No predicates are evaluated or correlated, including literal `\iftrue`.
+//! Literal primitive tests can identify inactive arms for callers that need
+//! them. Duplicate checks continue to compare paths without evaluating tests.
 //! The analysis does not combine all branches into a guaranteed prior or infer
 //! custom macro semantics. These limits prefer missed duplicates to noise.
 //! Existing primitive-scan approximations remain: parameter text can under-cover
@@ -45,6 +46,7 @@ use crate::syntax::{SyntaxKind, SyntaxNode};
 pub(crate) struct Frame {
     id: u32,
     branch: u32,
+    active_arm: Option<u32>,
 }
 
 /// The conditional branch path at every state-change offset, for binary-search
@@ -133,9 +135,15 @@ impl ConditionalIndex {
                     }
                 }
                 Word::Opens => {
+                    let active_arm = match name.as_str() {
+                        "iftrue" => Some(u32::from(is_negated(&node))),
+                        "iffalse" => Some(u32::from(!is_negated(&node))),
+                        _ => None,
+                    };
                     stack.push(Frame {
                         id: next_id,
                         branch: 0,
+                        active_arm,
                     });
                     next_id += 1;
                     snapshot(&mut snapshots, start, &stack);
@@ -151,6 +159,7 @@ impl ConditionalIndex {
                                 Frame {
                                     id: next_id,
                                     branch: branch as u32,
+                                    active_arm: None,
                                 },
                             );
                         }
@@ -161,6 +170,12 @@ impl ConditionalIndex {
             }
         }
         Self { snapshots }
+    }
+
+    pub(crate) fn is_inactive(&self, offset: usize) -> bool {
+        self.path_at(offset)
+            .iter()
+            .any(|frame| frame.active_arm.is_some_and(|arm| arm != frame.branch))
     }
 
     /// The branch path in effect at byte `offset`: the latest snapshot at or
@@ -175,6 +190,15 @@ impl ConditionalIndex {
             &self.snapshots[i - 1].1
         }
     }
+}
+
+fn is_negated(command: &SyntaxNode) -> bool {
+    std::iter::successors(
+        command.first_token().and_then(|token| token.prev_token()),
+        |token| token.prev_token(),
+    )
+    .find(|token| !is_trivia(token.kind()))
+    .is_some_and(|token| token.kind() == SyntaxKind::CONTROL_WORD && token.text() == "\\unless")
 }
 
 struct BranchScope {

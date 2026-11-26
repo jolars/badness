@@ -18,7 +18,7 @@ use rowan::{TextRange, TextSize};
 use smol_str::SmolStr;
 
 use crate::ast::{environment_name, environment_name_range};
-use crate::project::{PackageGraph, ResolvedLabels};
+use crate::project::{IncludeGraph, PackageGraph};
 use crate::semantic::{DefSite, DefSiteKind};
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -149,7 +149,7 @@ pub(crate) fn environment_occurrences(root: &SyntaxNode, name: &str) -> Vec<Text
 /// reached via `\usepackage` (`loads`), and a rename started *inside* the `.sty`
 /// must reach the documents loading it (`loaded_by`). Sorted for determinism.
 pub(crate) fn macro_namespace(
-    resolution: &ResolvedLabels,
+    includes: &IncludeGraph,
     packages: &PackageGraph,
     origin: &Path,
 ) -> Vec<PathBuf> {
@@ -157,10 +157,11 @@ pub(crate) fn macro_namespace(
     let mut queue = vec![origin.to_path_buf()];
     seen.insert(origin.to_path_buf());
     while let Some(path) = queue.pop() {
-        let neighbors = resolution
-            .namespace_members(&path)
-            .into_iter()
-            .map(Path::to_path_buf)
+        let neighbors = includes
+            .outgoing(&path)
+            .iter()
+            .map(|edge| edge.to.clone())
+            .chain(includes.included_by(&path).iter().cloned())
             .chain(packages.loads(&path).iter().map(|load| load.to.clone()))
             .chain(packages.loaded_by(&path).iter().cloned());
         for neighbor in neighbors {

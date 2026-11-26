@@ -44,7 +44,9 @@ impl Rule for UndefinedCitation {
          **closed, rooted** namespace where every `.bib` resource resolves to an \
          analyzed file. Resource lookup honors BibTeX's `BIBINPUTS` and `TEXBIB` search \
          paths. A `\\nocite{*}` wildcard, which marks every key as used, suppresses the \
-         rule entirely. The rule is inactive without cross-file citation resolution. No \
+         rule for that document. A shared file gets a warning only when every containing \
+         document is complete, has no wildcard, and lacks the key. The rule is inactive \
+         without cross-file citation resolution. No \
          autofix is offered."
     }
 

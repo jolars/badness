@@ -46,7 +46,9 @@ impl Rule for UndefinedRef {
         "Flag a `\\ref`-family reference to a label defined nowhere in the document. \
          The check is sound only when the label namespace is complete, so the rule \
          stays silent unless the project view is **closed** (every include resolves to \
-         an analyzed file) and **rooted**. It is inactive on stdin or wherever \
+         an analyzed file) and **rooted**. A shared file gets a warning only when every \
+         document that includes it is complete and the reference is undefined in each. \
+         The rule is inactive on stdin or wherever \
          cross-file label resolution is unavailable. No autofix is offered."
     }
 

@@ -115,9 +115,18 @@ impl IncludeEdge {
 /// `\input` is valid anywhere (inside a group, an environment, …), so any
 /// recognized command in the CST is a candidate edge.
 pub fn collect_include_edges(root: &SyntaxNode, base_dir: Option<&Path>) -> Vec<IncludeEdge> {
+    collect_include_edges_with(root, base_dir, lexically_normalize)
+}
+
+/// Collect edges with a caller-provided identity for the joined literal path.
+pub fn collect_include_edges_with(
+    root: &SyntaxNode,
+    base_dir: Option<&Path>,
+    identity: impl Fn(PathBuf) -> PathBuf,
+) -> Vec<IncludeEdge> {
     root.descendants()
         .filter(|node| node.kind() == SyntaxKind::COMMAND)
-        .filter_map(|node| include_edge(&node, base_dir))
+        .filter_map(|node| include_edge(&node, base_dir, &identity))
         .collect()
 }
 
@@ -129,22 +138,26 @@ pub fn collect_include_edge_keys(
 ) -> Vec<IncludeEdgeKey> {
     root.descendants()
         .filter(|node| node.kind() == SyntaxKind::COMMAND)
-        .filter_map(|node| include_edge(&node, base_dir))
+        .filter_map(|node| include_edge(&node, base_dir, &lexically_normalize))
         .map(|edge| edge.key())
         .collect()
 }
 
 /// Build an [`IncludeEdge`] from a `COMMAND` node, or `None` if it is not a
 /// recognized inclusion command.
-fn include_edge(command: &SyntaxNode, base_dir: Option<&Path>) -> Option<IncludeEdge> {
+fn include_edge(
+    command: &SyntaxNode,
+    base_dir: Option<&Path>,
+    identity: &impl Fn(PathBuf) -> PathBuf,
+) -> Option<IncludeEdge> {
     let name = command_name(command)?;
     // `\documentclass` is recognized by *shape*, not by name alone (see the module
     // docs), so it is dispatched before the name-only table.
     let kind = match name.as_str() {
-        "documentclass" => return subfiles_parent_edge(command, base_dir),
+        "documentclass" => return subfiles_parent_edge(command, base_dir, identity),
         _ => include_kind(&name)?,
     };
-    let target = include_target(command, kind, base_dir);
+    let target = include_target(command, kind, base_dir, identity);
     Some(IncludeEdge {
         kind,
         target,
@@ -205,12 +218,20 @@ fn is_subfiles_class(command: &SyntaxNode) -> bool {
 /// [`IncludeTarget::Dynamic`] one: we know the file is a fragment of *some*
 /// document we cannot see, and an open namespace is exactly the conservative
 /// answer that keeps `undefined-ref` quiet.
-fn subfiles_parent_edge(command: &SyntaxNode, base_dir: Option<&Path>) -> Option<IncludeEdge> {
+fn subfiles_parent_edge(
+    command: &SyntaxNode,
+    base_dir: Option<&Path>,
+    identity: &impl Fn(PathBuf) -> PathBuf,
+) -> Option<IncludeEdge> {
     if !is_subfiles_class(command) {
         return None;
     }
     let target = match subfiles_parent_arg(command) {
-        Some(arg) => IncludeTarget::Path(resolve_tex(PathBuf::from(arg.text.as_str()), base_dir)),
+        Some(arg) => IncludeTarget::Path(resolve_tex(
+            PathBuf::from(arg.text.as_str()),
+            base_dir,
+            identity,
+        )),
         None => IncludeTarget::Dynamic,
     };
     Some(IncludeEdge {
@@ -226,6 +247,7 @@ fn include_target(
     command: &SyntaxNode,
     kind: IncludeKind,
     base_dir: Option<&Path>,
+    identity: &impl Fn(PathBuf) -> PathBuf,
 ) -> IncludeTarget {
     let raw = match kind {
         IncludeKind::Import | IncludeKind::SubImport => {
@@ -240,20 +262,24 @@ fn include_target(
         },
     };
 
-    IncludeTarget::Path(resolve_tex(raw, base_dir))
+    IncludeTarget::Path(resolve_tex(raw, base_dir, identity))
 }
 
 /// Resolve one inclusion target: default the `.tex` extension when the path has
 /// none (TeX appends it to a bare inclusion target), then join onto `base_dir`
 /// when the result is relative. Pure path arithmetic, mirroring
 /// [`super::package`]'s resolver.
-fn resolve_tex(raw: PathBuf, base_dir: Option<&Path>) -> PathBuf {
+fn resolve_tex(
+    raw: PathBuf,
+    base_dir: Option<&Path>,
+    identity: &impl Fn(PathBuf) -> PathBuf,
+) -> PathBuf {
     let with_ext = if raw.extension().is_none() {
         raw.with_extension("tex")
     } else {
         raw
     };
-    resolve_against(with_ext, base_dir)
+    identity(join_base(with_ext, base_dir))
 }
 
 /// Join `path` onto `base_dir` when relative, then collapse the `.`/`..`
@@ -265,11 +291,14 @@ fn resolve_tex(raw: PathBuf, base_dir: Option<&Path>) -> PathBuf {
 /// declaration is idiomatically `\documentclass[../main.tex]{subfiles}`, but the
 /// same arithmetic serves every `\input{../shared}`.
 fn resolve_against(path: PathBuf, base_dir: Option<&Path>) -> PathBuf {
-    let joined = match base_dir {
+    lexically_normalize(join_base(path, base_dir))
+}
+
+fn join_base(path: PathBuf, base_dir: Option<&Path>) -> PathBuf {
+    match base_dir {
         Some(dir) if path.is_relative() => dir.join(path),
         _ => path,
-    };
-    lexically_normalize(joined)
+    }
 }
 
 /// Collapse `.` and `..` segments textually — no symlink resolution, no

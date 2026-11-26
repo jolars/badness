@@ -160,6 +160,18 @@ impl IncludeGraph {
         self.included_by.get(file).map_or(&[], Vec::as_slice)
     }
 
+    /// Callers connected by source edges, excluding subfiles preamble links.
+    pub(crate) fn source_callers<'a>(&'a self, file: &'a Path) -> impl Iterator<Item = &'a Path> {
+        self.included_by(file)
+            .iter()
+            .map(PathBuf::as_path)
+            .filter(move |caller| {
+                self.outgoing(caller)
+                    .iter()
+                    .any(|edge| edge.to == file && edge.kind != IncludeKind::SubFilesParent)
+            })
+    }
+
     /// Whether `file` is reachable from the document root (always `false` when
     /// the graph was built without a root).
     pub fn is_reachable(&self, file: &Path) -> bool {

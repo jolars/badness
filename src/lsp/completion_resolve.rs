@@ -90,7 +90,7 @@ pub(crate) fn resolve(snapshot: &Analysis, mut item: CompletionItem) -> Completi
 fn citation_detail(snapshot: &Analysis, lint_path: &Path, key: &str) -> Option<(String, String)> {
     let (_, citations) = snapshot.resolve_project();
     for bib_path in citations.bib_definers(lint_path) {
-        let Some(file) = snapshot.lookup_file(bib_path) else {
+        let Some(file) = snapshot.lookup_file(&bib_path) else {
             continue;
         };
         let Some(entry) = snapshot

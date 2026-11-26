@@ -67,7 +67,8 @@ mod selection_range;
 mod signature_help;
 mod task_pool;
 
-use std::collections::{HashMap, HashSet};
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -141,6 +142,7 @@ use crate::incremental::{Analysis, IncrementalDatabase, IncrementalDb, file_cite
 use crate::linter::{RuleSelection, Severity, lint_document};
 use crate::parser::{Edit, parse, parse_with_declarations};
 use crate::project::aux::AuxData;
+use crate::project::scopes::{DocumentScope, forward_members};
 use crate::project::texmf::{TexmfConfig, TexmfIndex};
 use crate::project::{BibTarget, PackageGraph, ResolvedCitations, ResolvedLabels};
 use crate::semantic::{
@@ -5186,55 +5188,156 @@ fn compute_bib_document_link(
         .collect()
 }
 
-/// `path`'s label namespace — its include-graph component — falling back to just
-/// `path` for a standalone or untracked file, so a caller always has something to
-/// scan.
-fn namespace_of<'a>(resolution: &'a ResolvedLabels, path: &'a Path) -> Vec<&'a Path> {
-    let members = resolution.namespace_members(path);
-    if members.is_empty() {
-        vec![path]
-    } else {
-        members
+fn inferred_document_scope<'a>(
+    resolution: &'a ResolvedLabels,
+    path: &Path,
+) -> Option<&'a DocumentScope> {
+    let ids = resolution.scopes.containing(path);
+    let scopes = ids.iter().map(|&id| &resolution.scopes.scopes[id]);
+    if let Some(scope) = scopes
+        .clone()
+        .find(|scope| scope.root.as_deref() == Some(path))
+    {
+        return Some(scope);
+    }
+    let mut rooted = scopes.filter(|scope| scope.root.is_some());
+    match (rooted.next(), rooted.next(), ids) {
+        (Some(scope), None, _) => Some(scope),
+        (None, None, [id]) => Some(&resolution.scopes.scopes[*id]),
+        _ => None,
     }
 }
 
-/// The document root of `namespace`: its first member carrying a
-/// `\documentclass` or `\begin{document}` ([`project::labels::is_document_root`],
-/// via the salsa `file_is_document_root` firewall). `None` when no member is a
-/// root — an uncompilable fragment, or a project whose root the server has not
-/// loaded (the db seeds one directory at a time, so a child in `chapters/` may
-/// never have seen `../main.tex`; that is what `[build] root` is for).
-///
-/// The single place the "which file did the compiler run on?" question is
-/// answered, shared by `.aux` resolution ([`document_aux`]) and PDF resolution
-/// ([`forward_search::pdf_path`]).
-///
-/// [`project::labels::is_document_root`]: crate::project::labels::is_document_root
-fn root_document_of<'a>(snapshot: &Analysis, namespace: &[&'a Path]) -> Option<&'a Path> {
-    namespace.iter().copied().find(|p| {
-        snapshot
-            .lookup_file(p)
-            .is_some_and(|f| snapshot.file_is_document_root(f))
-    })
+struct DocumentSelection<'a> {
+    root: Cow<'a, Path>,
+    members: Cow<'a, [PathBuf]>,
 }
 
-/// The merged `.aux` facts for `path`'s label namespace: the aux root is the
-/// namespace's document root's directory (where the compiler ran), falling back
-/// to `path`'s own; an unknown/untracked file still checks its sibling `.aux`.
-/// `None` when the project was never compiled. Shared by label hover (numbers in
-/// the preview) and `documentSymbol` (numbers in the outline).
+impl DocumentSelection<'_> {
+    fn aux_data(
+        &self,
+        snapshot: &Analysis,
+        resolution: &ResolvedLabels,
+        build: &BuildConfig,
+    ) -> Option<AuxData> {
+        let aux_dir = build.aux_dir.as_deref();
+        let mut root = self.root.as_ref();
+        let aux_for_root = |root: &Path| {
+            crate::project::aux::aux_data_for(
+                &[root],
+                root.parent().unwrap_or(Path::new("")),
+                aux_dir,
+            )
+        };
+        if build.root.is_none() && aux_for_root(root).is_none() {
+            // A markerless wrapper may own the main aux even when chapter
+            // auxiliary files already provide some numbers.
+            let graph = snapshot.include_graph();
+            let mut seen = HashSet::from([root]);
+            let mut pending = vec![root];
+            let mut wrappers = Vec::new();
+            while let Some(child) = pending.pop() {
+                for parent in graph.source_callers(child) {
+                    let ids = resolution.scopes.containing(parent);
+                    if ids.is_empty()
+                        || ids
+                            .iter()
+                            .any(|&id| resolution.scopes.scopes[id].root.is_some())
+                        || !seen.insert(parent)
+                    {
+                        continue;
+                    }
+                    pending.push(parent);
+                    if aux_for_root(parent).is_some() {
+                        wrappers.push(parent);
+                    }
+                }
+            }
+            if let [wrapper] = wrappers.as_slice() {
+                root = wrapper;
+            }
+        }
+
+        let mut namespace = vec![root];
+        if root != self.root.as_ref() {
+            namespace.push(self.root.as_ref());
+        }
+        namespace.extend(
+            self.members
+                .iter()
+                .map(PathBuf::as_path)
+                .filter(|path| *path != root && *path != self.root),
+        );
+        crate::project::aux::aux_data_for(
+            &namespace,
+            root.parent().unwrap_or(Path::new("")),
+            aux_dir,
+        )
+    }
+
+    fn contains(&self, path: &Path) -> bool {
+        self.members
+            .binary_search_by(|member| member.as_path().cmp(path))
+            .is_ok()
+    }
+}
+
+fn document_selection<'a>(
+    snapshot: &Analysis,
+    resolution: &'a ResolvedLabels,
+    path: &'a Path,
+    configured: Option<&Path>,
+) -> Option<DocumentSelection<'a>> {
+    if let Some(configured) = configured.map(crate::incremental::normalize_path) {
+        if let Some(scope) = resolution
+            .scopes
+            .containing(path)
+            .iter()
+            .map(|&id| &resolution.scopes.scopes[id])
+            .find(|scope| scope.root.as_deref() == Some(configured.as_path()))
+        {
+            return Some(DocumentSelection {
+                root: Cow::Owned(configured),
+                members: Cow::Borrowed(&scope.members),
+            });
+        }
+        // A configured wrapper can compile an included document without
+        // containing its own root marker.
+        let members = forward_members(snapshot.include_graph(), vec![&configured], |member| {
+            !resolution.scopes.containing(member).is_empty()
+        });
+        if members.contains(path) {
+            let members = members.into_iter().map(Path::to_path_buf).collect();
+            return Some(DocumentSelection {
+                root: Cow::Owned(configured),
+                members: Cow::Owned(members),
+            });
+        }
+    }
+
+    if let Some(scope) = inferred_document_scope(resolution, path) {
+        return Some(DocumentSelection {
+            root: Cow::Borrowed(scope.root.as_deref().unwrap_or(path)),
+            members: Cow::Borrowed(&scope.members),
+        });
+    }
+    if resolution.scopes.containing(path).is_empty() {
+        return Some(DocumentSelection {
+            root: Cow::Borrowed(path),
+            members: Cow::Owned(vec![path.to_path_buf()]),
+        });
+    }
+    None
+}
+
 fn document_aux(
     snapshot: &Analysis,
     resolution: &ResolvedLabels,
     path: &Path,
     build: &BuildConfig,
 ) -> Option<AuxData> {
-    let namespace = namespace_of(resolution, path);
-    let root_dir = root_document_of(snapshot, &namespace)
-        .and_then(Path::parent)
-        .or_else(|| path.parent())
-        .unwrap_or(Path::new(""));
-    crate::project::aux::aux_data_for(&namespace, root_dir, build.aux_dir.as_deref())
+    let selection = document_selection(snapshot, resolution, path, build.root.as_deref())?;
+    selection.aux_data(snapshot, resolution, build)
 }
 
 /// Convert an [`OutlineItem`] tree into an LSP [`DocumentSymbol`], mapping byte
@@ -5585,7 +5688,7 @@ fn cite_completion_items(
     let mut seen: HashSet<String> = HashSet::new();
     let mut items: Vec<CompletionItem> = Vec::new();
     for bib_path in citations.bib_definers(lint_path) {
-        let Some(file) = snapshot.lookup_file(bib_path) else {
+        let Some(file) = snapshot.lookup_file(&bib_path) else {
             continue;
         };
         for entry in snapshot.bib_semantic_model(file).entries() {
@@ -5710,7 +5813,7 @@ fn run_hover(
 /// `line`, and reply with the resulting status.
 ///
 /// The document root is the first of: `[build] root`, the label namespace's
-/// `\documentclass`/`\begin{document}` member ([`root_document_of`]), or the file
+/// `\documentclass`/`\begin{document}` member ([`inferred_document_scope`]), or the file
 /// itself. `%f` stays the *cursor's* file throughout — SyncTeX indexes per input
 /// file — while `%p` is the *root's* PDF, which is the whole reason the root
 /// matters here.
@@ -5736,7 +5839,7 @@ fn run_forward_search(
     // to exactly that anyway.
     let root = salsa::Cancelled::catch(AssertUnwindSafe(|| {
         let (resolution, _) = snapshot.resolve_project();
-        root_document_of(snapshot, &namespace_of(resolution, path)).map(Path::to_path_buf)
+        inferred_document_scope(resolution, path).and_then(|scope| scope.root.clone())
     }))
     .ok()
     .flatten();
@@ -6016,9 +6119,8 @@ fn compute_goto_definition(
         // through to the file-target tier below.
         let sites = scan_definition_sites(&root);
         if let Some(target) = name_refs::name_target_under_cursor(&root, offset, &sites) {
-            let (resolution, _) = snapshot.resolve_project();
             let packages = snapshot.package_graph();
-            let defs = name_definition_sites(snapshot, resolution, packages, &lint_path, &target);
+            let defs = name_definition_sites(snapshot, packages, &lint_path, &target);
             if !defs.is_empty() {
                 return defs
                     .into_iter()
@@ -6161,6 +6263,7 @@ fn compute_references(
                     resolution,
                     &origin,
                     &names,
+                    offset,
                     include_declaration,
                     enc,
                 ),
@@ -6186,7 +6289,6 @@ fn compute_references(
         let packages = snapshot.package_graph();
         name_reference_locations(
             snapshot,
-            resolution,
             packages,
             &origin,
             &target,
@@ -6208,7 +6310,6 @@ fn compute_references(
 /// [`DefSite`]: crate::semantic::DefSite
 fn name_reference_locations(
     snapshot: &Analysis,
-    resolution: &ResolvedLabels,
     packages: &PackageGraph,
     origin: &Path,
     target: &NameTarget,
@@ -6216,7 +6317,7 @@ fn name_reference_locations(
     enc: PositionEncoding,
 ) -> Vec<Location> {
     let mut locations = Vec::new();
-    for member in name_refs::macro_namespace(resolution, packages, origin) {
+    for member in name_refs::macro_namespace(snapshot.include_graph(), packages, origin) {
         let Some(file) = snapshot.lookup_file(&member) else {
             continue;
         };
@@ -6264,7 +6365,6 @@ fn name_reference_locations(
 /// [`DefSite`]: crate::semantic::DefSite
 fn name_definition_sites(
     snapshot: &Analysis,
-    resolution: &ResolvedLabels,
     packages: &PackageGraph,
     origin: &Path,
     target: &NameTarget,
@@ -6274,7 +6374,7 @@ fn name_definition_sites(
         NameKind::Environment => DefSiteKind::Environment,
     };
     let mut out = Vec::new();
-    for member in name_refs::macro_namespace(resolution, packages, origin) {
+    for member in name_refs::macro_namespace(snapshot.include_graph(), packages, origin) {
         let Some(file) = snapshot.lookup_file(&member) else {
             continue;
         };
@@ -6517,6 +6617,9 @@ fn compute_prepare_rename(
         // `.bib` origin: the `@entry` key under the cursor.
         if file_kind_for(path) == FileKind::Bib {
             let (key, key_range) = bib_entry_under_cursor(snapshot, path, text, offset)?;
+            let file = snapshot.lookup_file(path)?;
+            snapshot.text_is_current(file, text).then_some(())?;
+            key_rename_sites(snapshot, path, key_range, &key, true, None)?;
             return Some((lsp_range(&idx, key_range), key.to_string()));
         }
         // `.tex` origin: a `\ref`/`\cite` use or a `\label` definition. The parsed
@@ -6533,6 +6636,16 @@ fn compute_prepare_rename(
             }
         };
         if let Some(target) = target {
+            let file = snapshot.lookup_file(path)?;
+            snapshot.text_is_current(file, text).then_some(())?;
+            key_rename_sites(
+                snapshot,
+                path,
+                target.span,
+                &target.placeholder,
+                matches!(target.target, CursorTarget::Citations(_)),
+                None,
+            )?;
             return Some((lsp_range(&idx, target.span), target.placeholder.to_string()));
         }
         // Not a key: a command or environment name, gated to user-defined names
@@ -6570,9 +6683,8 @@ fn name_rename_allowed(
     {
         return true;
     }
-    let (resolution, _) = snapshot.resolve_project();
     let packages = snapshot.package_graph();
-    !name_definition_sites(snapshot, resolution, packages, origin, target).is_empty()
+    !name_definition_sites(snapshot, packages, origin, target).is_empty()
 }
 
 /// Compute the [`WorkspaceEdit`] renaming the key — or, in the name-based fallback
@@ -6596,30 +6708,17 @@ fn compute_rename(
     let offset = idx.offset_at(position.line, position.character);
 
     let changes = salsa::Cancelled::catch(AssertUnwindSafe(|| {
-        let (resolution, citations) = snapshot.resolve_project();
-
-        // `.bib` origin: the `@entry` key under the cursor → its `\cite` uses + the
-        // entry itself.
         if file_kind_for(path) == FileKind::Bib {
-            if !is_valid_key(new_name) {
+            if !snapshot
+                .lookup_file(path)
+                .is_some_and(|file| snapshot.text_is_current(file, text))
+            {
                 return HashMap::new();
             }
-            let Some((key, _)) = bib_entry_under_cursor(snapshot, path, text, offset) else {
+            let Some((key, span)) = bib_entry_under_cursor(snapshot, path, text, offset) else {
                 return HashMap::new();
             };
-            let origin = snapshot
-                .lookup_file(path)
-                .map(|file| snapshot.file_path(file).to_path_buf())
-                .unwrap_or_else(|| path.to_path_buf());
-            return rename_citation_edits(
-                snapshot,
-                citations,
-                &origin,
-                FileKind::Bib,
-                &[key],
-                new_name,
-                enc,
-            );
+            return key_rename_edits(snapshot, path, span, &key, true, new_name, enc);
         }
 
         // `.tex` origin: a `\ref`/`\cite` use or a `\label` definition. The parsed
@@ -6637,23 +6736,21 @@ fn compute_rename(
             }
         };
         if let Some(target) = target {
-            if !is_valid_key(new_name) {
+            if !snapshot
+                .lookup_file(path)
+                .is_some_and(|file| snapshot.text_is_current(file, text))
+            {
                 return HashMap::new();
             }
-            return match target.target {
-                CursorTarget::Labels(names) => {
-                    rename_label_edits(snapshot, resolution, &origin, &names, new_name, enc)
-                }
-                CursorTarget::Citations(names) => rename_citation_edits(
-                    snapshot,
-                    citations,
-                    &origin,
-                    FileKind::Tex,
-                    &names,
-                    new_name,
-                    enc,
-                ),
-            };
+            return key_rename_edits(
+                snapshot,
+                &origin,
+                target.span,
+                &target.placeholder,
+                matches!(target.target, CursorTarget::Citations(_)),
+                new_name,
+                enc,
+            );
         }
         // Not a key: a command or environment name, gated to user-defined names
         // like `compute_prepare_rename` (a client may skip prepareRename).
@@ -6673,23 +6770,13 @@ fn compute_rename(
                 if !is_valid_command_name(bare, &target.name) {
                     return HashMap::new();
                 }
-                rename_command_edits(
-                    snapshot,
-                    resolution,
-                    packages,
-                    &origin,
-                    &target.name,
-                    bare,
-                    enc,
-                )
+                rename_command_edits(snapshot, packages, &origin, &target.name, bare, enc)
             }
             NameKind::Environment => {
                 if !is_valid_key(new_name) {
                     return HashMap::new();
                 }
-                rename_environment_edits(
-                    snapshot, resolution, packages, &origin, &target, new_name, enc,
-                )
+                rename_environment_edits(snapshot, packages, &origin, &target, new_name, enc)
             }
         }
     }))
@@ -6730,25 +6817,49 @@ fn reference_label_locations(
     resolution: &ResolvedLabels,
     origin: &Path,
     names: &[SmolStr],
+    offset: usize,
     include_declaration: bool,
     enc: PositionEncoding,
 ) -> Vec<Location> {
     let mut locations = Vec::new();
-    for member in resolution.namespace_members(origin) {
-        let Some(file) = snapshot.lookup_file(member) else {
-            continue;
+    for name in names {
+        let on_definition = snapshot.lookup_file(origin).is_some_and(|file| {
+            snapshot.semantic_model(file).labels().iter().any(|label| {
+                &label.name == name
+                    && label
+                        .key_range
+                        .contains_inclusive(TextSize::from(offset as u32))
+            })
+        });
+        let definers = if on_definition {
+            vec![origin.to_path_buf()]
+        } else {
+            resolution.definers(origin, name)
         };
-        let text = snapshot.file_text(file);
-        let idx = LineIndex::with_encoding(text, enc);
-        let model = snapshot.semantic_model(file);
-        for r in model.refs() {
-            if names.contains(&r.name) {
-                locations.push(location_for(member, &idx, r.range));
+        let members = if definers.is_empty() {
+            resolution.namespace_members(origin)
+        } else {
+            resolution.scopes.members(
+                definers
+                    .iter()
+                    .flat_map(|path| resolution.scopes.containing(path).iter().copied()),
+            )
+        };
+        for member in members {
+            let Some(file) = snapshot.lookup_file(member) else {
+                continue;
+            };
+            let idx = snapshot.file_buffer(file, enc).line_index();
+            let model = snapshot.semantic_model(file);
+            for reference in model
+                .refs()
+                .iter()
+                .filter(|reference| &reference.name == name)
+            {
+                locations.push(location_for(member, &idx, reference.range));
             }
-        }
-        if include_declaration {
-            for label in model.labels() {
-                if names.contains(&label.name) {
+            if include_declaration && definers.iter().any(|path| path == member) {
+                for label in model.labels().iter().filter(|label| &label.name == name) {
                     locations.push(location_for(member, &idx, label.range));
                 }
             }
@@ -6774,21 +6885,35 @@ fn reference_citation_locations(
     decl_for_bib: Option<Location>,
     enc: PositionEncoding,
 ) -> Vec<Location> {
-    let members = if kind == FileKind::Bib {
-        citations.bib_citers(origin)
-    } else {
-        citations.namespace_members(origin)
-    };
     let mut locations = Vec::new();
-    for member in members {
-        let Some(file) = snapshot.lookup_file(member) else {
-            continue;
+    for name in names {
+        let members = if kind == FileKind::Bib {
+            citations.bib_citers(origin)
+        } else {
+            let paths = citations.bib_definers(origin);
+            let definitions = key_definitions(snapshot, &paths, name, true);
+            if definitions.is_empty() {
+                citations.namespace_members(origin)
+            } else {
+                citations.scopes.members(
+                    definitions
+                        .iter()
+                        .flat_map(|(path, _)| citations.bib_scopes(path)),
+                )
+            }
         };
-        let text = snapshot.file_text(file);
-        let idx = LineIndex::with_encoding(text, enc);
-        for c in snapshot.semantic_model(file).citations() {
-            if names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)) {
-                locations.push(location_for(member, &idx, c.range));
+        for member in members {
+            let Some(file) = snapshot.lookup_file(member) else {
+                continue;
+            };
+            let idx = snapshot.file_buffer(file, enc).line_index();
+            for cite in snapshot
+                .semantic_model(file)
+                .citations()
+                .iter()
+                .filter(|cite| name.eq_ignore_ascii_case(&cite.name))
+            {
+                locations.push(location_for(member, &idx, cite.range));
             }
         }
     }
@@ -6817,14 +6942,14 @@ fn resolve_label_locations(
     let mut locations = Vec::new();
     for name in names {
         for def_path in resolution.definers(lint_path, name) {
-            let Some(file) = snapshot.lookup_file(def_path) else {
+            let Some(file) = snapshot.lookup_file(&def_path) else {
                 continue;
             };
             let text = snapshot.file_text(file);
             let idx = LineIndex::with_encoding(text, enc);
             for label in snapshot.semantic_model(file).labels() {
                 if &label.name == name {
-                    locations.push(location_for(def_path, &idx, label.range));
+                    locations.push(location_for(&def_path, &idx, label.range));
                 }
             }
         }
@@ -6845,14 +6970,14 @@ fn resolve_citation_locations(
 ) -> Vec<Location> {
     let mut locations = Vec::new();
     for bib_path in citations.bib_definers(lint_path) {
-        let Some(file) = snapshot.lookup_file(bib_path) else {
+        let Some(file) = snapshot.lookup_file(&bib_path) else {
             continue;
         };
         let text = snapshot.file_text(file);
         let idx = LineIndex::with_encoding(text, enc);
         for entry in snapshot.bib_semantic_model(file).entries() {
             if names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)) {
-                locations.push(location_for(bib_path, &idx, entry.key_range));
+                locations.push(location_for(&bib_path, &idx, entry.key_range));
             }
         }
     }
@@ -6884,94 +7009,218 @@ fn lsp_range(idx: &LineIndex, range: TextRange) -> Range {
     byte_range_to_lsp(idx, usize::from(range.start()), usize::from(range.end()))
 }
 
-/// Every `\ref`-family use of `names` across `origin`'s label namespace, plus every
-/// `\label` definition, each rewritten to `new_name` at its precise `key_range`. The
-/// rename mirror of [`reference_label_locations`] — `TextEdit`s grouped by URI
-/// instead of `Location`s, and the definition is *always* included (a rename rewrites
-/// the def, unlike find-references' optional declaration).
-fn rename_label_edits(
+type KeySite = (PathBuf, TextRange);
+
+fn key_definitions(
     snapshot: &Analysis,
-    resolution: &ResolvedLabels,
-    origin: &Path,
-    names: &[SmolStr],
-    new_name: &str,
-    enc: PositionEncoding,
-) -> HashMap<Uri, Vec<TextEdit>> {
-    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
-    for member in resolution.namespace_members(origin) {
-        let Some(file) = snapshot.lookup_file(member) else {
+    paths: &[PathBuf],
+    key: &str,
+    citation: bool,
+) -> Vec<KeySite> {
+    let mut sites = Vec::new();
+    for path in paths {
+        let Some(file) = snapshot.lookup_file(path) else {
             continue;
         };
-        let Some(uri) = path_to_uri(member) else {
-            continue;
-        };
-        let text = snapshot.file_text(file);
-        let idx = LineIndex::with_encoding(text, enc);
-        let model = snapshot.semantic_model(file);
-        for r in model.refs() {
-            if names.contains(&r.name) {
-                push_edit(&mut changes, &uri, &idx, r.key_range, new_name);
-            }
-        }
-        for label in model.labels() {
-            if names.contains(&label.name) {
-                push_edit(&mut changes, &uri, &idx, label.key_range, new_name);
-            }
+        if citation {
+            sites.extend(
+                snapshot
+                    .bib_semantic_model(file)
+                    .entries()
+                    .iter()
+                    .filter(|entry| entry.key.eq_ignore_ascii_case(key))
+                    .map(|entry| (path.clone(), entry.key_range)),
+            );
+        } else {
+            sites.extend(
+                snapshot
+                    .semantic_model(file)
+                    .labels()
+                    .iter()
+                    .filter(|label| label.name == key)
+                    .map(|label| (path.clone(), label.key_range)),
+            );
         }
     }
-    changes
+    sites
 }
 
-/// Every `\cite`-family use of `names` across `origin`'s citation namespace, plus the
-/// bibliography `@entry` keys, rewritten to `new_name` at each precise `key_range`.
-/// The rename mirror of [`reference_citation_locations`]: `.tex` use sites come from
-/// `bib_citers` (a `.bib` origin) or `namespace_members` (a `.tex` origin); the
-/// definition sites are the origin bib itself (`.bib` origin) or `bib_definers` (a
-/// `.tex` origin). Matching is case-insensitive, as BibTeX folds key case.
-fn rename_citation_edits(
+/// Plan the physical edits once for both rename requests. A shared occurrence
+/// must bind to the selected definition in every scope that sees that occurrence.
+/// A missing key can be corrected when all its occurrences share one scope.
+fn key_rename_sites(
     snapshot: &Analysis,
-    citations: &ResolvedCitations,
     origin: &Path,
-    kind: FileKind,
-    names: &[SmolStr],
+    span: TextRange,
+    key: &str,
+    citation: bool,
+    new_name: Option<&str>,
+) -> Option<Vec<KeySite>> {
+    let (labels, citations) = snapshot.resolve_project();
+    let origin_file = snapshot.lookup_file(origin)?;
+    let origin = snapshot.file_path(origin_file);
+    let bib_origin = citation && file_kind_for(origin) == FileKind::Bib;
+    let scopes = if citation {
+        &citations.scopes
+    } else {
+        &labels.scopes
+    };
+    let definitions = |id, name| {
+        let paths = if citation {
+            citations.bib_paths_in(id)
+        } else {
+            labels.definers_in(id, name)
+        };
+        key_definitions(snapshot, paths, name, citation)
+    };
+
+    let selected = if bib_origin {
+        let candidates = key_definitions(snapshot, &[origin.to_path_buf()], key, true);
+        if candidates.len() != 1 || candidates[0].1 != span {
+            return None;
+        }
+        candidates
+    } else {
+        let (&first, rest) = scopes.containing(origin).split_first()?;
+        let candidates = definitions(first, key);
+        if (citation && candidates.len() > 1)
+            || (candidates.is_empty() && !rest.is_empty())
+            || rest.iter().any(|&id| definitions(id, key) != candidates)
+        {
+            return None;
+        }
+        candidates
+    };
+    let ids: Vec<_> = if selected.is_empty() {
+        scopes.containing(origin).to_vec()
+    } else if citation {
+        citations.bib_scopes(&selected[0].0).collect()
+    } else {
+        selected
+            .iter()
+            .flat_map(|(path, _)| scopes.containing(path).iter().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    if bib_origin
+        && ids.is_empty()
+        && new_name.is_some_and(|name| {
+            key_definitions(snapshot, std::slice::from_ref(&selected[0].0), name, true)
+                .iter()
+                .any(|site| !selected.contains(site))
+        })
+    {
+        return None;
+    }
+
+    let mut affected: HashSet<usize> = ids.iter().copied().collect();
+    let mut sites = selected.clone();
+    for path in scopes.members(ids) {
+        let file = snapshot.lookup_file(path)?;
+        let uses: Vec<_> = if citation {
+            snapshot
+                .semantic_model(file)
+                .citations()
+                .iter()
+                .filter(|item| item.name.eq_ignore_ascii_case(key))
+                .map(|item| item.key_range)
+                .collect()
+        } else {
+            snapshot
+                .semantic_model(file)
+                .refs()
+                .iter()
+                .filter(|item| item.name == key)
+                .map(|item| item.key_range)
+                .collect()
+        };
+        if !uses.is_empty() {
+            affected.extend(scopes.containing(path));
+            sites.extend(uses.into_iter().map(|range| (path.to_path_buf(), range)));
+        }
+    }
+
+    if affected.iter().any(|&id| {
+        let closed = if citation {
+            citations.is_scope_closed(id)
+        } else {
+            scopes.scopes[id].closed
+        };
+        (affected.len() > 1 && (!closed || selected.is_empty()))
+            || definitions(id, key) != selected
+            || (!selected.is_empty()
+                && new_name.is_some_and(|name| {
+                    definitions(id, name)
+                        .iter()
+                        .any(|site| !selected.contains(site))
+                }))
+    }) {
+        return None;
+    }
+    // A workspace edit addresses a URI. If the workspace tracks an edited
+    // file through another URI, writing either path may change uses in scopes
+    // the rename proof never visited.
+    if key_rename_has_alias(snapshot, &sites) {
+        return None;
+    }
+    Some(sites)
+}
+
+fn key_rename_has_alias(snapshot: &Analysis, sites: &[KeySite]) -> bool {
+    #[cfg(unix)]
+    let file_identity = |path: &Path| {
+        use std::os::unix::fs::MetadataExt;
+        path.metadata()
+            .ok()
+            .map(|metadata| (metadata.dev(), metadata.ino()))
+    };
+    #[cfg(not(unix))]
+    let file_identity = |path: &Path| path.canonicalize().ok();
+
+    let edited: HashSet<_> = sites.iter().map(|(path, _)| path.as_path()).collect();
+    let identities: HashMap<_, _> = edited
+        .into_iter()
+        .filter_map(|path| file_identity(path).map(|identity| (identity, path)))
+        .collect();
+    !identities.is_empty()
+        && snapshot.project_members().iter().any(|member| {
+            file_identity(&member.path).is_some_and(|identity| {
+                identities
+                    .get(&identity)
+                    .is_some_and(|&path| path != member.path)
+            })
+        })
+}
+
+fn key_rename_edits(
+    snapshot: &Analysis,
+    origin: &Path,
+    span: TextRange,
+    key: &str,
+    citation: bool,
     new_name: &str,
     enc: PositionEncoding,
 ) -> HashMap<Uri, Vec<TextEdit>> {
-    let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
-    let tex_members = if kind == FileKind::Bib {
-        citations.bib_citers(origin)
-    } else {
-        citations.namespace_members(origin)
-    };
-    for member in tex_members {
-        let Some(file) = snapshot.lookup_file(member) else {
-            continue;
-        };
-        let mut matches = snapshot
-            .semantic_model(file)
-            .citations()
-            .iter()
-            .filter(|c| names.iter().any(|n| n.eq_ignore_ascii_case(&c.name)))
-            .peekable();
-        if matches.peek().is_none() {
-            continue;
-        }
-        let Some(uri) = path_to_uri(member) else {
-            continue;
-        };
-        let idx = snapshot.file_buffer(file, enc).line_index();
-        for c in matches {
-            push_edit(&mut changes, &uri, &idx, c.key_range, new_name);
-        }
+    if !is_valid_key(new_name) {
+        return HashMap::new();
     }
-    match kind {
-        // From a `.bib` cursor, rewrite the entry in the origin bibliography itself.
-        FileKind::Bib => push_bib_entry_edits(snapshot, &mut changes, origin, names, new_name, enc),
-        _ => {
-            for bib_path in citations.bib_definers(origin) {
-                push_bib_entry_edits(snapshot, &mut changes, bib_path, names, new_name, enc);
-            }
-        }
+    let Some(sites) = key_rename_sites(snapshot, origin, span, key, citation, Some(new_name))
+    else {
+        return HashMap::new();
+    };
+    let mut changes = HashMap::new();
+    for (path, range) in sites {
+        let (Some(file), Some(uri)) = (snapshot.lookup_file(&path), path_to_uri(&path)) else {
+            return HashMap::new();
+        };
+        push_edit(
+            &mut changes,
+            &uri,
+            &snapshot.file_buffer(file, enc).line_index(),
+            range,
+            new_name,
+        );
     }
     changes
 }
@@ -6989,7 +7238,6 @@ fn rename_citation_edits(
 /// stay correct).
 fn rename_command_edits(
     snapshot: &Analysis,
-    resolution: &ResolvedLabels,
     packages: &PackageGraph,
     origin: &Path,
     name: &str,
@@ -6997,7 +7245,7 @@ fn rename_command_edits(
     enc: PositionEncoding,
 ) -> HashMap<Uri, Vec<TextEdit>> {
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
-    for member in name_refs::macro_namespace(resolution, packages, origin) {
+    for member in name_refs::macro_namespace(snapshot.include_graph(), packages, origin) {
         let Some(file) = snapshot.lookup_file(&member) else {
             continue;
         };
@@ -7028,7 +7276,6 @@ fn rename_command_edits(
 /// [`name_definition_sites`], since the `\begin`/`\end` walk cannot see them.
 fn rename_environment_edits(
     snapshot: &Analysis,
-    resolution: &ResolvedLabels,
     packages: &PackageGraph,
     origin: &Path,
     target: &NameTarget,
@@ -7036,7 +7283,7 @@ fn rename_environment_edits(
     enc: PositionEncoding,
 ) -> HashMap<Uri, Vec<TextEdit>> {
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
-    for member in name_refs::macro_namespace(resolution, packages, origin) {
+    for member in name_refs::macro_namespace(snapshot.include_graph(), packages, origin) {
         let Some(file) = snapshot.lookup_file(&member) else {
             continue;
         };
@@ -7050,9 +7297,7 @@ fn rename_environment_edits(
             push_edit(&mut changes, &uri, &idx, range, new_name);
         }
     }
-    for (def_path, name_range) in
-        name_definition_sites(snapshot, resolution, packages, origin, target)
-    {
+    for (def_path, name_range) in name_definition_sites(snapshot, packages, origin, target) {
         let Some(file) = snapshot.lookup_file(&def_path) else {
             continue;
         };
@@ -7064,37 +7309,6 @@ fn rename_environment_edits(
         push_edit(&mut changes, &uri, &idx, name_range, new_name);
     }
     changes
-}
-
-/// Push the `@entry` key edits for `names` in the bibliography at `bib_path` (case-
-/// insensitive match), rewriting each `key_range` to `new_name`.
-fn push_bib_entry_edits(
-    snapshot: &Analysis,
-    changes: &mut HashMap<Uri, Vec<TextEdit>>,
-    bib_path: &Path,
-    names: &[SmolStr],
-    new_name: &str,
-    enc: PositionEncoding,
-) {
-    let Some(file) = snapshot.lookup_file(bib_path) else {
-        return;
-    };
-    let mut matches = snapshot
-        .bib_semantic_model(file)
-        .entries()
-        .iter()
-        .filter(|entry| names.iter().any(|n| n.eq_ignore_ascii_case(&entry.key)))
-        .peekable();
-    if matches.peek().is_none() {
-        return;
-    }
-    let Some(uri) = path_to_uri(bib_path) else {
-        return;
-    };
-    let idx = snapshot.file_buffer(file, enc).line_index();
-    for entry in matches {
-        push_edit(changes, &uri, &idx, entry.key_range, new_name);
-    }
 }
 
 /// Append a `key_range → new_name` [`TextEdit`] to `uri`'s edit list.
@@ -7749,6 +7963,63 @@ fn diff_to_edits(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiled_label_numbers_follow_the_document_scope() {
+        let directory = tempfile::tempdir().unwrap();
+        let a = directory.path().join("a.tex");
+        let b = directory.path().join("b.tex");
+        let shared = directory.path().join("shared.tex");
+        let shared_source = "\\ref{key}\n";
+        let mut db = IncrementalDatabase::default();
+        for (path, source) in [
+            (
+                &a,
+                "\\documentclass{article}\n\\input{shared}\n\\section{A}\\label{key}\n",
+            ),
+            (
+                &b,
+                "\\documentclass{article}\n\\input{shared}\n\\section{B}\\label{key}\n",
+            ),
+            (&shared, shared_source),
+        ] {
+            let file = db.upsert_file(path, source);
+            db.reparse_stage_edits(file, None);
+        }
+        for (path, number) in [(&a, 1), (&b, 2)] {
+            std::fs::write(
+                path.with_extension("aux"),
+                format!("\\newlabel{{key}}{{{{{number}}}{{1}}}}\n"),
+            )
+            .unwrap();
+        }
+        let snapshot = db.snapshot();
+        let (labels, _) = snapshot.resolve_project();
+        let default = BuildConfig::default();
+        for (path, expected) in [(&a, "1"), (&b, "2")] {
+            let data = document_aux(&snapshot, labels, path, &default).unwrap();
+            assert_eq!(data.labels["key"], expected);
+        }
+        assert!(document_aux(&snapshot, labels, &shared, &default).is_none());
+        let configured = BuildConfig {
+            root: Some(directory.path().join("chapters/../b.tex")),
+            ..default
+        };
+        let data = document_aux(&snapshot, labels, &shared, &configured).unwrap();
+        assert_eq!(data.labels["key"], "2");
+        let hover = hover::compute_hover(
+            &snapshot,
+            &shared,
+            &TextBuffer::new(shared_source, PositionEncoding::Utf16),
+            Position::new(0, 6),
+            &configured,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(hover).unwrap()["contents"]["value"],
+            "Section 2 (B)"
+        );
+    }
 
     #[test]
     fn bibliography_seeding_publishes_external_path_alias() {
@@ -9072,15 +9343,15 @@ mod tests {
             db.reparse_stage_edits(file, None);
         }
         let snapshot = db.snapshot();
-        let (_, citations) = snapshot.resolve_project();
+        let _ = snapshot.resolve_project();
         db.clear_query_log();
         for _ in 0..2 {
-            let changes = rename_citation_edits(
+            let changes = key_rename_edits(
                 &snapshot,
-                citations,
                 &main,
-                FileKind::Tex,
-                &[SmolStr::new("key")],
+                TextRange::default(),
+                "key",
+                true,
                 "new",
                 PositionEncoding::Utf16,
             );

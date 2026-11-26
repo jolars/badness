@@ -638,7 +638,7 @@ fn render_citation(
     name: &SmolStr,
 ) -> Option<String> {
     for bib_path in citations.bib_definers(lint_path) {
-        let Some(file) = snapshot.lookup_file(bib_path) else {
+        let Some(file) = snapshot.lookup_file(&bib_path) else {
             continue;
         };
         let Some(entry) = snapshot
@@ -731,46 +731,36 @@ fn render_label(
     name: &SmolStr,
     build: &BuildConfig,
 ) -> Option<String> {
-    // Definition site: the current file first (also covering the untracked
-    // fresh-parse path, whose model is absent from the resolution), then the
-    // namespace's definers.
+    let document =
+        super::document_selection(snapshot, resolution, lint_path, build.root.as_deref());
+    let definers = resolution.definers(lint_path, name);
     let context = model
         .labels()
         .iter()
-        .find(|l| l.name == *name)
+        .find(|label| label.name == *name)
         .and_then(|def| label_context(root, def.key_range.start()))
         .or_else(|| {
-            resolution
-                .definers(lint_path, name)
+            definers
                 .iter()
-                .find_map(|def_path| {
-                    let file = snapshot.lookup_file(def_path)?;
+                .filter(|path| {
+                    document
+                        .as_ref()
+                        .is_none_or(|document| document.contains(path))
+                })
+                .find_map(|path| {
+                    let file = snapshot.lookup_file(path)?;
                     let def = snapshot
                         .semantic_model(file)
                         .labels()
                         .iter()
-                        .find(|l| l.name == *name)?;
+                        .find(|label| label.name == *name)?;
                     label_context(&snapshot.parsed_tree(file), def.key_range.start())
                 })
         });
 
-    let number = label_number(snapshot, resolution, lint_path, name, build);
-    render_label_markdown(context.as_ref(), number.as_deref())
-}
-
-/// The number the last compile assigned to `name`, read from the namespace's
-/// `.aux` files ([`super::document_aux`]).
-fn label_number(
-    snapshot: &Analysis,
-    resolution: &ResolvedLabels,
-    lint_path: &Path,
-    name: &SmolStr,
-    build: &BuildConfig,
-) -> Option<String> {
-    super::document_aux(snapshot, resolution, lint_path, build)?
-        .labels
-        .get(name.as_str())
-        .cloned()
+    let aux = document.and_then(|document| document.aux_data(snapshot, resolution, build));
+    let number = aux.as_ref().and_then(|aux| aux.labels.get(name.as_str()));
+    render_label_markdown(context.as_ref(), number.map(String::as_str))
 }
 
 /// The preview line, texlab-style: `Section 1.2 (Intro)`, `Figure 3: A chart`,

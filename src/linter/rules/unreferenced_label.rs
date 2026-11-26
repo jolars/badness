@@ -59,7 +59,9 @@ impl Rule for UnreferencedLabel {
          labels in its enclosed math environments.\n\nLike `undefined-ref`, the check \
          is sound only when the label namespace is complete. The rule stays silent \
          unless the project view is **closed** (every include resolves to an analyzed \
-         file) and **rooted**. It is inactive on stdin or wherever cross-file label \
+         file) and **rooted**. A label in a shared file gets a warning only when every \
+         document that includes it is complete and leaves the label unused. \
+         The rule is inactive on stdin or wherever cross-file label \
          resolution is unavailable. No autofix is offered because removing the unused \
          label and adding a reference are both valid choices."
     }
@@ -141,8 +143,10 @@ fn referenced_subequation_labels(ctx: &RuleContext<'_>) -> HashSet<usize> {
                 && !nested
                     .iter()
                     .any(|environment| environment.text_range().contains_range(label.range))
-                && resolution.is_referenced(ctx.path, &label.name)
-                && resolution.definers(ctx.path, &label.name) == [ctx.path]
+                && resolution.scopes.containing(ctx.path).iter().any(|&id| {
+                    resolution.is_referenced_in(id, &label.name)
+                        && resolution.definers_in(id, &label.name) == [ctx.path]
+                })
                 && ctx
                     .model
                     .labels()

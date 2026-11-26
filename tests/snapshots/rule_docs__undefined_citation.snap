@@ -4,7 +4,7 @@ expression: render_rule_doc(rule.as_ref())
 ---
 ## `undefined-citation`
 
-Flag a `\cite`-family key that matches no entry in the document's bibliography, analogous to `undefined-ref`. The check is sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file. Resource lookup honors BibTeX's `BIBINPUTS` and `TEXBIB` search paths. A `\nocite{*}` wildcard, which marks every key as used, suppresses the rule entirely. The rule is inactive without cross-file citation resolution. No autofix is offered.
+Flag a `\cite`-family key that matches no entry in the document's bibliography, analogous to `undefined-ref`. The check is sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file. Resource lookup honors BibTeX's `BIBINPUTS` and `TEXBIB` search paths. A `\nocite{*}` wildcard, which marks every key as used, suppresses the rule for that document. A shared file gets a warning only when every containing document is complete, has no wildcard, and lacks the key. The rule is inactive without cross-file citation resolution. No autofix is offered.
 
 This rule is **enabled by default**.
 

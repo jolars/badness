@@ -131,14 +131,17 @@ fn prose_edit_does_not_rebuild_resolved_labels() {
         "\\documentclass{article}\n\\input{part}\n\\ref{a}\n",
         "\\label{a}\\ref{a}\n",
     );
-    let _ = resolved_labels(&db);
+    let scopes = resolved_labels(&db).scopes.clone();
 
     db.clear_query_log();
 
     // The model changes (added prose) but the label set is still `{a}` and the ref
     // set is still `{a}`.
     db.set_file_text(part, "Prose.\n\\label{a}\\ref{a}\n");
-    let _ = resolved_labels(&db);
+    assert!(std::sync::Arc::ptr_eq(
+        &scopes,
+        &resolved_labels(&db).scopes
+    ));
 
     let counts = count_by_kind(&db.query_log());
     // part's label and ref sets are recomputed (its model changed)...

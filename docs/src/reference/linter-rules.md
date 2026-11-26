@@ -1026,7 +1026,7 @@ warning: missing-required-argument
 
 ## `undefined-ref`
 
-Flag a `\ref`-family reference to a label defined nowhere in the document. The check is sound only when the label namespace is complete, so the rule stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. It is inactive on stdin or wherever cross-file label resolution is unavailable. No autofix is offered.
+Flag a `\ref`-family reference to a label defined nowhere in the document. The check is sound only when the label namespace is complete, so the rule stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. A shared file gets a warning only when every document that includes it is complete and the reference is undefined in each. The rule is inactive on stdin or wherever cross-file label resolution is unavailable. No autofix is offered.
 
 This rule is **enabled by default**.
 
@@ -1046,7 +1046,7 @@ warning: undefined-ref
 
 ## `undefined-citation`
 
-Flag a `\cite`-family key that matches no entry in the document's bibliography, analogous to `undefined-ref`. The check is sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file. Resource lookup honors BibTeX's `BIBINPUTS` and `TEXBIB` search paths. A `\nocite{*}` wildcard, which marks every key as used, suppresses the rule entirely. The rule is inactive without cross-file citation resolution. No autofix is offered.
+Flag a `\cite`-family key that matches no entry in the document's bibliography, analogous to `undefined-ref`. The check is sound only over a **closed, rooted** namespace where every `.bib` resource resolves to an analyzed file. Resource lookup honors BibTeX's `BIBINPUTS` and `TEXBIB` search paths. A `\nocite{*}` wildcard, which marks every key as used, suppresses the rule for that document. A shared file gets a warning only when every containing document is complete, has no wildcard, and lacks the key. The rule is inactive without cross-file citation resolution. No autofix is offered.
 
 This rule is **enabled by default**.
 
@@ -1068,7 +1068,7 @@ warning: undefined-citation
 
 Flag a label definition unused by any `\ref`-family command in the document. A `\eqref{A}--\eqref{D}` range also uses labels between A and D when they occur in consecutive, singly labeled `equation` environments or numbered `align` and `gather` rows. This includes literal included files with an unambiguous source order. Manual tags, suppressed numbers, and counter changes stop inference. A reference to a `subequations` group label also uses the labels in its enclosed math environments.
 
-Like `undefined-ref`, the check is sound only when the label namespace is complete. The rule stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. It is inactive on stdin or wherever cross-file label resolution is unavailable. No autofix is offered because removing the unused label and adding a reference are both valid choices.
+Like `undefined-ref`, the check is sound only when the label namespace is complete. The rule stays silent unless the project view is **closed** (every include resolves to an analyzed file) and **rooted**. A label in a shared file gets a warning only when every document that includes it is complete and leaves the label unused. The rule is inactive on stdin or wherever cross-file label resolution is unavailable. No autofix is offered because removing the unused label and adding a reference are both valid choices.
 
 This rule is **enabled by default**.
 

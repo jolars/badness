@@ -124,22 +124,40 @@ fn cross_file_finding(
     resolution: &crate::project::ResolvedLabels,
     name: &str,
 ) -> Option<(String, Vec<RelatedInfo>)> {
-    let others: Vec<&PathBuf> = resolution
+    let others: Vec<PathBuf> = resolution
         .definers(ctx.path, name)
-        .iter()
+        .into_iter()
         .filter(|definer| definer.as_path() != ctx.path)
         .collect();
     if others.is_empty() {
         return None;
     }
-    let message = format!(
+    let mut message = format!(
         "label `{name}` is also defined in {}",
         others
             .iter()
-            .map(|definer| format!("`{}`", definer.display()))
+            .map(|definer| format!("`{}`", resolution.display_path(definer).display()))
             .collect::<Vec<_>>()
             .join(", ")
     );
+    let ids = resolution.scopes.containing(ctx.path);
+    if ids.len() > 1 {
+        let roots: Vec<_> = ids
+            .iter()
+            .filter(|&&id| {
+                resolution
+                    .definers_in(id, name)
+                    .iter()
+                    .filter(|path| *path != ctx.path)
+                    .eq(&others)
+            })
+            .filter_map(|&id| resolution.scopes.scopes[id].root.as_deref())
+            .map(|root| format!("`{}`", resolution.display_path(root).display()))
+            .collect();
+        if !roots.is_empty() {
+            message.push_str(&format!(" in document scope {}", roots.join(", ")));
+        }
+    }
     let related = others
         .iter()
         .map(|definer| RelatedInfo {

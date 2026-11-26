@@ -28,22 +28,25 @@ use badness::formatter::{
     ChangedFile, FormatStyle, ItemIndent, LineEnding, MathWrap, SentenceOptions, WrapMode,
     check_paths_with_style, format_file_with_packages_sentence, format_with_declarations_sentence,
 };
+use badness::incremental::normalize_path;
 use badness::linter::{
     Diagnostic, Fix, OutputMode, RuleSelection, apply_fixes, apply_fixes_multi,
     check_document_fixable, lint_document, render_findings,
 };
-use std::collections::{BTreeSet, HashMap};
+use badness::project::include::collect_include_edges_with;
+use badness::project::scopes::{DocumentRoot, DocumentScopes};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use badness::cli::{
     Cli, ColorChoice, Command, DebugChecksArg, DebugCommand, ItemIndentArg, LineEndingArg,
     LintOutput, MathWrapArg, WrapArg,
 };
 use badness::parser::{LexConfig, parse_with_declarations, parse_with_flavor};
-use badness::project::labels::{document_label_names, document_ref_names, is_document_root};
+use badness::project::labels::{document_label_names, document_ref_names};
 use badness::project::{
     BibTarget, CiteFileFacts, EquationRangeFacts, FileFacts, IncludeGraph, PackageOptionFacts,
     ResolvedCitations, ResolvedLabels, ResolvedPackageOptions, collect_bib_resource_targets,
-    collect_include_edge_keys, package_option_facts,
+    package_option_facts,
 };
 use badness::semantic::SemanticModel;
 use badness::syntax::SyntaxNode;
@@ -610,6 +613,7 @@ struct TexAnalysis {
     model: SemanticModel,
     facts: FileFacts,
     label_input: (PathBuf, Vec<SmolStr>, Vec<SmolStr>, bool),
+    root_marker: DocumentRoot,
     range_facts: EquationRangeFacts,
     cite_fact: CiteFileFacts,
     /// The file's declared-option surface when it is a `.sty`, feeding the
@@ -671,22 +675,27 @@ fn analyze_source(
             let green = parsed.green;
             let root = SyntaxNode::new_root(green.clone());
             let model = SemanticModel::build_with_declarations(&root, declared);
+            let includes = collect_include_edges_with(&root, path.parent(), |target| {
+                lint_path_identity(&target)
+            });
             let facts = FileFacts {
                 path: path.to_path_buf(),
-                include_edges: collect_include_edge_keys(&root, path.parent()),
+                include_edges: includes.iter().map(|edge| edge.key()).collect(),
             };
+            let root_marker = DocumentRoot::detect(&root);
             let label_input = (
                 path.to_path_buf(),
                 document_label_names(&model),
                 document_ref_names(&model),
-                is_document_root(&root),
+                root_marker != DocumentRoot::None,
             );
-            let range_facts = EquationRangeFacts::collect(path, &root, &model);
+            let range_facts =
+                EquationRangeFacts::collect_with_includes(path, &root, &model, includes);
             let cite_fact = CiteFileFacts {
                 path: path.to_path_buf(),
                 bib_targets: collect_bib_resource_targets(&root, path.parent()),
                 nocite_all: model.has_wildcard_nocite(),
-                is_document_root: is_document_root(&root),
+                is_document_root: root_marker != DocumentRoot::None,
             };
             let option_facts = package_option_facts(path, &root, &model);
             FileAnalysis::Tex(Box::new(TexAnalysis {
@@ -696,6 +705,7 @@ fn analyze_source(
                 model,
                 facts,
                 label_input,
+                root_marker,
                 range_facts,
                 cite_fact,
                 option_facts,
@@ -713,7 +723,10 @@ fn supplemental_bibliographies(
     declared: &ResolvedDeclarations,
 ) -> SupplementalBibliographies {
     let mut out = SupplementalBibliographies::default();
-    let mut loaded: BTreeSet<PathBuf> = sources.iter().map(|(path, _, _)| path.clone()).collect();
+    let mut loaded: BTreeSet<PathBuf> = sources
+        .iter()
+        .map(|(path, _, _)| lint_path_identity(path))
+        .collect();
 
     for (path, content, kind) in sources {
         if !kind.is_latex() {
@@ -721,8 +734,9 @@ fn supplemental_bibliographies(
         }
         let parsed = parse_with_declarations(content, kind.lex_config(), declared);
         let root = SyntaxNode::new_root(parsed.green);
-        let base_dir = path.parent().filter(|base| !base.as_os_str().is_empty());
-        for target in collect_bib_resource_targets(&root, path.parent()) {
+        let identity = lint_path_identity(path);
+        let base_dir = identity.parent();
+        for target in collect_bib_resource_targets(&root, base_dir) {
             let BibTarget::Path(requested) = target else {
                 continue;
             };
@@ -734,18 +748,52 @@ fn supplemental_bibliographies(
             else {
                 continue;
             };
-            if actual != requested {
-                out.aliases.insert(requested, actual.clone());
+            let identity = lint_path_identity(&actual);
+            if identity != requested {
+                out.aliases.insert(requested, identity.clone());
             }
-            if !loaded.insert(actual.clone()) {
+            if !loaded.insert(identity.clone()) {
                 continue;
             }
             if let Ok(content) = std::fs::read_to_string(&actual) {
-                out.sources.push((actual, content));
+                out.sources.push((identity, content));
             }
         }
     }
     out
+}
+
+fn lint_path_identity(path: &Path) -> PathBuf {
+    let normalized = normalize_path(path);
+    // On Unix, the filesystem follows a symlink before consuming a following
+    // "..". Keep the input's actual parent when the lexical path lands elsewhere.
+    #[cfg(unix)]
+    if path
+        .components()
+        .any(|part| part == std::path::Component::ParentDir)
+        && let (Some(parent), Some(name)) = (path.parent(), path.file_name())
+    {
+        let Ok(actual_parent) = parent.canonicalize() else {
+            return std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        };
+        let lexical_parent = normalized
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok());
+        if lexical_parent.as_ref() != Some(&actual_parent) {
+            return actual_parent.join(name);
+        }
+    }
+    normalized
+}
+
+fn collect_unique_lint_files(
+    paths: &[PathBuf],
+    exclude: &ExcludeFilter,
+) -> Result<Vec<(PathBuf, FileKind)>, FileDiscoveryError> {
+    let mut files = collect_lint_files(paths, exclude)?;
+    let mut seen = HashSet::new();
+    files.retain(|(path, _)| seen.insert(lint_path_identity(path)));
+    Ok(files)
 }
 
 /// Lint each path (or stdin), rendering parse diagnostics. Exits non-zero if
@@ -789,7 +837,7 @@ fn run_lint(
     let mut failed = false;
 
     if let Some(paths) = paths {
-        let files = match collect_lint_files(paths, exclude) {
+        let files = match collect_unique_lint_files(paths, exclude) {
             Ok(files) => files,
             Err(err) => {
                 report_discovery_error(&err);
@@ -843,8 +891,8 @@ fn run_lint(
     // Lint rules run off these parses — no salsa needed on the CLI path (the salsa
     // firewall is an editor-incrementality concern). The resolver reuses the
     // *same* pure helpers the salsa
-    // queries do (`document_label_names`, `is_document_root`,
-    // `collect_include_edge_keys`, `ResolvedLabels::build`), so CLI and LSP agree.
+    // queries do (`document_label_names`, `DocumentRoot::detect`,
+    // `DocumentScopes::build`, `ResolvedLabels::build`), so CLI and LSP agree.
     // Phases 1–3 (parse+analyze, cross-file resolution, resolution-aware lint) live
     // in `collect_project_diagnostics` so the `--fix` cross-file pass shares the
     // exact same pipeline — CLI report and CLI fix can never drift.
@@ -922,15 +970,32 @@ fn collect_project_diagnostics_with_bibliographies(
 ) -> Vec<Diagnostic> {
     // Phase 1 — parse + analyze every source in parallel. Each task is pure and
     // returns only `Send` data (`analyze_source`); rayon preserves input order.
+    let identities: Vec<_> = sources
+        .iter()
+        .map(|(path, _, _)| {
+            if path == Path::new("<stdin>") {
+                path.clone()
+            } else {
+                lint_path_identity(path)
+            }
+        })
+        .collect();
+    let display_paths: HashMap<_, _> = identities
+        .iter()
+        .cloned()
+        .zip(sources.iter().map(|(path, _, _)| path.clone()))
+        .collect();
     let analyses: Vec<FileAnalysis> = sources
         .par_iter()
-        .map(|(path, content, kind)| analyze_source(path, content, *kind, declared))
+        .zip(&identities)
+        .map(|((_, content, kind), path)| analyze_source(path, content, *kind, declared))
         .collect();
 
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut analyzed: Vec<(PathBuf, GreenNode, SemanticModel)> = Vec::new();
     let mut facts: Vec<FileFacts> = Vec::new();
     let mut label_inputs = Vec::new();
+    let mut root_markers = Vec::new();
     let mut range_facts = Vec::new();
     let mut cite_facts: Vec<CiteFileFacts> = Vec::new();
     let mut option_facts: Vec<PackageOptionFacts> = Vec::new();
@@ -954,6 +1019,7 @@ fn collect_project_diagnostics_with_bibliographies(
                     model,
                     facts: f,
                     label_input,
+                    root_marker,
                     range_facts: ranges,
                     cite_fact,
                     option_facts: o,
@@ -961,6 +1027,7 @@ fn collect_project_diagnostics_with_bibliographies(
                 diagnostics.extend(d);
                 facts.push(f);
                 label_inputs.push(label_input);
+                root_markers.push(root_marker);
                 range_facts.push(ranges);
                 cite_facts.push(cite_fact);
                 option_facts.extend(o);
@@ -984,13 +1051,22 @@ fn collect_project_diagnostics_with_bibliographies(
     // Phase 2 — cross-file resolution: a serial barrier (needs the whole analyzed
     // set) over the collected facts. Pure graph work, no re-parsing.
     let graph = IncludeGraph::build(&facts, None);
-    let resolved = ResolvedLabels::build_with_range_facts(&label_inputs, &graph, &range_facts);
-    let resolved_citations = ResolvedCitations::build_with_aliases(
-        &cite_facts,
+    let scopes = DocumentScopes::build(
         &graph,
-        &bib_keys,
-        &supplemental.aliases,
+        label_inputs
+            .iter()
+            .zip(root_markers)
+            .map(|((path, _, _, _), root)| (path.as_path(), root)),
     );
+    let mut resolved = ResolvedLabels::build_with_range_facts_in_scopes(
+        &label_inputs,
+        &graph,
+        &range_facts,
+        scopes.clone(),
+    );
+    let resolved_citations =
+        ResolvedCitations::build_in_scopes(&cite_facts, &bib_keys, &supplemental.aliases, scopes);
+    resolved.display_paths = display_paths;
     let resolved_packages = ResolvedPackageOptions::build(option_facts);
 
     // Phase 3 — lint every analyzed file in parallel, sharing the resolution by
@@ -1013,6 +1089,22 @@ fn collect_project_diagnostics_with_bibliographies(
     for result in lint_results {
         diagnostics.extend(result);
     }
+    let restore_path = |path: &mut PathBuf| {
+        if let Some(display) = resolved.display_paths.get(path) {
+            path.clone_from(display);
+        }
+    };
+    for diagnostic in &mut diagnostics {
+        restore_path(&mut diagnostic.path);
+        for related in &mut diagnostic.related {
+            restore_path(&mut related.path);
+        }
+        if let Some(fix) = &mut diagnostic.fix {
+            for path in fix.edits.iter_mut().filter_map(|edit| edit.path.as_mut()) {
+                restore_path(path);
+            }
+        }
+    }
     diagnostics
 }
 
@@ -1030,7 +1122,7 @@ fn apply_fixes_to_paths(
     rules: &RuleSelection,
     declared: &ResolvedDeclarations,
 ) -> Option<ExitCode> {
-    let files = match collect_lint_files(paths, exclude) {
+    let files = match collect_unique_lint_files(paths, exclude) {
         Ok(files) => files,
         Err(err) => {
             report_discovery_error(&err);

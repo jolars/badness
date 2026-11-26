@@ -834,3 +834,313 @@ fn expl3_braced_n_argument_is_opt_in_and_suppressible() {
     assert!(suppressed.status.success());
     assert_eq!(suppressed.stdout, b"[]\n");
 }
+
+#[test]
+fn lint_uses_separate_scopes_for_documents_with_shared_inputs() {
+    let dir = repo_dir();
+    for (file, source) in [
+        (
+            "a.tex",
+            "\\documentclass{article}\n\\input{shared}\n\\begin{document}\n\\label{a}\\ref{b}\\ref{common}\n\\end{document}\n",
+        ),
+        (
+            "b.tex",
+            "\\documentclass{article}\n\\input{shared}\n\\begin{document}\n\\label{b}\\ref{a}\\ref{common}\n\\end{document}\n",
+        ),
+        ("shared.tex", "\\input{nested}\n"),
+        ("nested.tex", "\\label{common}\n"),
+    ] {
+        std::fs::write(dir.path().join(file), source).unwrap();
+    }
+    for paths in [
+        vec!["."],
+        vec![dir.path().to_str().unwrap()],
+        vec!["a.tex", "./b.tex", "shared.tex", "./nested.tex"],
+    ] {
+        let mut args = vec!["--no-config", "--output=json"];
+        args.extend(paths);
+        let output = lint(dir.path(), &args, None);
+        assert_eq!(output.status.code(), Some(1));
+        let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(findings.len(), 4, "{findings:?}");
+        for (file, missing) in [("a.tex", "b"), ("b.tex", "a")] {
+            assert!(findings.iter().any(|finding| {
+                finding["path"].as_str().unwrap().ends_with(file)
+                    && finding["rule"] == "undefined-ref"
+                    && finding["message"]
+                        .as_str()
+                        .unwrap()
+                        .ends_with(&format!("\x60{missing}\x60"))
+            }));
+            assert!(findings.iter().any(|finding| {
+                finding["path"].as_str().unwrap().ends_with(file)
+                    && finding["rule"] == "unreferenced-label"
+            }));
+        }
+    }
+
+    std::fs::write(dir.path().join("b.tex"),
+        "\\documentclass{article}\n\\input{shared}\n\\input{missing.tikz}\n\\begin{document}\n\\label{b}\\ref{a}\n\\end{document}\n",
+    ).unwrap();
+    let output = lint(dir.path(), &["--no-config", "--output=json", "."], None);
+    let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    assert!(
+        findings
+            .iter()
+            .all(|finding| Path::new(finding["path"].as_str().unwrap()) == Path::new("./a.tex"))
+    );
+}
+
+#[test]
+fn lint_fix_deduplicates_relative_and_absolute_inputs() {
+    let dir = repo_dir();
+    let root = dir.path().join("a.tex");
+    std::fs::write(
+        &root,
+        "\\documentclass{article}\n\\input{shared}\n\\ref{missing}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("shared.tex"), FIXABLE).unwrap();
+    let output = lint(
+        dir.path(),
+        &[
+            "--no-config",
+            "--fix",
+            "--output=json",
+            ".",
+            root.to_str().unwrap(),
+            "shared.tex",
+        ],
+        None,
+    );
+    let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0]["rule"], "undefined-ref");
+    assert!(
+        std::fs::read_to_string(dir.path().join("shared.tex"))
+            .unwrap()
+            .contains("\\dots")
+    );
+}
+
+#[test]
+fn lint_shared_fragments_require_all_documents_to_agree() {
+    let dir = repo_dir();
+    for (file, source) in [
+        (
+            "a.tex",
+            "\\documentclass{article}\n\\input{shared}\n\\label{a}\\ref{a}\\ref{used}\n\\bibliography{local}\n\\cite{sibling}\n",
+        ),
+        (
+            "b.tex",
+            "\\documentclass{article}\n\\input{shared}\n\\bibliography{sibling}\\nocite{*}\n",
+        ),
+        (
+            "shared.tex",
+            "\\ref{a}\\ref{never}\\label{used}\\label{unused}\\cite{missing}\n",
+        ),
+        (
+            "local.bib",
+            "@book{local, title={Local}, author={Jane Smith}, year={2025}}\n",
+        ),
+        (
+            "sibling.bib",
+            "@book{sibling, title={Sibling}, author={Jane Smith}, year={2025}}\n",
+        ),
+    ] {
+        std::fs::write(dir.path().join(file), source).unwrap();
+    }
+    let output = lint(dir.path(), &["--no-config", "--output=json", "."], None);
+    let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let actual: Vec<_> = findings
+        .iter()
+        .map(|finding| {
+            (
+                Path::new(finding["path"].as_str().unwrap()),
+                finding["rule"].as_str().unwrap(),
+                finding["message"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (
+                Path::new("./a.tex"),
+                "undefined-citation",
+                "citation of undefined key \x60sibling\x60"
+            ),
+            (
+                Path::new("./shared.tex"),
+                "undefined-ref",
+                "reference to undefined label \x60never\x60"
+            ),
+            (
+                Path::new("./shared.tex"),
+                "unreferenced-label",
+                "label \x60unused\x60 is never referenced"
+            ),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lint_keeps_distinct_inputs_through_symlinked_parents() {
+    let dir = repo_dir();
+    let other = tempfile::tempdir().unwrap();
+    std::fs::create_dir(other.path().join("child")).unwrap();
+    std::os::unix::fs::symlink(other.path().join("child"), dir.path().join("link")).unwrap();
+    std::fs::write(dir.path().join("a.tex"), CLEAN).unwrap();
+    std::fs::write(
+        other.path().join("a.tex"),
+        "\\documentclass{article}\n\\input{part}\n\\ref{missing}\n",
+    )
+    .unwrap();
+    std::fs::write(other.path().join("part.tex"), CLEAN).unwrap();
+    let output = lint(
+        dir.path(),
+        &[
+            "--no-config",
+            "--output=json",
+            "a.tex",
+            "link/../a.tex",
+            other.path().join("part.tex").to_str().unwrap(),
+        ],
+        None,
+    );
+    let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0]["path"], "link/../a.tex");
+    assert_eq!(findings[0]["rule"], "undefined-ref");
+}
+
+#[test]
+fn lint_keeps_absence_diagnostics_when_a_wrapper_loads_a_complete_document() {
+    let dir = repo_dir();
+    std::fs::write(
+        dir.path().join("main.tex"),
+        "\\documentclass{article}\n\\begin{document}\n\\label{unused}\\ref{missing}\\cite{missing}\n\\end{document}\n",
+    ).unwrap();
+    std::fs::write(
+        dir.path().join("draft.tex"),
+        "\\PassOptionsToClass{twocolumn}{article}\n\\input{main}\n",
+    )
+    .unwrap();
+    let output = lint(dir.path(), &["--no-config", "--output=json", "."], None);
+    let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        findings
+            .iter()
+            .map(|finding| finding["rule"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["unreferenced-label", "undefined-ref", "undefined-citation"],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lint_resolves_literal_includes_through_symlinked_parents() {
+    let dir = repo_dir();
+    let other = tempfile::tempdir().unwrap();
+    std::fs::create_dir(other.path().join("child")).unwrap();
+    std::os::unix::fs::symlink(other.path().join("child"), dir.path().join("link")).unwrap();
+    std::fs::write(
+        dir.path().join("main.tex"),
+        "\\documentclass{article}\n\\input{link/../part}\n\\ref{actual}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("part.tex"), "\\label{local}\n").unwrap();
+    std::fs::write(other.path().join("part.tex"), "\\label{actual}\n").unwrap();
+
+    let output = lint(
+        dir.path(),
+        &[
+            "--no-config",
+            "--output=json",
+            "main.tex",
+            "part.tex",
+            other.path().join("part.tex").to_str().unwrap(),
+        ],
+        None,
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn lint_duplicate_from_rootless_wrapper_has_no_empty_scope_suffix() {
+    let dir = repo_dir();
+    for (name, source) in [
+        ("main.tex", "\\documentclass{article}\n\\input{shared}\n"),
+        ("shared.tex", "\\label{key}\n"),
+        ("wrapper.tex", "\\input{shared}\n\\label{key}\n"),
+    ] {
+        std::fs::write(dir.path().join(name), source).unwrap();
+    }
+    let output = lint(
+        dir.path(),
+        &[
+            "--no-config",
+            "--output=json",
+            "--select",
+            "duplicate-label",
+            "main.tex",
+            "shared.tex",
+            "wrapper.tex",
+        ],
+        None,
+    );
+    let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let shared = findings
+        .iter()
+        .find(|finding| finding["path"] == "shared.tex")
+        .unwrap();
+    assert_eq!(
+        shared["message"],
+        "label \x60key\x60 is also defined in \x60wrapper.tex\x60"
+    );
+}
+
+#[test]
+fn lint_duplicate_scope_suffix_requires_all_listed_definitions_in_the_scope() {
+    let dir = repo_dir();
+    for (name, source) in [
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\input{shared}\n\\label{key}\n",
+        ),
+        ("shared.tex", "\\label{key}\n"),
+        ("wrapper.tex", "\\input{shared}\n\\label{key}\n"),
+    ] {
+        std::fs::write(dir.path().join(name), source).unwrap();
+    }
+    let output = lint(
+        dir.path(),
+        &[
+            "--no-config",
+            "--output=json",
+            "--select",
+            "duplicate-label",
+            "main.tex",
+            "shared.tex",
+            "wrapper.tex",
+        ],
+        None,
+    );
+    let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let shared = findings
+        .iter()
+        .find(|finding| finding["path"] == "shared.tex")
+        .unwrap();
+    assert_eq!(
+        shared["message"],
+        "label \x60key\x60 is also defined in \x60main.tex\x60, \x60wrapper.tex\x60"
+    );
+}

@@ -21,6 +21,7 @@ pub mod include;
 pub mod labels;
 pub mod options;
 pub mod package;
+pub mod scopes;
 pub mod texmf;
 
 pub use citations::{CiteFileFacts, ResolvedCitations, document_cite_names, resolved_citations};

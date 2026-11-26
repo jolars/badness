@@ -114,11 +114,11 @@ the formatter preserves the entire block.
 
 ## Inputs and configuration
 
-The CLI discovers `.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, `.tikz`, `.pgf`, and `.bib` files
-through [`ignore`](https://docs.rs/ignore), respecting `.gitignore` and project
-excludes. It finds `badness.toml` by walking each input's ancestors. Filesystem
-discovery and configuration resolution stay in the root crate; the libraries
-receive values such as `FormatStyle` and resolved declarations.
+The CLI discovers `.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, `.tikz`, `.pgf`, and
+`.bib` files through [`ignore`](https://docs.rs/ignore), respecting `.gitignore`
+and project excludes. It finds `badness.toml` by walking each input's ancestors.
+Filesystem discovery and configuration resolution stay in the root crate; the
+libraries receive values such as `FormatStyle` and resolved declarations.
 
 The file kind determines the lexer's starting mode. Package sources (`.sty`,
 `.cls`, and `.dtx`) begin with `@` treated as a letter, as though

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.13.1](https://github.com/jolars/badness/compare/badness-formatter-v0.13.0...badness-formatter-v0.13.1) (2026-11-26)
+
+### Bug Fixes
+
+- **formatter:** keep glued delimiters on block prose arguments (#242) ([`e41eb91`](https://github.com/jolars/badness/commit/e41eb910965bcdd184c657b051b98e361058efd7)), refs [#242](https://github.com/jolars/badness/issues/242)
+- **formatter:** preserve ambiguous dollar math ([`e8afbdf`](https://github.com/jolars/badness/commit/e8afbdf1ae74b211b535faf2a75a98333edda148)), fixes [#234](https://github.com/jolars/badness/issues/234)
+- **formatter:** preserve TikZ calc coordinates ([`d3d8e63`](https://github.com/jolars/badness/commit/d3d8e638dec3a9bc3549742d312daeb05a83a967)), fixes [#239](https://github.com/jolars/badness/issues/239)
+- **formatter:** honor `math-wrap` in `multlined` ([`c77f7d5`](https://github.com/jolars/badness/commit/c77f7d5e53b15e0e151285e5619dab4f144332e1)), fixes [#235](https://github.com/jolars/badness/issues/235)
+
+### Performance Improvements
+
+- **formatter:** reduce peak memory on large documents ([`7161048`](https://github.com/jolars/badness/commit/716104824bc1081104bae1f6e83200f0cc39c741)), refs [#240](https://github.com/jolars/badness/issues/240)
+- **formatter:** read pending layout commands on demand ([`7a3f616`](https://github.com/jolars/badness/commit/7a3f616cfb5d81fac620e8cf68f40abb178c0c5a)), fixes [#240](https://github.com/jolars/badness/issues/240)
+- **formatter:** reuse environment alignment scans ([`414f3c6`](https://github.com/jolars/badness/commit/414f3c6b0c10a8021db4adbb6b2527ef75215f33)), refs [#240](https://github.com/jolars/badness/issues/240)
+
+### Dependencies
+
+- updated crates/badness-parser to v0.13.1
+
 ## [0.13.0](https://github.com/jolars/badness/compare/badness-formatter-v0.12.1...badness-formatter-v0.13.0) (2026-11-20)
 
 ### Features

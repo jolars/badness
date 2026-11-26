@@ -2768,9 +2768,12 @@ fn reflow_elements_checked(
             {
                 let atoms = inline_token_list_atoms(child, cx)
                     .expect("match guard proved the inline token list");
-                for (index, atom) in atoms.into_iter().enumerate() {
+                for (index, (atom, authored_break)) in atoms.into_iter().enumerate() {
                     if index > 0 {
                         b.flush_atom();
+                        if authored_break {
+                            b.prefer_next_break();
+                        }
                     }
                     b.push_atom_piece(atom, "");
                 }
@@ -8825,6 +8828,7 @@ fn lower_segmented_group(
         mut parts,
         close,
         splits,
+        ..
     } = segments;
     // Keyval processors discard entry padding. Textual optionals must retain it
     // even when there is no comma at which the body can break.
@@ -8900,6 +8904,7 @@ struct GroupSegments {
     parts: Vec<Ir>,
     close: Ir,
     splits: usize,
+    authored_breaks: Vec<usize>,
 }
 
 /// Segment an `OPTIONAL` or `GROUP` body at its top-level commas, or `None` when the
@@ -8925,6 +8930,7 @@ fn segment_delimited_body(
     let mut close = Ir::Nil;
     let mut parts: Vec<Ir> = Vec::new();
     let mut splits = 0usize;
+    let mut authored_breaks = Vec::new();
     let mut depth = 0usize;
     // Whether the last content token was a `WORD` ending in `,` at depth 0, so the
     // *next* gap is a break opportunity.
@@ -8951,11 +8957,19 @@ fn segment_delimited_body(
                 parts.push(Ir::verbatim(t.text()));
             }
             SyntaxElement::Token(t) if is_collapsible_trivia(t.kind()) => {
-                let gap = consume_gap(&t, &mut iter);
+                let wide_gap = consume_gap_widened(&t, &mut iter);
+                let has_newline = wide_gap.newlines != 0;
+                let gap = wide_gap.narrow();
                 if gap == Gap::Blank {
                     return None; // a blank-line `\par`: keep the block form
                 }
                 if open_entry && depth == 0 {
+                    // Stable fill feeds each emitted comma break back into the
+                    // same preference model as the surrounding prose breaks.
+                    // Other layouts still use only the normalized gap.
+                    if normalize_commas && cx.wrap == WrapMode::Stable && has_newline {
+                        authored_breaks.push(splits);
+                    }
                     parts.push(if normalize_commas {
                         tight_line()
                     } else {
@@ -9016,6 +9030,7 @@ fn segment_delimited_body(
         parts,
         close,
         splits,
+        authored_breaks,
     })
 }
 
@@ -9552,11 +9567,13 @@ fn is_collapsible_trivia_element(element: &SyntaxElement) -> bool {
 /// any attached suffix) stays on the last. Returns `None` when there is no useful
 /// top-level comma split or the body carries a preserved predicate that forbids
 /// segmentation.
-fn inline_token_list_atoms(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<Ir>> {
+fn inline_token_list_atoms(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<(Ir, bool)>> {
     let sig = cx.signatures.command_at(node)?;
     let mut slot = 0usize;
     let mut found = false;
-    let mut atoms: Vec<Vec<Ir>> = vec![Vec::new()];
+    let mut atoms = Vec::new();
+    let mut atom = Vec::new();
+    let mut authored_break = false;
 
     for element in alignment_cell_elements(node.children_with_tokens(), cx) {
         match element {
@@ -9580,46 +9597,48 @@ fn inline_token_list_atoms(node: &SyntaxNode, cx: LowerCtx<'_>) -> Option<Vec<Ir
                         mut parts,
                         close,
                         splits,
+                        authored_breaks,
                     } = segment_delimited_body(&group, open_kind, close_kind, cx, true)?;
                     if splits == 0 {
                         return None;
                     }
                     let _ = peel_padding(&mut parts, Edge::Leading);
                     let _ = peel_padding(&mut parts, Edge::Trailing);
-                    atoms.last_mut().unwrap().push(open);
+                    atom.push(open);
+                    let mut split = 0;
+                    let mut authored_breaks = authored_breaks.into_iter().peekable();
                     for part in parts {
                         if is_segment_separator(&part) {
-                            atoms.push(Vec::new());
+                            atoms.push((Ir::concat(std::mem::take(&mut atom)), authored_break));
+                            authored_break = authored_breaks.next_if_eq(&split).is_some();
+                            split += 1;
                         } else {
-                            atoms.last_mut().unwrap().push(part);
+                            atom.push(part);
                         }
                     }
-                    atoms.last_mut().unwrap().push(close);
+                    atom.push(close);
                     found = true;
                 } else {
-                    atoms.last_mut().unwrap().push(lower_node(&group, cx));
+                    atom.push(lower_node(&group, cx));
                 }
             }
             SyntaxElement::Token(token) if token.kind() == SyntaxKind::VERB => {
                 if token.text().starts_with('{') {
                     match_verbatim_arg_slot(&sig.args, &mut slot);
                 }
-                atoms
-                    .last_mut()
-                    .unwrap()
-                    .push(lower_loose_token(&token, cx));
+                atom.push(lower_loose_token(&token, cx));
             }
-            SyntaxElement::Node(child) => atoms.last_mut().unwrap().push(lower_node(&child, cx)),
+            SyntaxElement::Node(child) => atom.push(lower_node(&child, cx)),
             SyntaxElement::Token(token) => {
-                atoms
-                    .last_mut()
-                    .unwrap()
-                    .push(lower_loose_token(&token, cx));
+                atom.push(lower_loose_token(&token, cx));
             }
         }
     }
 
-    found.then(|| atoms.into_iter().map(Ir::concat).collect())
+    found.then(|| {
+        atoms.push((Ir::concat(atom), authored_break));
+        atoms
+    })
 }
 
 /// Lower a `COMMAND` whose signature marks an argument's content kind (see
@@ -9763,8 +9782,10 @@ fn lower_inline_prose_group(
 /// Lower a block-level prose argument: like [`lower_bracketed`], but the body is reflowed
 /// to the line width ([`reflow_elements`]) and the whole thing is wrapped in a soft
 /// [`Ir::group`] so it stays on one line when it fits (`\caption{short}`) and
-/// breaks the delimiters onto their own lines, indenting and word-wrapping the body,
-/// when it does not. Empty bodies collapse to the bare delimiters.
+/// indents and word-wraps the body when it does not. A delimiter glued to the body
+/// stays glued, since a break there would add a space token to the argument; one
+/// separated from it by whitespace takes its own line. Empty bodies collapse to the
+/// bare delimiters.
 ///
 /// A `%` comment at either edge of the body takes [`lower_bracketed`]'s two
 /// guards, for the same reasons — the soft group is the only thing that makes
@@ -9812,6 +9833,14 @@ fn lower_prose_group_kind(
         }
     }
 
+    let edge_is_gap = |element: Option<&SyntaxElement>| {
+        element
+            .and_then(SyntaxElement::as_token)
+            .is_some_and(|t| is_collapsible_trivia(t.kind()))
+    };
+    let leading_gap = edge_is_gap(body_elements.first());
+    let trailing_gap = edge_is_gap(body_elements.last());
+
     // The parser emits leading whitespace/newlines as their own trivia tokens, so
     // the first body element is a `COMMENT` iff it was glued to the opener.
     let has_leading_comment = body_elements
@@ -9826,7 +9855,9 @@ fn lower_prose_group_kind(
     };
     let has_trailing_comment = body_ends_with_comment(node, close);
 
-    let body = reflow_elements(body_elements.into_iter(), cx, kind);
+    let body_cx = cx.absorbing_trailing_control_newline(&body_elements);
+    let control_newline = body_cx.absorbed_control_newline != cx.absorbed_control_newline;
+    let body = reflow_elements(body_elements.into_iter(), body_cx, kind);
     if matches!(body, Ir::Nil) {
         if has_leading_comment {
             // `\caption{%\n}`: the comment already rode the open delimiter, so
@@ -9842,10 +9873,17 @@ fn lower_prose_group_kind(
             } else {
                 Ir::soft_line
             };
+        // A glued edge holds no space token; breaking there would add one.
+        let hug = kind != ReflowKind::Algorithm2e;
+        let edge = |guarded: bool| if hug && !guarded { Ir::Nil } else { brk() };
         Ir::group(Ir::concat([
             open_ir,
-            Ir::indent(Ir::concat([brk(), body])),
-            brk(),
+            Ir::indent(Ir::concat([edge(has_leading_comment || leading_gap), body])),
+            if control_newline {
+                Ir::hard_line()
+            } else {
+                edge(has_trailing_comment || trailing_gap)
+            },
             close_ir,
         ]))
     }

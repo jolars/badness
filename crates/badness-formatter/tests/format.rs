@@ -3612,7 +3612,7 @@ fn unlimited_line_width_keeps_stable_authored_breaks() {
     let caption = "\\caption{Alpha beta\ngamma delta epsilon zeta eta theta.}\n";
     assert_eq!(
         format_with_style(caption, style).unwrap(),
-        "\\caption{\n  Alpha beta\n  gamma delta epsilon zeta eta theta.\n}\n",
+        "\\caption{Alpha beta\n  gamma delta epsilon zeta eta theta.}\n",
     );
     check_format_invariants(caption, style, LexConfig::default()).unwrap();
 }
@@ -3844,6 +3844,59 @@ fn stable_preserves_an_equilibrium_break_that_reflow_removes() {
         input,
         "canonical reflow should not prefer the authored boundary"
     );
+}
+
+#[test]
+fn wrapped_prose_argument_preserves_trailing_control_newline() {
+    let style = FormatStyle {
+        line_width: 30,
+        ..FormatStyle::default()
+    };
+    for input in [
+        "\\caption{Alpha beta gamma delta epsilon\\\n}\n",
+        "\\caption{Alpha beta gamma delta epsilon\\\n }\n",
+    ] {
+        check_format_invariants(input, style, LexConfig::default()).expect("format invariants");
+        let formatted = format_with_style(input, style).expect("format caption");
+        assert!(formatted.ends_with("\\\n}\n"), "{formatted:?}");
+    }
+}
+
+#[test]
+fn stable_prose_argument_keeps_citation_breaks_on_reformat() {
+    let style = FormatStyle {
+        line_width: 20,
+        wrap: WrapMode::Stable,
+        ..FormatStyle::default()
+    };
+    let input = "\\title{\\cite{a,b} test tests testing here}\n";
+    check_format_invariants(input, style, LexConfig::default()).expect("format invariants");
+    let formatted = format_with_style(input, style).expect("format title");
+    assert!(formatted.contains("a,\n"), "{formatted:?}");
+}
+
+#[test]
+fn stable_prose_argument_counts_the_glued_suffix() {
+    let style = FormatStyle {
+        wrap: WrapMode::Stable,
+        ..FormatStyle::default()
+    };
+    let input = concat!(
+        "\\begin{figure}\n",
+        "\\caption{A caption for the second figure on page two}\\label{fig:second_figure_on_page_two}\n",
+        "\\end{figure}\n",
+    );
+    check_format_invariants(input, style, LexConfig::default()).expect("format invariants");
+    let formatted = format_with_style(input, style).expect("format figure");
+    assert!(
+        formatted
+            .lines()
+            .all(|line| line.chars().count() <= style.line_width),
+        "{formatted:?}"
+    );
+    assert!(formatted.contains(
+        "\\caption{A caption for the second figure on page\n    two}\\label{fig:second_figure_on_page_two}"
+    ));
 }
 
 #[test]

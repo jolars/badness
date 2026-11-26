@@ -8,7 +8,7 @@
 // `print_at` is part of the engine but is not used by every lowering.
 #![allow(dead_code)]
 
-use super::ir::Ir;
+use super::ir::{Ir, PreferredFill};
 use super::style::{FormatStyle, UNLIMITED_LINE_WIDTH};
 use std::rc::Rc;
 
@@ -457,14 +457,7 @@ impl Printer {
                     let breaks = if mode != Mode::Break {
                         vec![false; atoms.len().saturating_sub(1)].into()
                     } else {
-                        self.stable_breaks(
-                            w.current_col(),
-                            indent,
-                            prefix,
-                            atoms,
-                            &fill.preferred,
-                            fill.target,
-                        )
+                        self.stable_breaks(w.current_col(), indent, prefix, fill, &stack)
                     };
                     stack.push(Cmd::PreferredFill {
                         indent,
@@ -658,10 +651,12 @@ impl Printer {
         first_col: usize,
         indent: usize,
         prefix: Option<ActivePrefix<'_>>,
-        atoms: &[Ir],
-        preferred: &[bool],
-        target: usize,
+        fill: &PreferredFill,
+        rest: &[Cmd],
     ) -> Rc<[bool]> {
+        let atoms = &fill.atoms;
+        let preferred = &fill.preferred;
+        let target = fill.target;
         let n = atoms.len();
         if n < 2 {
             return Vec::new().into();
@@ -748,6 +743,10 @@ impl Printer {
                 } else {
                     target - length
                 };
+                // The closing delimiter and any glued suffix share the final
+                // line. Measure them with the same stack rules as ordinary fill.
+                let overflow = overflow
+                    + usize::from(final_line && overflow == 0 && !self.rest_fits(length, rest));
                 let segment = LayoutCost {
                     overflow,
                     underflow,

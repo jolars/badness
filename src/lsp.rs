@@ -799,6 +799,17 @@ impl GlobalState {
                     if let Some(build_root) =
                         resolved.build.root.as_ref().filter(|p| p.is_relative())
                     {
+                        // Config discovery resolves directory aliases. Keep the
+                        // editor's spelling when that directory is an ancestor
+                        // of the open file, as used by the include graph.
+                        let root = if anchor.starts_with(root) {
+                            root
+                        } else {
+                            anchor
+                                .ancestors()
+                                .find(|ancestor| canonical_anchor_is_current(ancestor, root))
+                                .unwrap_or(root)
+                        };
                         resolved.build.root = Some(root.join(build_root));
                     }
                 }

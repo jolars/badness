@@ -8266,30 +8266,45 @@ fn lsp_rename_reaches_a_subfile_whose_parent_delegates_its_body() {
 
 #[test]
 fn lsp_hover_reads_aux_from_a_wrapper() {
-    for configured in [false, true] {
+    for (configured, aliased) in [
+        (false, false),
+        (true, false),
+        #[cfg(unix)]
+        (true, true),
+    ] {
         let dir = tempfile::tempdir().unwrap();
-        let main = dir.path().join("main.tex");
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let main = project.join("main.tex");
         let source = "\\documentclass{article}\n\\begin{document}\n\\section{Intro}\\label{key}\n\\include{chapter}\n\\ref{key}\\ref{chapter}\n\\end{document}\n";
         std::fs::write(&main, source).unwrap();
-        std::fs::write(dir.path().join("draft.tex"), "\\input{main}\n").unwrap();
-        std::fs::write(dir.path().join("draft.aux"), "\\newlabel{key}{{7}{1}}\n").unwrap();
+        std::fs::write(project.join("draft.tex"), "\\input{main}\n").unwrap();
+        std::fs::write(project.join("draft.aux"), "\\newlabel{key}{{7}{1}}\n").unwrap();
         std::fs::write(
-            dir.path().join("chapter.tex"),
+            project.join("chapter.tex"),
             "\\section{Chapter}\\label{chapter}\n",
         )
         .unwrap();
-        std::fs::write(
-            dir.path().join("chapter.aux"),
-            "\\newlabel{chapter}{{8}{2}}\n",
-        )
-        .unwrap();
+        std::fs::write(project.join("chapter.aux"), "\\newlabel{chapter}{{8}{2}}\n").unwrap();
         if configured {
             std::fs::write(
-                dir.path().join("badness.toml"),
+                project.join("badness.toml"),
                 "[build]\nroot = \"draft.tex\"\n",
             )
             .unwrap();
         }
+        let main = if aliased {
+            #[cfg(unix)]
+            {
+                let alias = dir.path().join("alias");
+                std::os::unix::fs::symlink(&project, &alias).unwrap();
+                alias.join("main.tex")
+            }
+            #[cfg(not(unix))]
+            unreachable!()
+        } else {
+            main
+        };
         let (client, thread) = start_server(None);
         let uri = path_to_file_uri(&main);
         did_open(&client, &uri, 1, source);

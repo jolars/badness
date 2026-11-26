@@ -621,10 +621,8 @@ struct TexAnalysis {
     option_facts: Option<PackageOptionFacts>,
 }
 
-/// Parse and analyze one source. Pure and thread-safe (no shared mutable state,
-/// no environment access), so [`run_lint`] maps it over all files with rayon. The
-/// resolver-feeding facts use the same pure helpers the salsa queries do, so CLI
-/// and LSP agree.
+/// Parse and analyze one source. Include targets use the same disk path identity
+/// as the lint inputs. The analyses run independently across files with rayon.
 fn analyze_source(
     path: &Path,
     content: &str,
@@ -764,26 +762,24 @@ fn supplemental_bibliographies(
 }
 
 fn lint_path_identity(path: &Path) -> PathBuf {
-    let normalized = normalize_path(path);
-    // On Unix, the filesystem follows a symlink before consuming a following
-    // "..". Keep the input's actual parent when the lexical path lands elsewhere.
+    // Resolve directory aliases consistently for inputs and include targets.
+    // On Unix, a symlink also determines which directory a following ".."
+    // traverses. Keep the final filename so file symlinks retain their own name.
     #[cfg(unix)]
-    if path
-        .components()
-        .any(|part| part == std::path::Component::ParentDir)
-        && let (Some(parent), Some(name)) = (path.parent(), path.file_name())
+    if let Ok(absolute) = std::path::absolute(path)
+        && let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name())
     {
-        let Ok(actual_parent) = parent.canonicalize() else {
-            return std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        };
-        let lexical_parent = normalized
-            .parent()
-            .and_then(|parent| parent.canonicalize().ok());
-        if lexical_parent.as_ref() != Some(&actual_parent) {
+        if let Ok(actual_parent) = parent.canonicalize() {
             return actual_parent.join(name);
         }
+        if path
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+        {
+            return absolute;
+        }
     }
-    normalized
+    normalize_path(path)
 }
 
 fn collect_unique_lint_files(
@@ -968,8 +964,7 @@ fn collect_project_diagnostics_with_bibliographies(
     declared: &ResolvedDeclarations,
     supplemental: &SupplementalBibliographies,
 ) -> Vec<Diagnostic> {
-    // Phase 1 — parse + analyze every source in parallel. Each task is pure and
-    // returns only `Send` data (`analyze_source`); rayon preserves input order.
+    // Phase 1 — parse + analyze every source in parallel. Rayon preserves input order.
     let identities: Vec<_> = sources
         .iter()
         .map(|(path, _, _)| {

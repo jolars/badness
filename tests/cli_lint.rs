@@ -992,6 +992,8 @@ fn lint_keeps_distinct_inputs_through_symlinked_parents() {
     let other = tempfile::tempdir().unwrap();
     std::fs::create_dir(other.path().join("child")).unwrap();
     std::os::unix::fs::symlink(other.path().join("child"), dir.path().join("link")).unwrap();
+    let alias = dir.path().join("alias");
+    std::os::unix::fs::symlink(other.path(), &alias).unwrap();
     std::fs::write(dir.path().join("a.tex"), CLEAN).unwrap();
     std::fs::write(
         other.path().join("a.tex"),
@@ -1006,7 +1008,7 @@ fn lint_keeps_distinct_inputs_through_symlinked_parents() {
             "--output=json",
             "a.tex",
             "link/../a.tex",
-            other.path().join("part.tex").to_str().unwrap(),
+            alias.join("part.tex").to_str().unwrap(),
         ],
         None,
     );

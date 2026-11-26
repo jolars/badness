@@ -49,10 +49,8 @@ const DEFAULT_LINE_WIDTH: u32 = 80;
 const DEFAULT_INDENT_WIDTH: u32 = 2;
 
 /// Built-in exclude patterns applied when `exclude` is unset (a present `exclude`
-/// replaces them). Kept deliberately small: badness only ever processes
-/// `.tex`/`.sty`/`.cls`/`.dtx`/`.ins`/`.bib`, so most generated-file noise never
-/// reaches discovery anyway. Tune as real-world LaTeX trees demand. `extend-exclude`
-/// is always layered on top of whichever base is in effect.
+/// replaces them). Discovery already skips unsupported file kinds.
+/// `extend-exclude` is always layered on top of whichever base is in effect.
 pub const DEFAULT_EXCLUDE: &[&str] = &[".git/"];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]

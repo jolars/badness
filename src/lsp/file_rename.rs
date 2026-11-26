@@ -12,7 +12,7 @@ use lsp_types::{
 
 use super::file_reference::{FileReference, SourceLoad, file_references};
 use super::*;
-use crate::file_discovery::FileDiscoveryError;
+use crate::file_discovery::{FileDiscoveryError, disk_file_kind, is_pgf_image};
 use crate::incremental::normalize_path;
 
 #[derive(Clone, Copy, Default)]
@@ -42,7 +42,7 @@ impl Capabilities {
                 FileOperationFilter {
                     scheme: Some("file".into()),
                     pattern: FileOperationPattern {
-                        glob: "**/*.{tex,sty,cls,dtx,ins}".into(),
+                        glob: "**/*.{tex,sty,cls,dtx,ins,tikz,pgf}".into(),
                         matches: Some(FileOperationPatternKind::File),
                         options: Some(lsp_types::FileOperationPatternOptions {
                             ignore_case: Some(true),
@@ -424,7 +424,7 @@ fn tree(
 }
 
 fn source_file(path: &Path) -> bool {
-    crate::file_discovery::lint_file_kind(path).is_some_and(FileKind::is_latex)
+    disk_file_kind(path).is_some_and(FileKind::is_latex)
 }
 
 fn cursor_reference(
@@ -695,7 +695,12 @@ fn compute(
                 true,
             )
         }
-        Operation::WillRename(params) => (parse_moves(params)?, false),
+        Operation::WillRename(params) => {
+            let mut moves = parse_moves(params)?;
+            // The client filters by suffix and can also send PGF image moves.
+            moves.retain(|movement| !is_pgf_image(&movement.old));
+            (moves, false)
+        }
     };
     normalize_moves(context, &mut moves)?;
     // A returned proposal can be canceled. Plan each request against the current
@@ -1208,13 +1213,15 @@ pub(super) fn did_rename(
     jobs: &Sender<WorkerJob>,
     params: RenameFilesParams,
 ) {
-    if let Ok(mut moves) = parse_moves(params)
-        && let Some(first) = moves.first()
-    {
-        let context = Context::capture(state, &first.new);
-        if normalize_moves(&context, &mut moves).is_err() {
-            return;
-        }
+    let Ok(mut moves) = parse_moves(params) else {
+        return;
+    };
+    moves.retain(|movement| !is_pgf_image(&movement.new));
+    let Some(first) = moves.first() else {
+        return;
+    };
+    let context = Context::capture(state, &first.new);
+    if normalize_moves(&context, &mut moves).is_ok() {
         completed_moves(connection, state, jobs, moves);
     }
 }

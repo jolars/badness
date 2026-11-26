@@ -90,21 +90,21 @@ impl IncludeGraph {
         for file in files {
             let mut outgoing = Vec::new();
             for edge in &file.include_edges {
-                match &edge.target {
-                    IncludeTarget::Path(to) if members.contains(to.as_path()) => {
+                match edge.target.candidates().find(|path| members.contains(path)) {
+                    Some(to) => {
                         outgoing.push(ResolvedInclude {
                             from: file.path.clone(),
-                            to: to.clone(),
+                            to: to.to_path_buf(),
                             kind: edge.kind,
                         });
                         included_by
-                            .entry(to.clone())
+                            .entry(to.to_path_buf())
                             .or_default()
                             .push(file.path.clone());
                     }
                     // A resolved path to a file we didn't analyze is just as
                     // opaque as a dynamic target.
-                    _ => unresolved.push(UnresolvedInclude {
+                    None => unresolved.push(UnresolvedInclude {
                         from: file.path.clone(),
                         target: edge.target.clone(),
                         kind: edge.kind,

@@ -893,6 +893,61 @@ fn lint_uses_separate_scopes_for_documents_with_shared_inputs() {
 }
 
 #[test]
+fn lint_resolves_labels_in_tikz_and_pgf_inputs() {
+    let dir = repo_dir();
+    std::fs::write(
+        dir.path().join("image.PGF"),
+        b"PGF\x76\x10\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\xff",
+    )
+    .unwrap();
+    for (file, source) in [
+        (
+            "main.tex",
+            "\\documentclass{article}\n\\usepackage{tikz}\n\\begin{document}\n\
+             \\input{figure.tikz}\n\\input{plot.pgf}\n\
+             See~\\ref{fig:figure}, also~\\ref{fig:plot}, and~\\ref{sec:missing}.\n\\end{document}\n",
+        ),
+        ("figure.tikz", "\\label{fig:figure}\n"),
+        ("plot.pgf", "PGF figure.\\label{fig:plot}\n"),
+    ] {
+        std::fs::write(dir.path().join(file), source).unwrap();
+    }
+
+    for paths in [vec!["."], vec!["main.tex", "figure.tikz", "plot.pgf"]] {
+        let mut args = vec!["--no-config", "--output=json"];
+        args.extend(paths);
+        let output = lint(dir.path(), &args, None);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0]["rule"], "undefined-ref");
+        assert_eq!(
+            findings[0]["message"],
+            "reference to undefined label `sec:missing`"
+        );
+    }
+}
+
+#[test]
+fn lint_prefers_tex_suffix_for_dotted_figure_inputs() {
+    let dir = repo_dir();
+    std::fs::write(dir.path().join("figure.tikz"), "Literal.\n").unwrap();
+    std::fs::write(dir.path().join("figure.tikz.tex"), "\\label{fig:tex}\n").unwrap();
+    for command in ["input", "include"] {
+        std::fs::write(
+            dir.path().join("main.tex"),
+            format!(
+                "\\documentclass{{article}}\n\\begin{{document}}\n\\{command}{{figure.tikz}}\nSee~\\ref{{fig:tex}}.\n\\end{{document}}\n"
+            ),
+        )
+        .unwrap();
+        let output = lint(dir.path(), &["--no-config", "--output=json", "."], None);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"[]\n");
+    }
+}
+
+#[test]
 fn lint_fix_deduplicates_relative_and_absolute_inputs() {
     let dir = repo_dir();
     let root = dir.path().join("a.tex");

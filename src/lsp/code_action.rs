@@ -128,7 +128,7 @@ pub(crate) fn inline_input_actions(
     request_range: Range,
     resolve: &dyn Fn(&Path) -> Option<String>,
 ) -> CodeActionResponse {
-    use crate::project::{IncludeKind, IncludeTarget, collect_include_edges};
+    use crate::project::{IncludeKind, collect_include_edges};
 
     let build = || {
         if crate::semantic::scan_definitions(root)
@@ -177,13 +177,11 @@ pub(crate) fn inline_input_actions(
         let edge = collect_include_edges(command.syntax(), path.parent())
             .into_iter()
             .find(|edge| edge.kind == IncludeKind::Input)?;
-        let IncludeTarget::Path(target) = edge.target else {
-            return None;
-        };
-        if target == path {
-            return None;
-        }
-        let mut content = resolve(&target)?;
+        let mut content = edge
+            .target
+            .candidates()
+            .take_while(|target| *target != path)
+            .find_map(resolve)?;
         // EOF separates tokens and ends comments in the original input file.
         if !content.is_empty() && !content.ends_with('\n') {
             content.push('\n');

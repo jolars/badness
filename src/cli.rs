@@ -128,6 +128,9 @@ pub enum Command {
     ///
     /// With paths, formats each file in place. Reads stdin (to stdout) when
     /// given `-`, or when paths are omitted and stdin is not a terminal.
+    ///
+    /// Supported extensions are `.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, `.tikz`,
+    /// `.pgf`, and `.bib`. Binary PGF images are skipped during directory scans.
     Format {
         /// Files or directories to format. Pass `-` for stdin, which is also
         /// read when paths are omitted and stdin is not a terminal.
@@ -176,6 +179,9 @@ pub enum Command {
     /// With paths, lints each file. Reads stdin when given `-`, or when paths
     /// are omitted and stdin is not a terminal. Exits non-zero if any
     /// diagnostics are reported.
+    ///
+    /// Supported extensions are `.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, `.tikz`,
+    /// `.pgf`, and `.bib`. Binary PGF images are skipped during directory scans.
     Lint {
         /// Files or directories to lint. Pass `-` for stdin, which is also
         /// read when paths are omitted and stdin is not a terminal.

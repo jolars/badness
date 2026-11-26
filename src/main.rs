@@ -18,7 +18,8 @@ use std::process::ExitCode;
 use badness::config::{Config, ConfigSource};
 use badness::declarations::ResolvedDeclarations;
 use badness::file_discovery::{
-    ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files, file_kind_or_tex,
+    ExcludeFilter, FileDiscoveryError, FileKind, SUPPORTED_FILE_EXTENSIONS, collect_lint_files,
+    file_kind_or_tex,
 };
 use badness::formatter::perturb::{
     ConvergenceError, DEFAULT_SINGLE_FLIP_SAMPLES, check_trivia_convergence, nontrivia_content,
@@ -847,7 +848,7 @@ fn run_lint(
                 return ExitCode::SUCCESS;
             }
             eprintln!(
-                "badness: no .tex, .sty, .cls, .dtx, .ins, or .bib files found under the provided input paths"
+                "badness: no {SUPPORTED_FILE_EXTENSIONS} files found under the provided input paths"
             );
             return ExitCode::FAILURE;
         }
@@ -1128,7 +1129,9 @@ fn apply_fixes_to_paths(
         if exclude.force() {
             return Some(ExitCode::SUCCESS);
         }
-        eprintln!("badness: no .tex or .bib files found under the provided input paths");
+        eprintln!(
+            "badness: no {SUPPORTED_FILE_EXTENSIONS} files found under the provided input paths"
+        );
         return Some(ExitCode::FAILURE);
     }
 
@@ -1850,7 +1853,7 @@ fn report_discovery_error(err: &FileDiscoveryError) {
     match err {
         FileDiscoveryError::UnsupportedLintFilePath { path } => {
             eprintln!(
-                "badness: input file {} is not a .tex, .sty, .cls, .dtx, .ins, or .bib file",
+                "badness: input file {} is not a {SUPPORTED_FILE_EXTENSIONS} file",
                 path.display()
             );
         }
@@ -1886,7 +1889,7 @@ fn run_format_paths(
             return ExitCode::SUCCESS;
         }
         eprintln!(
-            "badness: no .tex, .sty, .cls, .dtx, .ins, or .bib files found under the provided input paths"
+            "badness: no {SUPPORTED_FILE_EXTENSIONS} files found under the provided input paths"
         );
         return ExitCode::FAILURE;
     }
@@ -2487,7 +2490,7 @@ fn run_debug_format(
             return ExitCode::SUCCESS;
         }
         eprintln!(
-            "badness: no .tex, .sty, .cls, .dtx, .ins, or .bib files found under the provided input paths"
+            "badness: no {SUPPORTED_FILE_EXTENSIONS} files found under the provided input paths"
         );
         return ExitCode::FAILURE;
     }

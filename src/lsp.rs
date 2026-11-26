@@ -131,7 +131,10 @@ use crate::bib::{
 use crate::completion::{CandidateKind, CompletionCandidate, CompletionContext, FileArgKind};
 use crate::config::{BuildConfig, Config, ConfigSource, LintConfig};
 use crate::declarations::ResolvedDeclarations;
-use crate::file_discovery::{ExcludeFilter, FileKind, collect_lint_files, file_kind_or_tex};
+use crate::file_discovery::{
+    ExcludeFilter, FileKind, collect_lint_files, disk_file_kind, file_kind_or_tex,
+    is_discoverable_sibling,
+};
 use crate::formatter::sentence::{SentenceLanguage, resolve_owned};
 use crate::formatter::{
     FormatStyle, SentenceOptions, WrapMode, declared_scope,
@@ -380,7 +383,7 @@ struct GlobalState {
     /// analog of the push path's `RelintAll`).
     supports_diagnostic_refresh: bool,
     /// The client advertised `workspace.didChangeWatchedFiles.dynamicRegistration`, so
-    /// on `initialized` we register watchers for `**/*.{tex,bib}` and TOML files
+    /// on `initialized` we register watchers for project sources and TOML files
     /// and reanalyze on on-disk edits to non-open project files.
     supports_dynamic_watchers: bool,
     supports_completion_label_details: bool,
@@ -990,7 +993,7 @@ enum WorkerJob {
     Close {
         path: PathBuf,
     },
-    /// A `workspace/didChangeWatchedFiles` event for a **non-open** `.tex`/`.bib`
+    /// A `workspace/didChangeWatchedFiles` event for a **non-open**
     /// project file: re-read it from disk (or evict it on delete) and re-lint every
     /// open document, since a sibling's labels/cites may have changed. The main loop
     /// has already confirmed the path is not an open editor buffer (whose overlay text
@@ -998,6 +1001,7 @@ enum WorkerJob {
     WatchedChange {
         path: PathBuf,
         deleted: bool,
+        exclude: ExcludeFilter,
     },
     /// A formatting request: format on the read pool and reply to `id`.
     Format {
@@ -1751,8 +1755,10 @@ fn on_notification(
 /// The id under which we register the watched-files capability, reused to deregister.
 const WATCHED_FILES_REGISTRATION_ID: &str = "badness-watched-files";
 
+const WATCHED_SOURCE_GLOB: &str = "**/*.{[tT][eE][xX],[tT][iI][kK][zZ],[pP][gG][fF],[bB][iI][bB]}";
+
 /// Dynamically register file watchers for the project's on-disk leaves
-/// (`**/*.{tex,bib}`) and TOML config files, so out-of-editor edits to
+/// and TOML config files, so out-of-editor edits to
 /// non-open includes reanalyze open documents. Called once right after the initialize
 /// handshake. A no-op when the client lacks
 /// `didChangeWatchedFiles.dynamicRegistration` (we then rely on seed-on-open). The
@@ -1764,7 +1770,7 @@ fn register_file_watchers(connection: &Connection, state: &mut GlobalState) {
     let options = DidChangeWatchedFilesRegistrationOptions {
         watchers: vec![
             FileSystemWatcher {
-                glob_pattern: GlobPattern::String("**/*.{tex,bib}".to_owned()),
+                glob_pattern: GlobPattern::String(WATCHED_SOURCE_GLOB.to_owned()),
                 kind: None,
             },
             FileSystemWatcher {
@@ -1796,7 +1802,8 @@ fn register_file_watchers(connection: &Connection, state: &mut GlobalState) {
 /// Handle a `workspace/didChangeWatchedFiles` batch. For each event on a **non-open**
 /// file (an open buffer's overlay text is authoritative, so it is skipped — `didChange`
 /// keeps it current): a config change clears the config cache and re-lints open
-/// docs; a `.tex`/`.bib` change is forwarded to the worker to re-read/evict and re-lint.
+/// docs. A source change is forwarded to the worker to update the project and
+/// re-lint.
 fn on_watched_files_change(
     connection: &Connection,
     state: &mut GlobalState,
@@ -1823,13 +1830,16 @@ fn on_watched_files_change(
         if path.file_name().is_some_and(|name| name == "badness.toml") || config_dependency_changed
         {
             config_changed = true;
-        } else if matches!(
-            path.extension().and_then(|ext| ext.to_str()),
-            Some("tex" | "bib")
-        ) {
+        } else if path.extension().is_some_and(|ext| {
+            ["tex", "tikz", "pgf", "bib"]
+                .iter()
+                .any(|watched| ext.eq_ignore_ascii_case(watched))
+        }) {
+            let exclude = state.resolve_settings(&event.uri).exclude;
             let _ = job_tx.send(WorkerJob::WatchedChange {
                 path,
                 deleted: event.typ == FileChangeType::DELETED,
+                exclude,
             });
         }
     }
@@ -3387,8 +3397,12 @@ impl Worker {
             WorkerJob::Close { path } => {
                 self.db.remove_file(&path);
             }
-            WorkerJob::WatchedChange { path, deleted } => {
-                if self.apply_watched_change(&path, deleted) {
+            WorkerJob::WatchedChange {
+                path,
+                deleted,
+                exclude,
+            } => {
+                if self.apply_watched_change(&path, deleted, exclude) {
                     self.out_tx.send(Outbound::RelintAll);
                 }
             }
@@ -3754,7 +3768,7 @@ impl Worker {
         }
     }
 
-    /// Walk the active file's directory once for `.tex`/`.bib` siblings, reading
+    /// Walk the active file's directory once for supported siblings, reading
     /// and upserting any not already tracked, so the cross-file resolvers see the
     /// whole project. Returns whether the member set grew.
     ///
@@ -3807,21 +3821,21 @@ impl Worker {
         grew
     }
 
-    /// Apply an on-disk change to a non-open `.tex`/`.bib` file (from a watched-files
+    /// Apply an on-disk change to a non-open project source (from a watched-files
     /// event): re-read and re-upsert it, or evict it on delete. Returns `true` when the
     /// db actually changed, so the caller can re-lint open documents only when it
     /// matters.
     ///
     /// Scoped to known projects: a change is acted on only when the file is already a
     /// tracked member, or it is a freshly-created sibling in a directory we have already
-    /// seeded. The broad `**/*.{tex,bib}` glob also matches files in directories with no
+    /// seeded. The watcher glob also matches files in directories with no
     /// open document, and re-linting every open buffer for those would be pure waste.
     ///
     /// Unlike [`seed_dir`](Self::seed_dir), this deliberately re-reads a tracked file:
     /// the seed path keeps a tracked file's text precisely to avoid clobbering a live
     /// buffer, but the main loop has already excluded open buffers before dispatching
     /// here, so the file's truth is the disk.
-    fn apply_watched_change(&mut self, path: &Path, deleted: bool) -> bool {
+    fn apply_watched_change(&mut self, path: &Path, deleted: bool, exclude: ExcludeFilter) -> bool {
         let tracked = self.db.lookup_file(path);
         let in_seeded_dir = path
             .parent()
@@ -3829,8 +3843,14 @@ impl Worker {
         if tracked.is_none() && !in_seeded_dir {
             return false; // not part of any assembled project
         }
-        if deleted {
+        if deleted
+            || exclude.with_force_exclude(true).force_excludes(path)
+            || disk_file_kind(path).is_none()
+        {
             return self.db.remove_file(path).is_some();
+        }
+        if tracked.is_none() && !is_discoverable_sibling(path) {
+            return false;
         }
         let Ok(text) = std::fs::read_to_string(path) else {
             return false; // unreadable (e.g. a delete racing the event) — leave as-is

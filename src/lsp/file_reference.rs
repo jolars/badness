@@ -7,7 +7,7 @@ use rowan::{TextRange, TextSize};
 
 use crate::ast::{AstNode, Environment, command_name, nth_group_inner};
 use crate::completion::FileArgKind;
-use crate::project::include::subfiles_parent_arg;
+use crate::project::include::{subfiles_parent_arg, tex_path_with_suffix};
 use crate::project::texmf::TexmfIndex;
 use crate::syntax::{SyntaxKind, SyntaxNode};
 
@@ -109,18 +109,20 @@ impl FileReference {
     pub fn candidates(&self, path: &str) -> Vec<PathBuf> {
         let lookup = self.lookup_path(path);
         let raw = PathBuf::from(lookup.as_ref());
-        let default = match self.kind {
-            FileArgKind::TexSource => Some("tex"),
-            FileArgKind::Bib if self.command == "bibliography" => Some("bib"),
-            _ => None,
-        };
         // Kpathsea tries the default suffix before other suffixes, then the
         // literal name. A dot in the filename does not pin these loaders.
-        if let Some(extension) = default {
-            if raw.extension().is_some_and(|ext| ext == extension) {
+        if self.kind == FileArgKind::TexSource {
+            let preferred = tex_path_with_suffix(&raw);
+            if preferred == raw {
                 vec![raw]
             } else {
-                vec![PathBuf::from(format!("{lookup}.{extension}")), raw]
+                vec![preferred, raw]
+            }
+        } else if self.kind == FileArgKind::Bib && self.command == "bibliography" {
+            if raw.extension().is_some_and(|ext| ext == "bib") {
+                vec![raw]
+            } else {
+                vec![PathBuf::from(format!("{lookup}.bib")), raw]
             }
         } else if raw.extension().is_some() {
             vec![raw]

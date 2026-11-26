@@ -7,8 +7,7 @@
 //! not a flat literal (e.g. built from another macro) becomes
 //! [`IncludeTarget::Dynamic`] so the cross-file graph stays conservative.
 //!
-//! Resolution here is **pure path arithmetic** — `.tex`
-//! extension defaulting and `base_dir` joining — and never touches the disk; the
+//! Resolution here computes candidate paths and never touches the disk. The
 //! resolved-vs-unresolved decision against the analyzed file set happens in
 //! [`crate::project::graph::IncludeGraph::build`].
 //!
@@ -74,8 +73,37 @@ pub enum IncludeTarget {
     /// A statically-resolved path: the literal argument with a `.tex` extension
     /// defaulted in and joined onto the including file's directory when relative.
     Path(PathBuf),
+    /// A dotted input name can resolve to a suffixed file before the literal.
+    WithFallback {
+        preferred: PathBuf,
+        literal: PathBuf,
+    },
     /// A missing or non-literal argument we cannot resolve without expanding TeX.
     Dynamic,
+}
+
+impl IncludeTarget {
+    pub(crate) fn candidates(&self) -> impl Iterator<Item = &Path> {
+        let (first, second) = match self {
+            Self::Path(path) => (Some(path.as_path()), None),
+            Self::WithFallback { preferred, literal } => {
+                (Some(preferred.as_path()), Some(literal.as_path()))
+            }
+            Self::Dynamic => (None, None),
+        };
+        first.into_iter().chain(second)
+    }
+}
+
+/// The first path TeX tries for a source name. Keep any authored suffix
+/// and append `.tex` unless the name already ends in that extension.
+pub(crate) fn tex_path_with_suffix(path: &Path) -> PathBuf {
+    if path.extension().is_some_and(|ext| ext == "tex") {
+        return path.to_path_buf();
+    }
+    let mut suffixed = path.as_os_str().to_os_string();
+    suffixed.push(".tex");
+    PathBuf::from(suffixed)
 }
 
 /// An inclusion edge stripped of its byte range — the part the cross-file graph
@@ -262,7 +290,23 @@ fn include_target(
         },
     };
 
-    IncludeTarget::Path(resolve_tex(raw, base_dir, identity))
+    match kind {
+        IncludeKind::Include | IncludeKind::SubFileInclude => {
+            IncludeTarget::Path(identity(join_base(tex_path_with_suffix(&raw), base_dir)))
+        }
+        IncludeKind::Input if raw.extension().is_some() => {
+            let preferred = tex_path_with_suffix(&raw);
+            if preferred == raw {
+                IncludeTarget::Path(identity(join_base(raw, base_dir)))
+            } else {
+                IncludeTarget::WithFallback {
+                    preferred: identity(join_base(preferred, base_dir)),
+                    literal: identity(join_base(raw, base_dir)),
+                }
+            }
+        }
+        _ => IncludeTarget::Path(resolve_tex(raw, base_dir, identity)),
+    }
 }
 
 /// Resolve one inclusion target: default the `.tex` extension when the path has
@@ -420,11 +464,14 @@ mod tests {
     }
 
     #[test]
-    fn explicit_extension_is_kept() {
+    fn dotted_input_tries_tex_before_the_literal_name() {
         let e = edges("\\input{logo.pdf_tex}\n", None);
         assert_eq!(
             e[0].target,
-            IncludeTarget::Path(PathBuf::from("logo.pdf_tex"))
+            IncludeTarget::WithFallback {
+                preferred: PathBuf::from("logo.pdf_tex.tex"),
+                literal: PathBuf::from("logo.pdf_tex"),
+            }
         );
     }
 
@@ -617,10 +664,7 @@ mod tests {
         let e = edges("\\input{a}\n\\include{b}\n", None);
         let names: Vec<_> = e
             .iter()
-            .map(|edge| match &edge.target {
-                IncludeTarget::Path(p) => p.clone(),
-                IncludeTarget::Dynamic => PathBuf::from("<dyn>"),
-            })
+            .map(|edge| edge.target.candidates().next().unwrap().to_path_buf())
             .collect();
         assert_eq!(names, vec![PathBuf::from("a.tex"), PathBuf::from("b.tex")]);
     }

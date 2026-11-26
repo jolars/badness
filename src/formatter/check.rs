@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 
 use crate::declarations::ResolvedDeclarations;
-use crate::file_discovery::{ExcludeFilter, FileDiscoveryError, FileKind, collect_lint_files};
+use crate::file_discovery::{
+    ExcludeFilter, FileDiscoveryError, FileKind, SUPPORTED_FILE_EXTENSIONS, collect_lint_files,
+};
 use crate::formatter::{
     FormatError, FormatStyle, SentenceOptions, WrapMode, format_file_with_packages_sentence,
 };
@@ -81,13 +83,13 @@ impl fmt::Display for CheckError {
             Self::NoFiles => {
                 write!(
                     f,
-                    "no .tex, .sty, .cls, or .bib files found under the provided input paths"
+                    "no {SUPPORTED_FILE_EXTENSIONS} files found under the provided input paths"
                 )
             }
             Self::UnsupportedFilePath { path } => {
                 write!(
                     f,
-                    "input file {} is not a .tex, .sty, .cls, .dtx, .ins, or .bib file",
+                    "input file {} is not a {SUPPORTED_FILE_EXTENSIONS} file",
                     path.display()
                 )
             }

@@ -32,6 +32,8 @@ Format LaTeX source.
 
 With paths, formats each file in place. Reads stdin (to stdout) when given `-`, or when paths are omitted and stdin is not a terminal.
 
+Supported extensions are `.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, `.tikz`, `.pgf`, and `.bib`. Binary PGF images are skipped during directory scans.
+
 **Usage:** `badness format [OPTIONS] [PATHS]...`
 
 ### Arguments
@@ -104,6 +106,8 @@ With paths, formats each file in place. Reads stdin (to stdout) when given `-`, 
 Lint LaTeX source, reporting parse diagnostics.
 
 With paths, lints each file. Reads stdin when given `-`, or when paths are omitted and stdin is not a terminal. Exits non-zero if any diagnostics are reported.
+
+Supported extensions are `.tex`, `.sty`, `.cls`, `.dtx`, `.ins`, `.tikz`, `.pgf`, and `.bib`. Binary PGF images are skipped during directory scans.
 
 **Usage:** `badness lint [OPTIONS] [PATHS]...`
 

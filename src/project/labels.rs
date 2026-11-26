@@ -480,17 +480,19 @@ fn walk_range_source(
                 unit: unit.clone(),
             })),
             RangeEventKind::Unit(None) => stream.push(None),
-            RangeEventKind::Include(kind, IncludeTarget::Path(target)) => {
-                if !graph
-                    .outgoing(path)
-                    .iter()
-                    .any(|edge| edge.to == *target && edge.kind == *kind)
-                    || !walk_range_source(target, facts, graph, visited, stream)
+            RangeEventKind::Include(kind, include) => {
+                let target = include.candidates().find(|candidate| {
+                    graph
+                        .outgoing(path)
+                        .iter()
+                        .any(|edge| edge.to == *candidate && edge.kind == *kind)
+                });
+                if !target
+                    .is_some_and(|target| walk_range_source(target, facts, graph, visited, stream))
                 {
                     return false;
                 }
             }
-            RangeEventKind::Include(_, IncludeTarget::Dynamic) => return false,
         }
     }
     if !fact.trailing_clean {

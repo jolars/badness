@@ -46,6 +46,8 @@ during discovery. In a project config, patterns are relative to the
 `badness.toml` directory. This list replaces the defaults. The CLI flag
 `--exclude` adds patterns to the list.
 
+Use a pattern such as `plots/*.pgf` to skip generated figures during discovery.
+
 **Default value**: `[".git/"]`
 
 **Type**: array of strings

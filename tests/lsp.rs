@@ -3797,7 +3797,17 @@ fn start_file_rename_server_in_workspaces(
             }}
         }),
     );
-    assert!(recv_response(&client).error().is_none());
+    let response = recv_response(&client);
+    assert!(response.error().is_none());
+    if hooks {
+        let result = response.result().unwrap();
+        for operation in ["willRename", "didRename"] {
+            let pattern = &result["capabilities"]["workspace"]["fileOperations"][operation]["filters"]
+                [0]["pattern"];
+            assert_eq!(pattern["glob"], "**/*.{tex,sty,cls,dtx,ins,tikz,pgf}");
+            assert_eq!(pattern["options"]["ignoreCase"], true);
+        }
+    }
     send_notification(&client, "initialized", serde_json::json!({}));
     (client, thread)
 }
@@ -3941,6 +3951,40 @@ fn lsp_file_rename_explorer_folder_updates_source_and_asset_references() {
         chapter_text
     );
     assert!(!edit.to_string().contains("\"kind\":\"rename\""));
+    shutdown(&client, thread);
+}
+
+#[test]
+fn lsp_file_rename_updates_tikz_inputs_and_skips_pgf_images() {
+    let dir = tempfile::tempdir().unwrap();
+    let main_path = dir.path().join("main.tex");
+    let old = dir.path().join("figure.tikz");
+    let new = dir.path().join("renamed.tikz");
+    let image = dir.path().join("image.pgf");
+    let main = "\\input{figure.tikz}\n";
+    std::fs::write(&main_path, main).unwrap();
+    std::fs::write(&old, "A figure.\n").unwrap();
+    std::fs::write(
+        &image,
+        b"PGF\x76\x10\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\xff",
+    )
+    .unwrap();
+    let (client, thread) = start_file_rename_server(dir.path(), true);
+    let edit = file_rename_request(
+        &client,
+        "workspace/willRenameFiles",
+        serde_json::json!({"files":[
+            {"oldUri":path_to_file_uri(&image), "newUri":path_to_file_uri(&dir.path().join("renamed.pgf"))},
+            {"oldUri":path_to_file_uri(&old), "newUri":path_to_file_uri(&new)}
+        ]}),
+    );
+    assert_eq!(
+        apply_edits(
+            main,
+            &file_rename_text_edits(&edit, &path_to_file_uri(&main_path))
+        ),
+        "\\input{renamed.tikz}\n"
+    );
     shutdown(&client, thread);
 }
 
@@ -6624,8 +6668,9 @@ fn lsp_registers_file_watchers_on_initialized() {
         .map(|w| w["globPattern"].as_str().expect("string glob").to_owned())
         .collect();
     assert!(
-        globs.contains(&"**/*.{tex,bib}".to_owned()),
-        "expected the tex/bib glob, got {globs:?}"
+        globs
+            .contains(&"**/*.{[tT][eE][xX],[tT][iI][kK][zZ],[pP][gG][fF],[bB][iI][bB]}".to_owned()),
+        "expected the project sources glob, got {globs:?}"
     );
     assert!(
         globs.contains(&"**/*.toml".to_owned()),
@@ -6651,17 +6696,17 @@ fn lsp_no_watcher_registration_without_capability() {
 }
 
 #[test]
-fn lsp_watched_tex_change_reanalyzes_open_doc() {
+fn lsp_watched_tikz_change_reanalyzes_open_doc() {
     // A root references a label defined in a non-open `\input` sibling. Editing that
     // sibling on disk (out of editor) and signalling the watcher makes the now-dangling
     // `\ref` fire `undefined-ref` in the still-open root.
     let dir = tempfile::tempdir().expect("temp dir");
-    let part_path = dir.path().join("part.tex");
+    let part_path = dir.path().join("part.TiKz");
     std::fs::write(&part_path, "\\label{sec:intro}\n").unwrap();
     let main_path = dir.path().join("main.tex");
     let main = "\\documentclass{article}\n\
         \\begin{document}\n\
-        \\input{part}\n\
+        \\input{part.TiKz}\n\
         \\ref{sec:intro}\n\
         \\end{document}\n";
     std::fs::write(&main_path, main).unwrap();
@@ -6690,6 +6735,37 @@ fn lsp_watched_tex_change_reanalyzes_open_doc() {
         diags.diagnostics
     );
 
+    shutdown(&client, server_thread);
+}
+
+#[test]
+fn lsp_does_not_add_excluded_figures_from_watcher_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let figure = dir.path().join("plot.pgf");
+    let ignored = dir.path().join("ignored.tikz");
+    let main_path = dir.path().join("main.tex");
+    let main = "\\documentclass{article}\n\\begin{document}\n\\input{plot.pgf}\n\\input{ignored.tikz}\n\\label{fig:plot}\n\\end{document}\n";
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "ignored.tikz\n").unwrap();
+    std::fs::write(dir.path().join("badness.toml"), "exclude = ['plot.pgf']\n").unwrap();
+    std::fs::write(&figure, "\\label{fig:plot}\n").unwrap();
+    std::fs::write(&ignored, "\\label{fig:plot}\n").unwrap();
+    std::fs::write(&main_path, main).unwrap();
+
+    let (client, server_thread) = start_server_pull();
+    let uri = path_to_file_uri(&main_path);
+    did_open(&client, &uri, 1, main);
+    did_change_watched_files(
+        &client,
+        &[
+            (path_to_file_uri(&figure), FileChangeType::CHANGED),
+            (path_to_file_uri(&ignored), FileChangeType::CHANGED),
+        ],
+    );
+    pull_diagnostic(&client, 10, &uri, None);
+    let report = recv_document_diagnostic_report(&client, 10);
+    let items = report_items(&report).unwrap();
+    assert!(items.is_empty(), "{items:?}");
     shutdown(&client, server_thread);
 }
 

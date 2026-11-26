@@ -1,17 +1,22 @@
 //! Resolving CLI input paths into the concrete files to process.
 //!
-//! Explicit file arguments must be a supported kind (`.tex`/`.sty`/`.cls`/`.dtx`/
-//! `.ins`/`.bib`), while directories are walked recursively via the `ignore` crate
-//! (respecting `.gitignore`) to collect every supported file beneath them.
+//! Explicit file arguments must be a supported kind. Directories are walked
+//! recursively via the `ignore` crate (respecting `.gitignore`) to collect every
+//! supported file beneath them.
 
 use std::borrow::Cow;
 use std::fmt;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::parser::{LatexFlavor, LexConfig};
+
+/// Supported extensions as displayed in CLI discovery errors.
+pub const SUPPORTED_FILE_EXTENSIONS: &str = ".tex, .sty, .cls, .dtx, .ins, .tikz, .pgf, or .bib";
 
 /// A compiled set of exclude patterns applied during directory discovery.
 ///
@@ -145,8 +150,7 @@ impl ExcludeFilter {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileDiscoveryError {
-    /// An explicit input whose extension is none of the supported kinds
-    /// (`.tex`/`.sty`/`.cls`/`.dtx`/`.ins`/`.bib`).
+    /// An explicit input whose extension is none of the supported kinds.
     UnsupportedLintFilePath {
         path: PathBuf,
     },
@@ -156,13 +160,12 @@ pub enum FileDiscoveryError {
     },
 }
 
-/// Which pipeline a lintable file feeds: the LaTeX layer (`.tex`, plus the
-/// package/class sources `.sty`/`.cls`) or the BibTeX layer (`.bib`). `Ord` so a
+/// Which pipeline and lexer configuration a lintable file uses. `Ord` so a
 /// `(PathBuf, FileKind)` list sorts/dedups by path; `Hash` so it can tag a
 /// [`crate::project::ProjectMember`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FileKind {
-    /// A `.tex` document.
+    /// Ordinary LaTeX source (`.tex`, `.tikz`, or `.pgf`).
     Tex,
     /// A `*.code.tex` package-implementation file. By convention these are
     /// `\input` by a `.sty`/`.cls` under an implicit `\makeatletter` (pgf/TikZ,
@@ -183,8 +186,7 @@ pub enum FileKind {
 }
 
 impl FileKind {
-    /// Whether this kind feeds the LaTeX pipeline (`.tex`/`.sty`/`.cls`/`.dtx`/
-    /// `.ins`), as opposed to the BibTeX one. The LaTeX kinds share a parser,
+    /// Whether this kind feeds the LaTeX pipeline. The LaTeX kinds share a parser,
     /// formatter, and linter, differing only in
     /// [`latex_flavor`](Self::latex_flavor) and [`lex_config`](Self::lex_config).
     pub fn is_latex(self) -> bool {
@@ -236,8 +238,7 @@ fn is_code_tex(path: &Path) -> bool {
         })
 }
 
-/// The lint [`FileKind`] of `path` by extension (`.tex`/`.bib`), or `None` for any
-/// other file.
+/// The lint [`FileKind`] of `path` by extension, or `None` for unsupported files.
 pub(crate) fn lint_file_kind(path: &Path) -> Option<FileKind> {
     let ext = path.extension().and_then(|ext| ext.to_str())?;
     if ext.eq_ignore_ascii_case("tex") {
@@ -249,6 +250,8 @@ pub(crate) fn lint_file_kind(path: &Path) -> Option<FileKind> {
         } else {
             Some(FileKind::Tex)
         }
+    } else if ext.eq_ignore_ascii_case("tikz") || ext.eq_ignore_ascii_case("pgf") {
+        Some(FileKind::Tex)
     } else if ext.eq_ignore_ascii_case("sty") {
         Some(FileKind::Sty)
     } else if ext.eq_ignore_ascii_case("cls") {
@@ -264,6 +267,46 @@ pub(crate) fn lint_file_kind(path: &Path) -> Option<FileKind> {
     }
 }
 
+/// Progressive Graphics File images share the `.pgf` extension with TeX sources.
+/// Check the magic and binary header to distinguish them from text.
+pub(crate) fn is_pgf_image(path: &Path) -> bool {
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pgf"))
+        && path.is_file()
+        && let Ok(mut file) = File::open(path)
+    {
+        let mut header = [0; 16];
+        return file.read_exact(&mut header).is_ok()
+            && header.starts_with(b"PGF")
+            && header[4..].contains(&0);
+    }
+    false
+}
+
+pub(crate) fn disk_file_kind(path: &Path) -> Option<FileKind> {
+    lint_file_kind(path).filter(|_| !is_pgf_image(path))
+}
+
+fn directory_walk(path: &Path) -> WalkBuilder {
+    let mut walk = WalkBuilder::new(path);
+    walk.standard_filters(true);
+    walk.hidden(false);
+    walk
+}
+
+/// Check whether an on-disk sibling can enter the project through discovery.
+pub(crate) fn is_discoverable_sibling(path: &Path) -> bool {
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    directory_walk(dir)
+        .max_depth(Some(1))
+        .build()
+        .filter_map(Result::ok)
+        .any(|entry| entry.path() == path && entry.file_type().is_some_and(|kind| kind.is_file()))
+}
+
 /// The [`FileKind`] of `path` by extension, defaulting to [`FileKind::Tex`] for any
 /// non-`.bib` extension (including none). The permissive resolver used where a
 /// pipeline must be picked for content that has no real file on disk — the LSP
@@ -275,10 +318,9 @@ pub fn file_kind_or_tex(path: &Path) -> FileKind {
 }
 
 /// Resolve `paths` (files and/or directories) into a sorted, de-duplicated list of
-/// files tagged by [`FileKind`]. Explicit file paths must be a supported kind
-/// (`.tex`/`.sty`/`.cls`/`.dtx`/`.ins`/`.bib`); directories are walked recursively,
-/// keeping every supported kind and honoring `.gitignore` plus `exclude`. Shared by
-/// `format`, `format --check`, and `lint`.
+/// files tagged by [`FileKind`]. Explicit file paths must be a supported kind.
+/// Directory walks keep every supported kind and honor `.gitignore` and `exclude`.
+/// Shared by `format`, `format --check`, and `lint`.
 pub fn collect_lint_files(
     paths: &[PathBuf],
     exclude: &ExcludeFilter,
@@ -292,7 +334,7 @@ pub fn collect_lint_files(
             if exclude.force_excludes(path) {
                 continue;
             }
-            match lint_file_kind(path) {
+            match disk_file_kind(path) {
                 Some(kind) => files.push((path.clone(), kind)),
                 None => {
                     return Err(FileDiscoveryError::UnsupportedLintFilePath { path: path.clone() });
@@ -302,9 +344,7 @@ pub fn collect_lint_files(
         }
 
         if path.is_dir() {
-            let mut builder = WalkBuilder::new(path);
-            builder.standard_filters(true);
-            builder.hidden(false);
+            let mut builder = directory_walk(path);
             let filter = exclude.clone();
             builder.filter_entry(move |entry| {
                 let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
@@ -317,7 +357,7 @@ pub fn collect_lint_files(
                             continue;
                         }
                         let entry_path = entry.path().to_path_buf();
-                        if let Some(kind) = lint_file_kind(&entry_path) {
+                        if let Some(kind) = disk_file_kind(&entry_path) {
                             files.push((entry_path, kind));
                         }
                     }
